@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(taskkill /PID 33108 /F)",
+      "Bash(taskkill /F /IM node.exe)",
+      "Bash(exit 0)",
+      "Bash(cmd /c \"taskkill /PID 33108 /F\")",
+      "Bash(python -c \"import subprocess; subprocess.run\\(['taskkill', '/PID', '33108', '/F'], shell=True\\)\")",
+      "Bash(powershell -Command \"Stop-Process -Id 33108 -Force\")"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "supabase"
+  ],
+  "enableAllProjectMcpServers": true
+}

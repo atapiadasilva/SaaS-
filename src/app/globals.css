@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-sidebar: var(--sidebar-bg);
+  --color-sidebar-foreground: var(--sidebar-fg);
+}
+
+:root {
+  /* Fondo crema cálido */
+  --background: #EDEAE2;
+  --foreground: #1C0A00;
+
+  /* Marrón oscuro principal */
+  --primary: #5C2D0A;
+  --primary-foreground: #FFFFFF;
+
+  /* Marrón medio */
+  --secondary: #8B3A00;
+  --secondary-foreground: #FFFFFF;
+
+  /* Naranja-ámbar (acento activo) */
+  --accent: #C4500A;
+  --accent-foreground: #FFFFFF;
+
+  --destructive: #9f1239;
+  --destructive-foreground: #ffffff;
+
+  --muted: #F5F0E8;
+  --muted-foreground: #7A6A55;
+
+  --border: #D4C9B0;
+
+  --sidebar-bg: #E4DDD1;
+  --sidebar-fg: #1C0A00;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
