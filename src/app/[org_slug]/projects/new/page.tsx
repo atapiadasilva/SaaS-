@@ -10,23 +10,22 @@ export default async function NewProjectPage({
   const { org_slug } = await params;
   const supabase = await createClient();
 
-  // Obtener organization_id a partir del org_slug
-  const { data: orgData } = await supabase
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/auth/login");
+
+  const { data: orgData } = await (supabase as any)
     .from("organizations")
-    .select("id, name")
+    .select("id, name, plan")
     .eq("slug", org_slug)
     .single();
 
-  if (!orgData) {
-    redirect("/organizaciones");
-  }
+  if (!orgData) redirect("/organizaciones");
 
-  // Obtener el ID del usuario loggeado para ponerlo como admin inicial
-  const { data: { user } } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect("/auth/login");
-  }
+  // Contar proyectos actuales para validar límite del plan
+  const { count: projectCount } = await (supabase as any)
+    .from("projects")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", orgData.id);
 
   return (
     <div className="p-10 max-w-4xl mx-auto">
@@ -40,7 +39,13 @@ export default async function NewProjectPage({
         </p>
       </div>
 
-      <CreateProjectForm orgId={orgData.id} orgSlug={org_slug} userId={user.id} />
+      <CreateProjectForm
+        orgId={orgData.id}
+        orgSlug={org_slug}
+        userId={user.id}
+        orgPlan={orgData.plan}
+        projectCount={projectCount ?? 0}
+      />
     </div>
   );
 }

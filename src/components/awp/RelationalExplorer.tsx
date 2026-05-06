@@ -160,7 +160,7 @@ export default function RelationalExplorer({ entities, relationships, onRefresh 
 
   const displayRows = useMemo(() => {
     let res = joinedRows;
-    if (cwpFilter) res = res.filter(r => String(r[cwpColumn] || '') === cwpFilter);
+    if (cwpFilter) res = res.filter(r => String(r[cwpColumn!] || '') === cwpFilter);
     if (tableFilter) {
       const q = tableFilter.toLowerCase();
       res = res.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(q)));

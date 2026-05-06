@@ -1,8 +1,8 @@
-import { createClient } from "@/lib/supabase/server";
-import { redirect } from "next/navigation";
 import { FolderOpen, Plus } from "lucide-react";
 import Link from "next/link";
 import ProjectsGrid from "@/components/organizations/ProjectsGrid";
+import { requireOrgAdmin } from "@/lib/guards";
+import { createClient } from "@/lib/supabase/server";
 
 export default async function ProyectosPage({
   params,
@@ -10,19 +10,13 @@ export default async function ProyectosPage({
   params: Promise<{ org_slug: string }>;
 }) {
   const { org_slug } = await params;
+  const { org: orgData, orgRole } = await requireOrgAdmin(org_slug);
   const supabase = await createClient();
+  const isOwner = orgRole === 'owner';
 
-  const { data: orgData } = await supabase
-    .from("organizations")
-    .select("id, name")
-    .eq("slug", org_slug)
-    .single();
-
-  if (!orgData) redirect("/organizaciones");
-
-  const { data: projects } = await supabase
+  const { data: projects } = await (supabase as any)
     .from("projects")
-    .select("id, name, stage, created_at, active_modules")
+    .select("id, name, stage, created_at, active_modules, module_config")
     .eq("organization_id", orgData.id)
     .order("created_at", { ascending: false });
 
@@ -32,6 +26,7 @@ export default async function ProyectosPage({
     stage: string;
     created_at: string;
     active_modules: Record<string, boolean>;
+    module_config: Record<string, unknown>;
   }[];
 
   return (
@@ -71,7 +66,7 @@ export default async function ProyectosPage({
           </Link>
         </div>
       ) : (
-        <ProjectsGrid projects={allProjects} orgSlug={org_slug} />
+        <ProjectsGrid projects={allProjects} orgSlug={org_slug} isOwner={isOwner} />
       )}
     </div>
   );

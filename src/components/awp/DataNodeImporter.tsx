@@ -19,7 +19,38 @@ export default function DataNodeImporter({ projectId, onSuccess }: DataNodeImpor
   const [nodeName, setNodeName] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  
+  // Sheet Selection States
+  const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState<string>('');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadSheetData = (wb: XLSX.WorkBook, sheetName: string, fileName?: string) => {
+    try {
+      const ws = wb.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+      if (data.length > 0) {
+        setPreviewData(data);
+        setColumns(Object.keys(data[0] || {}));
+        if (fileName) {
+          // Sugerir nombre basado en el archivo y la pestaña
+          setNodeName(`${fileName.replace(/\.[^/.]+$/, "").toUpperCase()} - ${sheetName.toUpperCase()}`);
+        } else {
+          // Actualizar solo sufijo de pestaña si ya hay un nombre o dejar que edite manual
+        }
+      } else {
+        setPreviewData([]);
+        setColumns([]);
+        setError(`La pestaña "${sheetName}" está vacía.`);
+      }
+    } catch (err) {
+      setError('Error al leer la pestaña del archivo Excel.');
+      console.error(err);
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -31,17 +62,16 @@ export default function DataNodeImporter({ projectId, onSuccess }: DataNodeImpor
       try {
         const bstr = evt.target?.result;
         const wb = XLSX.read(bstr, { type: 'array' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json(ws, { defval: '' });
-
-        if (data.length > 0) {
-          setPreviewData(data);
-          setColumns(Object.keys(data[0] || {}));
-          // Sugerir nombre basado en el archivo
-          setNodeName(file.name.replace(/\.[^/.]+$/, "").toUpperCase());
+        
+        setWorkbook(wb);
+        setSheetNames(wb.SheetNames);
+        
+        if (wb.SheetNames.length > 0) {
+          const firstSheetName = wb.SheetNames[0];
+          setSelectedSheet(firstSheetName);
+          loadSheetData(wb, firstSheetName, file.name);
         } else {
-          setError('El archivo está vacío.');
+          setError('El archivo no contiene ninguna pestaña útil.');
         }
       } catch (err) {
         setError('Error al leer el archivo Excel.');
@@ -147,11 +177,17 @@ export default function DataNodeImporter({ projectId, onSuccess }: DataNodeImpor
                   </div>
                   <div>
                     <h3 className="text-xs font-black text-slate-800 uppercase tracking-widest">Previsualización de Datos</h3>
-                    <p className="text-[10px] font-bold text-slate-400">{previewData.length} filas detectadas</p>
+                    <p className="text-[10px] font-bold text-slate-400">{previewData.length} filas detectadas en pestaña: {selectedSheet}</p>
                   </div>
                 </div>
                 <button 
-                  onClick={() => { setPreviewData([]); setColumns([]); }}
+                  onClick={() => { 
+                    setPreviewData([]); 
+                    setColumns([]); 
+                    setWorkbook(null);
+                    setSheetNames([]);
+                    setSelectedSheet('');
+                  }}
                   className="p-2 hover:bg-white rounded-xl text-slate-300 hover:text-rose-500 transition-all"
                 >
                   <X size={18} />
@@ -159,6 +195,29 @@ export default function DataNodeImporter({ projectId, onSuccess }: DataNodeImpor
               </div>
 
               <div className="p-6 space-y-6">
+                
+                {/* Sheet Selector */}
+                {sheetNames.length > 1 && (
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Pestaña (Hoja) Seleccionada</label>
+                    <select
+                      value={selectedSheet}
+                      onChange={(e) => {
+                        const newSheet = e.target.value;
+                        setSelectedSheet(newSheet);
+                        if (workbook) loadSheetData(workbook, newSheet);
+                      }}
+                      className="w-full px-5 py-4 bg-slate-50 border-transparent rounded-2xl text-xs font-black text-slate-800 outline-none focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all appearance-none cursor-pointer"
+                    >
+                      {sheetNames.map((sheet) => (
+                        <option key={sheet} value={sheet}>
+                          {sheet}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 {/* Node Name Input */}
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nombre de la Fuente (Nodo)</label>

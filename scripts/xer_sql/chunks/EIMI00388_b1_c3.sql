@@ -1,0 +1,3 @@
+﻿INSERT INTO program_activities (id,project_id,wbs_code,cwp_code,description,discipline,hh,start_date,end_date,progress,is_summary,is_milestone,is_critical,float_days,program_source,sort_order) VALUES
+(gen_random_uuid(),'81af334c-3581-4501-9715-43cc66735368','C-CM1025.2',NULL,'Grouting Fald�n/Pedestal',NULL,900,'2024-08-02','2024-08-03',100,false,false,false,0,'Montaje Estanque - S.E. N°52  Ctto 9503C-002. Programa Rev2.xer',550),
+(gen_random_uuid(),'81af334c-3581-4501-9715-43cc66735368','SE1830',NULL,'Iluminaci�n Exterior S.E. N� 52 - Pavimento Acceso',NULL,2700,'2024-10-24','2024-11-05',100,false,false,false,0,'Montaje Estanque - S.E. N°52  Ctto 9503C-002. Programa Rev2.xer',551);

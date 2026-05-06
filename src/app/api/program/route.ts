@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
     await (supabase as any).from('program_activities').delete().eq('project_id', project_id);
   }
 
-  const rows = activities.map((a: any, i: number) => ({ ...a, project_id, sort_order: i }));
+  const rows = activities.map(({ id, ...a }: any, i: number) => ({ ...a, project_id, sort_order: i }));
   const { error } = await (supabase as any).from('program_activities').insert(rows);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

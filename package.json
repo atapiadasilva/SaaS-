@@ -9,11 +9,16 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@supabase/ssr": "^0.10.0",
     "@supabase/supabase-js": "^2.101.1",
     "@tanstack/react-table": "^8.21.3",
+    "cfb": "^1.2.2",
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
+    "idb-keyval": "^6.2.2",
     "lucide-react": "^1.7.0",
     "next": "16.2.2",
     "react": "19.2.4",

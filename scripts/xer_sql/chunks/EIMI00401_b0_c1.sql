@@ -1,0 +1,13 @@
+﻿INSERT INTO program_activities (id,project_id,wbs_code,cwp_code,description,discipline,hh,start_date,end_date,progress,is_summary,is_milestone,is_critical,float_days,program_source,sort_order) VALUES
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A150090345','E.E.1','Entrega de �rea por el cliente',NULL,0,'2025-05-05','2025-05-05',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',50),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A151090346','E.E.1','Retiro de v/v (4)',NULL,0,'2025-05-06','2025-05-06',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',51),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A152090347','E.E.1','Corte y retiro de spooles HDPE (4)',NULL,0,'2025-05-07','2025-05-09',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',52),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A153090348','E.E.1','Dimensionado spooles HDPE y soldadura STUB-END (4)',NULL,0,'2025-05-10','2025-05-12',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',53),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A154090349','E.E.1','Limpieza area TK para montaje de piezas especiales de FRP Y soldadura (4)',NULL,0,'2025-05-13','2025-05-15',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',54),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A155090350','E.E.1','Montaje de spooles de HDPE (4)',NULL,0,'2025-05-16','2025-05-18',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',55),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A156090351','E.E.1','Normalizado pieza especial FRP/HDPE (4)',NULL,0,'2025-05-19','2025-05-21',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',56),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A157090352','E.E.1','Pruebas (si aplica) (4)',NULL,0,'2025-05-22','2025-05-23',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',57),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A158090353','E.E.2','Bloqueo de sistemas',NULL,0,'2025-05-24','2025-05-24',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',58),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A159090354','E.E.2','Retiro de v/v, corte de spool',NULL,0,'2025-05-25','2025-05-26',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',59),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A160090355','E.E.2','Limpieza area TK para montaje pieza especial FRP y soldadura',NULL,0,'2025-05-27','2025-05-29',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',60),
+(gen_random_uuid(),'44d0ded8-49c7-4579-8850-48c696ac9f95','A161090356','E.E.2','Normalizado pieza especial FRP',NULL,0,'2025-05-30','2025-05-31',0,false,false,false,36,'TRABAJOS TK N4 OXIDO.xer',61);

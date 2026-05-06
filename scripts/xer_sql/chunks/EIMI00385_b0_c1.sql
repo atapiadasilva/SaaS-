@@ -1,0 +1,5 @@
+﻿INSERT INTO program_activities (id,project_id,wbs_code,cwp_code,description,discipline,hh,start_date,end_date,progress,is_summary,is_milestone,is_critical,float_days,program_source,sort_order) VALUES
+(gen_random_uuid(),'1fc99773-8d72-42b0-b38a-964f3555d523','A1182',NULL,'Ajustes ducto de conexi�n turbodi',NULL,290,'2024-04-15','2024-04-16',0,false,false,true,0,'Programa Rehabilitación Espesador TK-001 Rev0.xer',50),
+(gen_random_uuid(),'1fc99773-8d72-42b0-b38a-964f3555d523','A1192',NULL,'Ajustes de caj�n de alimentaci�n',NULL,290,'2024-04-15','2024-04-16',0,false,false,true,0,'Programa Rehabilitación Espesador TK-001 Rev0.xer',51),
+(gen_random_uuid(),'1fc99773-8d72-42b0-b38a-964f3555d523','A1410',NULL,'Entrega de cono deflector',NULL,0,'2024-04-04','2024-04-04',0,false,true,false,10,'Programa Rehabilitación Espesador TK-001 Rev0.xer',52),
+(gen_random_uuid(),'1fc99773-8d72-42b0-b38a-964f3555d523','A1540',NULL,'T�rmino de los trabajos y puesta en marcha',NULL,0,'2024-04-24','2024-04-24',0,false,true,false,1,'Programa Rehabilitación Espesador TK-001 Rev0.xer',53);

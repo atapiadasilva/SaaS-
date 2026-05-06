@@ -1,5 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import { requireOrgAdmin } from "@/lib/guards";
+
+export const dynamic = 'force-dynamic';
 import {
   FileSearch2,
   Hammer,
@@ -61,6 +64,8 @@ export default async function DashboardPage({
   params: Promise<{ org_slug: string }>;
 }) {
   const { org_slug } = await params;
+  const { orgRole } = await requireOrgAdmin(org_slug);
+  const isOwner = orgRole === 'owner';
   const supabase = await createClient();
 
   const { data: orgData } = await supabase
@@ -75,16 +80,17 @@ export default async function DashboardPage({
   // Traer todos los proyectos con su etapa
   const { data: projects } = await supabase
     .from("projects")
-    .select("id, name, stage, created_at, active_modules")
+    .select("id, name, stage, created_at, active_modules, module_config")
     .eq("organization_id", org.id)
     .order("created_at", { ascending: false });
 
-  const allProjects = (projects ?? []) as {
+  const allProjects = ((projects ?? []) as unknown) as {
     id: string;
     name: string;
     stage: Stage;
     created_at: string;
     active_modules: Record<string, boolean>;
+    module_config: Record<string, unknown>;
   }[];
 
   const countByStage = (stage: Stage) =>
@@ -226,7 +232,7 @@ export default async function DashboardPage({
             </Link>
           </div>
         ) : (
-          <ProjectsGrid projects={allProjects} orgSlug={org_slug} />
+          <ProjectsGrid projects={allProjects} orgSlug={org_slug} isOwner={isOwner} />
         )}
       </div>
     </div>

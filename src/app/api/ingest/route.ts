@@ -3,7 +3,8 @@ import { createClient } from '@/lib/supabase/server';
 import { processETL } from '@/lib/ingestion-utils';
 
 export async function POST(req: Request) {
-  const supabase = await createClient();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabase = await createClient() as any;
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {

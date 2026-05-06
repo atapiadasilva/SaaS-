@@ -20,10 +20,10 @@ export default function ProjectSettingsPage({
   const MODULES_DEF = [
     { id: "awp",       name: "Ingesta de Datos AWP" },
     { id: "programa",  name: "Programa Maestro" },
-    { id: "cwp",       name: "CWP Viewer" },
-    { id: "4d",        name: "Planeación 4D" },
-    { id: "bim",       name: "Visor BIM" },
-    { id: "documents", name: "Gestor Documental" },
+    { id: "bim",       name: "Visualización 3D (Visor BIM + Vistas 3D + 4D)" },
+    { id: "tidp",      name: "Hilo Digital — TIDP (ISO 19650-2)" },
+    { id: "90dias",    name: "Plan 90 Días (Lookahead + Restricciones)" },
+    { id: "documents", name: "Documentos" },
     { id: "team",      name: "Gestión de Equipo" },
     { id: "roles",     name: "Configuración de Roles" },
   ];

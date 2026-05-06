@@ -5,7 +5,7 @@ import {
   ShieldCheck, Edit3, Eye, EyeOff, Loader2,
   Save, RotateCcw, Check, Info
 } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/lib/supabase/client';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -43,13 +43,10 @@ const ROLES = [
 ];
 
 const MODULES = [
-  { id: 'awp',       label: 'Ingesta de Datos',    desc: 'Importar, modelar y analizar fuentes de datos' },
-  { id: 'cwp',       label: 'CWP Viewer',           desc: 'Explorar paquetes de construcción' },
-  { id: '4d',        label: 'Planeación 4D',        desc: 'Cronograma y simulación' },
-  { id: 'bim',       label: 'Visor BIM',            desc: 'Modelos 3D de ingeniería' },
-  { id: 'documents', label: 'Gestor Documental',    desc: 'Expedientes y archivos técnicos' },
-  { id: 'team',      label: 'Equipo',               desc: 'Gestión de miembros del proyecto' },
-  { id: 'roles',     label: 'Configuración Roles',  desc: 'Permisos por rol' },
+  { id: 'awp',   label: 'Ingesta de Datos',    desc: 'Importar, modelar y analizar fuentes de datos' },
+  { id: 'bim',   label: 'Visualización 3D',  desc: 'Modelos 3D de ingeniería' },
+  { id: 'team',  label: 'Equipo',               desc: 'Gestión de miembros del proyecto' },
+  { id: 'roles', label: 'Configuración Roles',  desc: 'Permisos por rol' },
 ];
 
 type AccessLevel = 'edit' | 'view' | 'none';
@@ -57,9 +54,9 @@ type RolePerms = Record<string, AccessLevel>;
 type AllPerms  = Record<string, RolePerms>;
 
 const DEFAULT_PERMS: AllPerms = {
-  admin:  { awp:'edit', cwp:'edit', '4d':'edit', bim:'edit', documents:'edit', team:'edit', roles:'edit' },
-  editor: { awp:'edit', cwp:'view', '4d':'view', bim:'view', documents:'edit', team:'view', roles:'none' },
-  viewer: { awp:'view', cwp:'view', '4d':'view', bim:'view', documents:'view', team:'none', roles:'none' },
+  admin:  { awp:'edit', bim:'edit', team:'edit', roles:'edit' },
+  editor: { awp:'edit', bim:'view', team:'view', roles:'none' },
+  viewer: { awp:'view', bim:'view', team:'none', roles:'none' },
 };
 
 // ─── Access level button cycle ────────────────────────────────────────────────
@@ -112,6 +109,7 @@ export default function RolesPage({ params }: { params: Promise<{ org_slug: stri
 
   useEffect(() => {
     const load = async () => {
+      const supabase = createClient();
       const { data } = await (supabase.from('projects') as any)
         .select('role_permissions')
         .eq('id', project_id)
@@ -139,6 +137,7 @@ export default function RolesPage({ params }: { params: Promise<{ org_slug: stri
 
   const handleSave = async () => {
     setSaving(true);
+    const supabase = createClient();
     await (supabase.from('projects') as any)
       .update({ role_permissions: perms })
       .eq('id', project_id);

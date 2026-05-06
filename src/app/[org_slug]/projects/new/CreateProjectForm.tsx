@@ -2,17 +2,15 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
 import {
   FileSearch2,
   Hammer,
   CheckCircle2,
   Loader2,
-  Layers,
-  LayoutDashboard,
   Box,
   FileText,
-  Database
+  Database,
+  GitBranch
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
@@ -27,32 +25,48 @@ const STAGES: { key: Stage; label: string; sublabel: string; icon: React.Element
 
 const MODULES = [
   { id: "awp",       name: "Ingesta de Datos AWP",      description: "Importador Excel, mapa nodal relacional, integridad del dato y matriz de control.", icon: Database },
-  { id: "programa",  name: "Programa Maestro",          description: "Carta Gantt interactiva con WBS, HH por disciplina y avance.", icon: Database },
-  { id: "cwp",       name: "CWP Viewer",                description: "Gestión visual e información de Construction Work Packages.", icon: Layers },
-  { id: "4d",        name: "Planeación 4D",             description: "Simulación de construcción vinculada a cronograma.", icon: LayoutDashboard },
-  { id: "bim",       name: "Visor BIM",                 description: "Modelos 3D e inspección de ingeniería y obra.", icon: Box },
-  { id: "documents", name: "Gestor Documental",         description: "Expedientes, planos y documentos del proyecto.", icon: FileText },
+  { id: "programa",  name: "Programa Maestro",          description: "Carta Gantt interactiva con WBS, HH por disciplina y avance de obra.", icon: Database },
+  { id: "tidp",      name: "Hilo Digital — TIDP",       description: "Visualizador de Planes de Entrega de Información según ISO 19650-2.", icon: GitBranch },
+  { id: "90dias",    name: "Plan 90 Días",              description: "Lookahead a 3 meses: Gantt filtrado, vinculación BIM y captura de restricciones.", icon: Database },
+  { id: "bim",       name: "Visualización 3D + 4D",     description: "Modelos 3D vinculados a ACC · Autodesk Platform Services. Incluye Secuenciador 4D y Vistas.", icon: Box },
+  { id: "documents", name: "Documentos",                description: "Repositorio de documentos con control de versiones y flujos de aprobación.", icon: FileText },
   { id: "team",      name: "Gestión de Equipo",         description: "Invita usuarios y define permisos de visualización o edición por módulo.", icon: FileText },
   { id: "roles",     name: "Configuración de Roles",    description: "Define qué puede ver o editar cada rol (admin, editor, visualizador).", icon: FileText },
 ];
 
-export function CreateProjectForm({ orgId, orgSlug, userId }: { orgId: string; orgSlug: string; userId: string }) {
+const PLAN_LIMITS: Record<string, number> = {
+  starter:    1,
+  pro:        5,
+  enterprise: Infinity,
+};
+
+export function CreateProjectForm({
+  orgId, orgSlug, userId, orgPlan = 'starter', projectCount = 0,
+}: {
+  orgId: string;
+  orgSlug: string;
+  userId: string;
+  orgPlan?: string;
+  projectCount?: number;
+}) {
   const router = useRouter();
-  
+
+  const planLimit  = PLAN_LIMITS[orgPlan] ?? 1;
+  const limitReached = projectCount >= planLimit;
+
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [stage, setStage] = useState<Stage>("licitacion");
   const [activeModules, setActiveModules] = useState<Record<string, boolean>>({
     awp: true,
     programa: true,
-    cwp: true,
-    "4d": false,
+    tidp: true,
+    '90dias': true,
     bim: false,
-    documents: false,
     team: true,
     roles: true,
   });
-  
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,6 +76,10 @@ export function CreateProjectForm({ orgId, orgSlug, userId }: { orgId: string; o
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (limitReached) {
+      setError(`Tu plan ${orgPlan} permite máximo ${planLimit} proyecto${planLimit !== 1 ? 's' : ''}. Actualiza a un plan superior para continuar.`);
+      return;
+    }
     setLoading(true);
     setError(null);
 

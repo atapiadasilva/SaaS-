@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Database, GitBranch, Table, Grid3X3, Upload,
   Settings, Save, Plus, X, ChevronRight, Loader2,
-  RefreshCw, Layers, BookOpen, ShieldCheck
+  RefreshCw, Layers, BookOpen, ShieldCheck, TrendingUp,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import SourceOfTruth from '@/components/awp/SourceOfTruth';
@@ -15,9 +15,10 @@ import ModelingCanvas from '@/components/awp/ModelingCanvas';
 import RelationalExplorer from '@/components/awp/RelationalExplorer';
 import CWPMatrix from '@/components/awp/CWPMatrix';
 import IntegrityAnalyzer from '@/components/awp/IntegrityAnalyzer';
+import CWPAvance from '@/components/awp/CWPAvance';
 import type { Node, Edge, CustomView } from '@/types';
 
-type TabType = 'import' | 'modeling' | 'explorer' | 'matrix' | 'integrity';
+type TabType = 'import' | 'modeling' | 'explorer' | 'matrix' | 'integrity' | 'avance';
 type ImportSubTab = 'catalog' | 'sources';
 
 export default function CwpConsolePage() {
@@ -34,9 +35,9 @@ export default function CwpConsolePage() {
     setIsLoading(true);
     try {
       const { data: nData, error: nErr } = await (supabase.from('nodes') as any)
-        .select('id, name, source_type, data_headers, position_x, position_y, type, project_id')
+        .select('id, name, source_type, data_headers, data, position_x, position_y, type, project_id')
         .eq('project_id', project_id);
-      
+
       const { data: eData, error: eErr } = await (supabase.from('edges') as any)
         .select('*')
         .eq('project_id', project_id);
@@ -46,7 +47,7 @@ export default function CwpConsolePage() {
         .eq('project_id', project_id);
 
       if (nErr || eErr) throw nErr || eErr;
-      
+
       setNodes(nData as any[] || []);
       setEdges(eData as any[] || []);
       setCustomViews(cvData as any[] || []);
@@ -91,11 +92,12 @@ export default function CwpConsolePage() {
   };
 
   const tabs = [
-    { id: 'import',     label: 'Importador',  icon: <Upload size={14} />,       color: 'text-blue-500' },
-    { id: 'modeling',   label: 'Mapa Nodal',  icon: <GitBranch size={14} />,    color: 'text-brand-electric' },
-    { id: 'explorer',   label: 'Explorador',  icon: <Table size={14} />,        color: 'text-purple-500' },
-    { id: 'matrix',     label: 'Matriz Control', icon: <Grid3X3 size={14} />,   color: 'text-amber-500' },
-    { id: 'integrity',  label: 'Integridad',  icon: <ShieldCheck size={14} />,  color: 'text-emerald-500' },
+    { id: 'import',    label: 'Importador',     icon: <Upload size={14} />,      color: 'text-blue-500' },
+    { id: 'modeling',  label: 'Mapa Nodal',     icon: <GitBranch size={14} />,   color: 'text-brand-electric' },
+    { id: 'avance',    label: 'Panel de Avance',icon: <TrendingUp size={14} />,  color: 'text-emerald-500' },
+    { id: 'explorer',  label: 'Explorador',     icon: <Table size={14} />,       color: 'text-purple-500' },
+    { id: 'matrix',    label: 'Matriz Control', icon: <Grid3X3 size={14} />,     color: 'text-amber-500' },
+    { id: 'integrity', label: 'Integridad',     icon: <ShieldCheck size={14} />, color: 'text-rose-500' },
   ];
 
   if (isLoading) {
@@ -129,7 +131,10 @@ export default function CwpConsolePage() {
             <div className="h-8 w-[1px] bg-slate-100 mx-2" />
             <div className="text-right">
               <p className="text-[10px] font-black text-slate-400 uppercase leading-none mb-1">Fuentes</p>
-              <p className="text-xs font-bold text-[#0C1E4F]">{nodes.length} Excels</p>
+              <p className="text-xs font-bold text-[#0C1E4F]">
+                {nodes.length} Excels ·{' '}
+                {nodes.reduce((s, n) => s + ((n as any).data?.length ?? 0), 0).toLocaleString('es')} filas
+              </p>
             </div>
           </div>
         </div>
@@ -219,6 +224,17 @@ export default function CwpConsolePage() {
                   onSaveNodePosition={handleSaveNodePosition}
                 />
               </div>
+            )}
+
+            {activeTab === 'avance' && (
+              <CWPAvance
+                nodes={nodes.map(n => ({
+                  id:           n.id,
+                  name:         n.name,
+                  data_headers: (n.data_headers as string[]) ?? [],
+                  data:         ((n as any).data as Record<string, string>[]) ?? [],
+                }))}
+              />
             )}
 
             {activeTab === 'explorer' && (
