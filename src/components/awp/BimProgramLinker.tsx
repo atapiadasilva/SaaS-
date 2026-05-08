@@ -1,9 +1,10 @@
 'use client';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { MousePointer2, Layers, Trash2, Eye, EyeOff, BoxSelect, Save, Link2, Unlink, Play, Square, Search, ChevronRight, ChevronDown, X, RotateCcw, Filter, Palette } from 'lucide-react';
+import { MousePointer2, Layers, Trash2, Eye, EyeOff, BoxSelect, Save, Link2, Unlink, Play, Square, Search, ChevronRight, ChevronDown, X, RotateCcw, Filter, Palette, CalendarDays, GripHorizontal } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import type { ForgeViewerHandle } from './ForgeViewer';
 import type { Activity } from './GanttChart';
+import { getDiscColor } from './GanttChart';
 import type { SavedColorView } from './BimDataLinker';
 import { cleanDescription } from './PlanCharts';
 
@@ -64,11 +65,19 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
   const [savedViews, setSavedViews] = useState<SavedColorView[]>([]);
   const [expandedViews, setExpandedViews] = useState<Set<string>>(new Set());
 
+  // Drag & drop linking
+  const [dragOverActId, setDragOverActId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
   // Load data
   const loadActivities = useCallback(async () => {
     try {
       const res = await fetch(`/api/program?project_id=${projectId}`);
-      if (res.ok) setActivities(await res.json());
+      if (!res.ok) return;
+      const raw: Activity[] = await res.json();
+      // Normalize legacy 0-1 decimal progress
+      const hasDecimal = raw.some(a => a.progress > 0 && a.progress < 1);
+      setActivities(hasDecimal ? raw.map(a => ({ ...a, progress: Math.round(a.progress * 100) })) : raw);
     } catch {}
   }, [projectId]);
 
@@ -239,6 +248,48 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
     } catch {}
   }, [loadLinks]);
 
+  // Handle drop of a set or view-node onto an activity row
+  const handleDropOnActivity = useCallback(async (e: React.DragEvent, actId: string) => {
+    e.preventDefault();
+    setDragOverActId(null);
+    setIsDragging(false);
+    try {
+      const raw = e.dataTransfer.getData('application/json');
+      if (!raw) return;
+      const payload = JSON.parse(raw) as
+        | { type: 'set'; id: string }
+        | { type: 'viewNode'; viewName: string; nodeValue: string; nodeColor: string; guids: string[] };
+
+      if (payload.type === 'set') {
+        await linkSetToActivity(payload.id, actId);
+      } else if (payload.type === 'viewNode') {
+        // Create set from view node then immediately link
+        const vr = viewerRef.current;
+        const newSet: SelectionSet = {
+          id: `local_${Date.now()}_${Math.random()}`,
+          name: `${payload.viewName} — ${payload.nodeValue}`,
+          externalIds: payload.guids,
+          color: payload.nodeColor,
+          dbIds: [],
+        };
+        if (vr) {
+          try { newSet.dbIds = await vr.resolveExternalIds(payload.guids); } catch {}
+        }
+        setSets(prev => [...prev, newSet]);
+        // Now persist the link
+        const res = await fetch('/api/program-links', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id: projectId, activity_id: actId, set_name: newSet.name, external_ids: newSet.externalIds, color: newSet.color }),
+        });
+        if (res.ok) {
+          const saved = await res.json();
+          setSets(prev => prev.map(s => s.id === newSet.id ? { ...s, id: saved.id, activityId: actId } : s));
+          loadLinks();
+        }
+      }
+    } catch (err) { console.warn('drop error', err); }
+  }, [linkSetToActivity, viewerRef, projectId, loadLinks]);
+
   // Highlight set in viewer
   const highlightSet = useCallback((set: SelectionSet) => {
     const vr = viewerRef.current;
@@ -380,6 +431,25 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
       } else if (!roots.includes(a)) { roots.push(a); }
     }
 
+    // HH-weighted progress rollup for summary nodes
+    function rollUp(wbs: string): { sumHH: number; sumProgHH: number } {
+      const node = byWbs.get(wbs);
+      if (!node) return { sumHH: 0, sumProgHH: 0 };
+      let sumHH = node.is_summary ? 0 : (node.hh || 0);
+      let sumProgHH = node.is_summary ? 0 : (node.hh || 0) * (node.progress / 100);
+      for (const child of children.get(wbs) ?? []) {
+        const r = rollUp(child.wbs_code);
+        sumHH += r.sumHH;
+        sumProgHH += r.sumProgHH;
+      }
+      if (node.is_summary || node.id.startsWith('virtual-')) {
+        node.hh = sumHH;
+        node.progress = sumHH > 0 ? Math.round((sumProgHH / sumHH) * 100) : 0;
+      }
+      return { sumHH, sumProgHH };
+    }
+    for (const r of roots) rollUp(r.wbs_code);
+
     // Sort
     for (const kids of children.values()) {
        kids.sort((a,b) => {
@@ -453,12 +523,27 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
                     {isExpanded && (
                       <div className="p-1 space-y-0.5 bg-white">
                         {view.colorNodes.filter(n => n.guids && n.guids.length > 0).map((node, i) => (
-                          <div key={i} className="flex items-center gap-2 px-2 py-1 hover:bg-blue-50 rounded group">
+                          <div key={i}
+                            draggable
+                            onDragStart={e => {
+                              e.dataTransfer.effectAllowed = 'link';
+                              e.dataTransfer.setData('application/json', JSON.stringify({
+                                type: 'viewNode',
+                                viewName: view.name,
+                                nodeValue: node.value,
+                                nodeColor: node.color,
+                                guids: node.guids ?? [],
+                              }));
+                              setIsDragging(true);
+                            }}
+                            onDragEnd={() => { setIsDragging(false); setDragOverActId(null); }}
+                            className="flex items-center gap-2 px-2 py-1 hover:bg-blue-50 rounded group cursor-grab active:cursor-grabbing select-none">
+                            <GripHorizontal size={9} className="text-slate-200 shrink-0 group-hover:text-slate-400 transition" />
                             <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: node.color }} />
                             <span className="text-[9px] font-semibold text-slate-600 truncate flex-1" title={node.value}>{node.value}</span>
                             <span className="text-[8px] text-slate-400 shrink-0 w-8 text-right">{node.guids?.length || 0}</span>
-                            <button 
-                              onClick={() => addColorNodeToSets(node, view.name)}
+                            <button
+                              onClick={e => { e.stopPropagation(); addColorNodeToSets(node, view.name); }}
                               className="text-[10px] font-black text-blue-500 opacity-0 group-hover:opacity-100 px-1.5 hover:bg-blue-200 rounded transition"
                               title="Agregar a Conjuntos"
                             >+</button>
@@ -547,6 +632,15 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
           </p>
           <span className="text-[9px] font-bold text-slate-400">{sets.length}</span>
         </div>
+        {/* Drag hint */}
+        {sets.length > 0 && !isDragging && (
+          <div className="px-3 py-1.5 border-b border-slate-100 bg-slate-50/60">
+            <p className="text-[8px] font-bold text-slate-400 flex items-center gap-1">
+              <GripHorizontal size={9} /> Arrastra un conjunto → actividad del programa
+            </p>
+          </div>
+        )}
+
         {/* 4D Controls */}
         {linkedSets.length > 0 && (
           <div className="px-3 py-2 border-b border-slate-100 bg-indigo-50/50 flex items-center gap-2">
@@ -574,9 +668,17 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
             const linkedAct = getLinkedAct(set.activityId);
             return (
               <div key={set.id}
-                className={`px-3 py-2 border-b border-slate-100 hover:bg-slate-50 transition cursor-pointer ${activeSetId === set.id ? 'bg-blue-50 border-l-2 border-l-blue-400' : ''}`}
+                draggable
+                onDragStart={e => {
+                  e.dataTransfer.effectAllowed = 'link';
+                  e.dataTransfer.setData('application/json', JSON.stringify({ type: 'set', id: set.id }));
+                  setIsDragging(true);
+                }}
+                onDragEnd={() => { setIsDragging(false); setDragOverActId(null); }}
+                className={`px-3 py-2 border-b border-slate-100 hover:bg-slate-50 transition cursor-grab active:cursor-grabbing select-none ${activeSetId === set.id ? 'bg-blue-50 border-l-2 border-l-blue-400' : ''}`}
                 onClick={() => highlightSet(set)}>
                 <div className="flex items-center gap-2">
+                  <GripHorizontal size={10} className="text-slate-300 shrink-0 group-hover:text-slate-500 transition" />
                   <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: set.color }} />
                   <span className="text-[10px] font-black text-slate-700 flex-1 truncate">{set.name}</span>
                   <span className="text-[8px] text-slate-400">{set.externalIds.length} elem</span>
@@ -601,78 +703,204 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
         </div>
       </div>
 
-      {/* ── COL 4: Program Activities ── */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="px-3 py-2 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
-          <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest flex-1">
-            {linkingSetId ? '→ Selecciona actividad para vincular' : 'Actividades del Programa'}
-          </p>
+      {/* ── COL 4: Program Activities — Gantt-style ── */}
+      <div className="flex-1 flex flex-col overflow-hidden bg-white relative">
+
+        {/* Drag-over hint banner */}
+        {isDragging && (
+          <div className="absolute top-0 left-0 right-0 z-20 pointer-events-none">
+            <div className="mx-2 mt-1 px-3 py-1.5 bg-blue-600 rounded-xl text-white text-[9px] font-black uppercase tracking-widest flex items-center gap-2 shadow-lg">
+              <Link2 size={10} />
+              Suelta sobre una actividad para vincular
+            </div>
+          </div>
+        )}
+
+        {/* Header */}
+        <div className="shrink-0 px-3 py-2 border-b border-slate-100 bg-white flex items-center gap-2">
+          <div className="flex-1">
+            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">
+              {linkingSetId ? '→ Selecciona actividad para vincular' : 'Actividades del Programa'}
+            </p>
+            {!linkingSetId && (
+              <p className="text-[8px] text-slate-400 font-bold mt-0.5">
+                {activities.filter(a => !a.is_summary && !a.is_milestone).length} actividades
+              </p>
+            )}
+          </div>
           {linkingSetId && (
-            <button onClick={() => setLinkingSetId(null)} className="text-[9px] font-bold text-red-500 hover:text-red-700 flex items-center gap-1">
+            <button onClick={() => setLinkingSetId(null)} className="text-[9px] font-bold text-red-500 hover:text-red-700 flex items-center gap-1 shrink-0">
               <X size={10} /> Cancelar
             </button>
           )}
         </div>
-        {/* Filters */}
-        <div className="px-3 py-2 border-b border-slate-100 flex items-center gap-2">
-          <div className="flex-1 relative">
-            <Search size={10} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-300" />
-            <input value={actFilter} onChange={e => setActFilter(e.target.value)} placeholder="Buscar actividad..."
-              className="w-full text-[10px] pl-6 pr-2 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-300" />
+
+        {/* Search */}
+        <div className="shrink-0 px-3 py-2 border-b border-slate-100">
+          <div className="relative">
+            <Search size={10} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-300" />
+            <input value={actFilter} onChange={e => setActFilter(e.target.value)} placeholder="Buscar WBS / descripción…"
+              className="w-full text-[10px] pl-7 pr-2 py-1.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-100 bg-slate-50" />
           </div>
-          <select value={discFilter} onChange={e => setDiscFilter(e.target.value)}
-            className="text-[10px] font-bold border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-300">
-            <option value="ALL">Disciplinas</option>
-            {disciplines.map(d => <option key={d} value={d}>{d}</option>)}
-          </select>
         </div>
-        {/* Activity list */}
+
+        {/* Discipline pills */}
+        {disciplines.length > 0 && (
+          <div className="shrink-0 px-3 py-2 border-b border-slate-100 flex flex-wrap gap-1 items-center">
+            <Filter size={9} className="text-slate-300 shrink-0" />
+            <button
+              onClick={() => setDiscFilter('ALL')}
+              className={`px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-wide border transition-colors ${discFilter === 'ALL' ? 'bg-slate-700 text-white border-slate-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+            >
+              Todas
+            </button>
+            {disciplines.map(d => {
+              const dc = getDiscColor(d);
+              const isActive = discFilter === d;
+              return (
+                <button key={d}
+                  onClick={() => setDiscFilter(isActive ? 'ALL' : d)}
+                  className="px-2 py-0.5 rounded-md border text-[8px] font-black uppercase tracking-wide transition-colors"
+                  style={{
+                    backgroundColor: isActive ? dc.bar : dc.bg,
+                    borderColor: isActive ? dc.bar : dc.bar + '40',
+                    color: isActive ? '#fff' : dc.text,
+                  }}
+                >
+                  {d}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Column headers */}
+        <div className="shrink-0 flex items-center border-b border-slate-200 bg-slate-50 text-[8px] font-black uppercase tracking-widest text-slate-400">
+          <div className="w-8 shrink-0" />
+          <div className="flex-1 px-2 py-1.5">WBS / Descripción</div>
+          <div className="w-12 shrink-0 px-1 py-1.5 text-right">HH</div>
+          <div className="w-20 shrink-0 px-2 py-1.5">Avance</div>
+          <div className="w-16 shrink-0 px-2 py-1.5">Fechas</div>
+          <div className="w-16 shrink-0 px-2 py-1.5 text-center">Vínculo</div>
+        </div>
+
+        {/* Activity rows */}
         <div className="flex-1 overflow-y-auto">
           {visibleRows.map(({ act, depth }) => {
             const linked = sets.find(s => s.activityId === act.id);
             const hasChildren = !!tree.children.get(act.wbs_code)?.length;
             const isCollapsed = collapsed.has(act.wbs_code);
             const canLink = !act.is_summary;
+            const dc = getDiscColor(act.discipline);
+            const is100 = act.progress === 100 && !act.is_summary;
+            const isCrit = act.is_critical;
+            const isDragTarget = isDragging && canLink && dragOverActId === act.id;
 
             return (
               <div key={act.id}
-                className={`flex items-center gap-2 pr-3 py-2 border-b transition ${act.is_summary ? 'bg-slate-50/50 border-slate-100' : 'border-slate-50 hover:bg-slate-50'} ${linkingSetId && canLink ? 'cursor-pointer hover:bg-blue-50' : ''} ${linked ? 'bg-emerald-50/30' : ''}`}
-                style={{ paddingLeft: 12 + depth * 16 }}
-                onClick={() => linkingSetId && canLink && linkSetToActivity(linkingSetId, act.id)}>
-                
-                {/* WBS collapse icon */}
-                <button
-                  onClick={(e) => { e.stopPropagation(); toggleCollapse(act.wbs_code); }}
-                  className={`w-4 h-4 shrink-0 flex items-center justify-center ${!hasChildren ? 'opacity-0 pointer-events-none' : 'text-slate-400 hover:text-slate-700'}`}
-                >
-                  {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                </button>
-
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className={`text-[9px] font-mono ${act.is_summary ? 'font-black text-slate-700' : 'font-bold text-slate-400'}`}>{act.wbs_code}</span>
-                    {act.discipline && !act.is_summary && <span className="text-[8px] font-bold text-slate-400 bg-slate-100 px-1 rounded">{act.discipline}</span>}
-                  </div>
-                  <p className={`text-[10px] truncate ${act.is_summary ? 'font-black text-slate-800' : 'font-semibold text-slate-700'}`}>{cleanDescription(act.description)}</p>
-                  
-                  {!act.is_summary && (
-                    <div className="flex items-center gap-3 mt-0.5">
-                      <span className="text-[8px] text-slate-400">{act.start_date ?? '—'} → {act.end_date ?? '—'}</span>
-                      <span className="text-[8px] font-bold text-slate-500">{act.progress}%</span>
-                    </div>
-                  )}
+                onDragOver={e => { if (!canLink) return; e.preventDefault(); e.dataTransfer.dropEffect = 'link'; setDragOverActId(act.id); }}
+                onDragLeave={e => { if (dragOverActId === act.id) setDragOverActId(null); }}
+                onDrop={e => canLink && handleDropOnActivity(e, act.id)}
+                className={`flex items-center border-b transition-colors group
+                  ${act.is_summary ? 'bg-slate-50 border-slate-200/80' : is100 ? 'bg-white border-slate-100' : 'bg-white border-slate-100 hover:bg-blue-50/20'}
+                  ${linkingSetId && canLink ? 'cursor-pointer hover:bg-blue-50' : ''}
+                  ${linked ? 'bg-emerald-50/20' : ''}
+                  ${isCrit && !act.is_summary ? 'bg-red-50/30' : ''}
+                  ${isDragTarget ? '!bg-blue-100 border-l-4 !border-l-blue-500 shadow-inner' : ''}
+                  ${isDragging && canLink && !isDragTarget ? 'cursor-copy' : ''}`}
+                style={{ paddingLeft: 8 + depth * 14, minHeight: act.is_summary ? 36 : 30 }}
+                onClick={() => linkingSetId && canLink && linkSetToActivity(linkingSetId, act.id)}
+              >
+                {/* Collapse toggle */}
+                <div className="w-8 shrink-0 flex items-center justify-center">
+                  <button
+                    onClick={e => { e.stopPropagation(); toggleCollapse(act.wbs_code); }}
+                    className={`w-4 h-4 flex items-center justify-center ${!hasChildren ? 'opacity-0 pointer-events-none' : 'text-slate-300 hover:text-slate-700'}`}
+                  >
+                    {isCollapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                  </button>
                 </div>
-                {linked ? (
-                  <div className="flex items-center gap-1 shrink-0">
-                    <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: linked.color }} />
-                    <span className="text-[8px] font-bold text-emerald-600">Vinculado</span>
+
+                {/* WBS + description */}
+                <div className="flex-1 min-w-0 flex items-center gap-1.5 pr-1">
+                  {/* Disc color dot */}
+                  {!act.is_summary && !act.is_milestone && (
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: is100 ? '#10B981' : dc.bar }} />
+                  )}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1">
+                      <span className={`text-[9px] font-mono leading-none ${act.is_summary ? 'font-black text-slate-700' : is100 ? 'text-emerald-500' : isCrit ? 'text-red-600 font-bold' : 'text-slate-500'}`}>
+                        {act.wbs_code}
+                      </span>
+                      {isCrit && !act.is_summary && (
+                        <span className="text-[6px] font-black text-white bg-red-500 rounded px-0.5 leading-tight">RC</span>
+                      )}
+                    </div>
+                    <p className={`text-[10px] truncate leading-tight mt-0.5 ${act.is_summary ? 'font-black text-slate-800' : is100 ? 'font-medium text-emerald-600' : 'font-medium text-slate-700'}`}
+                      title={act.description}>
+                      {cleanDescription(act.description) || act.cwp_code || '—'}
+                    </p>
+                    {act.discipline && !act.is_summary && (
+                      <span className="text-[7px] font-black leading-none" style={{ color: dc.text }}>{act.discipline}</span>
+                    )}
                   </div>
-                ) : linkingSetId && canLink ? (
-                  <span className="text-[9px] font-black text-blue-500 shrink-0 px-2 py-1 bg-blue-100 rounded-lg">Vincular</span>
-                ) : null}
+                </div>
+
+                {/* HH */}
+                <div className="w-12 shrink-0 px-1 text-right">
+                  <span className={`text-[9px] font-black tabular-nums ${is100 ? 'text-emerald-500' : 'text-slate-400'}`}>
+                    {act.hh ? (act.hh >= 1000 ? `${Math.round(act.hh / 1000)}K` : Math.round(act.hh).toLocaleString('es-CL')) : '—'}
+                  </span>
+                </div>
+
+                {/* Progress bar + % */}
+                <div className="w-20 shrink-0 px-2 flex flex-col justify-center gap-0.5">
+                  <div className="w-full h-1.5 rounded-full overflow-hidden bg-slate-100">
+                    <div className="h-full rounded-full transition-all"
+                      style={{ width: `${act.progress}%`, backgroundColor: is100 ? '#10B981' : isCrit ? '#DC2626' : dc.bar }} />
+                  </div>
+                  <span className={`text-[8px] font-black tabular-nums ${is100 ? 'text-emerald-500' : isCrit ? 'text-red-500' : 'text-slate-400'}`}>
+                    {act.progress}%
+                  </span>
+                </div>
+
+                {/* Date range */}
+                <div className="w-16 shrink-0 px-1 hidden xl:flex flex-col justify-center">
+                  <span className="text-[7px] text-slate-400 leading-tight tabular-nums">{act.start_date?.substring(0,7) ?? '—'}</span>
+                  <span className="text-[7px] text-slate-400 leading-tight tabular-nums">{act.end_date?.substring(0,7) ?? '—'}</span>
+                </div>
+
+                {/* Link status */}
+                <div className="w-16 shrink-0 px-2 flex items-center justify-center">
+                  {linked ? (
+                    <div className="flex items-center gap-1">
+                      <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: linked.color }} />
+                      <span className="text-[7px] font-black text-emerald-600 leading-tight">{linked.name.length > 8 ? linked.name.substring(0,7)+'…' : linked.name}</span>
+                    </div>
+                  ) : linkingSetId && canLink ? (
+                    <span className="text-[8px] font-black text-blue-500 px-1.5 py-0.5 bg-blue-100 rounded-lg">→</span>
+                  ) : canLink && !act.is_summary ? (
+                    <button
+                      onClick={e => { e.stopPropagation(); setLinkingSetId(sets[0]?.id ?? null); }}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity text-[7px] font-black text-slate-400 hover:text-blue-600 flex items-center gap-0.5"
+                      title="Vincular conjunto"
+                    >
+                      <Link2 size={9} />
+                    </button>
+                  ) : null}
+                </div>
               </div>
             );
           })}
+
+          {visibleRows.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full gap-2 py-12 text-center">
+              <CalendarDays size={28} className="text-slate-200" />
+              <p className="text-[10px] text-slate-400 font-bold">
+                {actFilter || discFilter !== 'ALL' ? 'Sin resultados' : 'Sin actividades cargadas'}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -16,7 +16,25 @@ function findCol(headers: string[], candidates: string[]): string | undefined {
 
 function parseHH(v: any): number {
   if (!v) return 0;
-  const n = parseFloat(String(v).replace(/[^\d.,-]/g, '').replace(',', '.'));
+  let s = String(v).trim();
+  if (!s) return 0;
+  // Spanish/European format: "1.011,5" → has both . and ,
+  if (s.includes('.') && s.includes(',')) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else if (s.includes(',') && !s.includes('.')) {
+    // Comma only: thousands if exactly 3 digits follow ("1,011"), decimal otherwise ("1,5")
+    const parts = s.split(',');
+    s = (parts.length === 2 && parts[1].length === 3)
+      ? s.replace(',', '')
+      : s.replace(',', '.');
+  } else if (s.includes('.') && !s.includes(',')) {
+    // Period only: Spanish thousands if all groups are digits and last group has 3 digits
+    const parts = s.split('.');
+    if (parts.length >= 2 && parts[parts.length - 1].length === 3 && parts.every(p => /^\d+$/.test(p))) {
+      s = s.replace(/\./g, '');
+    }
+  }
+  const n = parseFloat(s.replace(/[^\d.]/g, ''));
   return isNaN(n) ? 0 : n;
 }
 
@@ -122,7 +140,8 @@ function xerToActivities(tables: Map<string, XerTable>, fileName: string): { act
 
   // ── TASKRSRC: task_id → primary discipline (highest target_qty labor resource) ──
   const taskDiscipline = new Map<string, string>();
-  const taskHHAssigned = new Map<string, number>();
+  const taskHHAssigned = new Map<string, number>(); // all resources (for meta reporting)
+  const taskLaborHH    = new Map<string, number>(); // labor only (for activity hh field)
   if (taskRsrc) {
     // Group by task_id
     const byTask = new Map<string, { rsrcId: string; qty: number }[]>();
@@ -130,7 +149,13 @@ function xerToActivities(tables: Map<string, XerTable>, fileName: string): { act
       const qty = parseFloat(r.target_qty) || 0;
       if (!byTask.has(r.task_id)) byTask.set(r.task_id, []);
       byTask.get(r.task_id)!.push({ rsrcId: r.rsrc_id, qty });
+      // all resources → used for meta.hhAssigned
       taskHHAssigned.set(r.task_id, (taskHHAssigned.get(r.task_id) ?? 0) + qty);
+      // labor only → used as fallback hh when target_work_qty = 0
+      const rsrcInfo = rsrcById.get(r.rsrc_id);
+      if (rsrcInfo?.type === 'RT_Labor') {
+        taskLaborHH.set(r.task_id, (taskLaborHH.get(r.task_id) ?? 0) + qty);
+      }
     }
     for (const [taskId, assignments] of byTask) {
       // Primary = labor resource with highest qty
@@ -187,7 +212,7 @@ function xerToActivities(tables: Map<string, XerTable>, fileName: string): { act
 
     const discipline  = (!isSummary && !isMilestone) ? (taskDiscipline.get(r.task_id) ?? '') : '';
     const hhPlan      = parseFloat(r.target_work_qty) || 0;
-    const hhAssig     = taskHHAssigned.get(r.task_id) ?? 0;
+    const hhAssig     = taskLaborHH.get(r.task_id) ?? 0; // labor-only fallback
 
     return {
       id:             r.task_id || `xer-${i}`,
@@ -197,7 +222,7 @@ function xerToActivities(tables: Map<string, XerTable>, fileName: string): { act
       hh:             hhPlan > 0 ? hhPlan : hhAssig,
       start_date:     p6Date(r.target_start_date || r.early_start_date || r.act_start_date),
       end_date:       p6Date(r.target_end_date   || r.early_end_date   || r.act_end_date),
-      progress:       parseFloat(r.phys_complete_pct) || 0,
+      progress:       Math.round(Math.min(100, Math.max(0, (parseFloat(r.phys_complete_pct) || 0) * 100))),
       is_summary:     isSummary,
       is_milestone:   isMilestone,
       is_critical:    isCritical,
@@ -312,7 +337,7 @@ function parseMspXml(text: string, fileName: string): { activities: Activity[]; 
     const wbs     = t.querySelector('WBS')?.textContent ?? '';
     const start   = (t.querySelector('Start')?.textContent ?? '').substring(0, 10);
     const finish  = (t.querySelector('Finish')?.textContent ?? '').substring(0, 10);
-    const pct     = parseFloat(t.querySelector('PercentComplete')?.textContent ?? '0');
+    const pct     = Math.min(100, Math.max(0, parseFloat(t.querySelector('PercentComplete')?.textContent ?? '0')));
     const summary = t.querySelector('Summary')?.textContent === '1';
     const isMile  = t.querySelector('Milestone')?.textContent === '1';
     const critical = t.querySelector('Critical')?.textContent === '1';
@@ -407,7 +432,7 @@ function parseP6Xml(text: string, fileName: string): { activities: Activity[]; m
       hh,
       start_date:   (get('PlannedStartDate') || get('StartDate') || '').substring(0, 10) || undefined,
       end_date:     (get('PlannedFinishDate') || get('FinishDate') || '').substring(0, 10) || undefined,
-      progress:     parseFloat(get('PhysicalPercentComplete') || get('PercentComplete') || '0'),
+      progress:     Math.min(100, Math.max(0, parseFloat(get('PhysicalPercentComplete') || get('PercentComplete') || '0'))),
       is_summary:   false, program_source: fileName, sort_order: i,
     } as Activity;
   });
@@ -446,6 +471,9 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
   const [discFilter, setDiscFilter]   = useState<string | null>(null);
   const [mppFileName, setMppFileName] = useState('');
   const [critOnly, setCritOnly]       = useState(false);
+  const [versions, setVersions]       = useState<{ name: string; count: number }[]>([]);
+  const [activeVersion, setActiveVersion] = useState<string | null>(null);
+  const [replaceMode, setReplaceMode] = useState<'replace' | 'new'>('replace');
 
   // Pending BIM updates — flushed to Supabase with 1.5s debounce
   const bimPendingRef = useRef<Record<string, number>>({});
@@ -475,13 +503,28 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
     bimFlushTimer.current = setTimeout(flushBimToSupabase, 1500);
   }, [flushBimToSupabase]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (versionFilter?: string | null) => {
     setLoading(true);
-    const [progRes, projRes] = await Promise.all([
-      fetch(`/api/program?project_id=${project_id}`),
+    const versionParam = versionFilter !== undefined ? versionFilter : activeVersion;
+    const url = versionParam
+      ? `/api/program?project_id=${project_id}&source=${encodeURIComponent(versionParam)}`
+      : `/api/program?project_id=${project_id}`;
+    const [progRes, versRes, projRes] = await Promise.all([
+      fetch(url),
+      fetch(`/api/program/versions?project_id=${project_id}`),
       (supabase as any).from('projects').select('module_config').eq('id', project_id).single(),
     ]);
-    const data: Activity[] = await progRes.json();
+    const rawData: Activity[] = await progRes.json();
+    const versData = await versRes.json();
+
+    // Normalize legacy progress stored as 0-1 decimal (P6 XER before fix)
+    const hasDecimal = rawData.some((a: Activity) => a.progress > 0 && a.progress < 1);
+    const data: Activity[] = hasDecimal
+      ? rawData.map(a => ({ ...a, progress: Math.round(a.progress * 100) }))
+      : rawData;
+
+    if (Array.isArray(versData)) setVersions(versData);
+
     const bimMap = (projRes.data?.module_config as any)?.bim_progress_map as Record<string, number> | undefined;
     if (bimMap) {
       setActivities(data.map(a => bimMap[a.id] !== undefined ? { ...a, bim_progress: bimMap[a.id] } : a));
@@ -489,7 +532,7 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
       setActivities(data);
     }
     setLoading(false);
-  }, [project_id]);
+  }, [project_id, activeVersion]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -497,14 +540,20 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
 
   const saveActivities = async (acts: Activity[]) => {
     setStep('saving');
+    const sourceName = acts[0]?.program_source ?? importSource.split(' · ')[0] ?? 'Programa';
+    const body = replaceMode === 'replace'
+      ? { project_id, activities: acts, replace_source: activeVersion ?? sourceName, source_name: sourceName }
+      : { project_id, activities: acts, source_name: sourceName };
     const res = await fetch('/api/program', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id, activities: acts, replace: true }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) { const e = await res.json(); setError(e.error ?? 'Error guardando'); setStep('xer-confirm'); return; }
+    const newSource = sourceName;
+    setActiveVersion(newSource);
     reset();
-    await load();
+    await load(newSource);
   };
 
   // ── File handler ───────────────────────────────────────────────────────────
@@ -654,8 +703,14 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
 
   // ── Derived stats ──────────────────────────────────────────────────────────
   const detail       = activities.filter(a => !a.is_summary && !a.is_milestone);
-  const totalHH      = detail.reduce((s, a) => s + (a.hh || 0), 0);
+  const totalHH      = Math.round(detail.reduce((s, a) => s + (a.hh || 0), 0));
   const critCount    = detail.filter(a => a.is_critical).length;
+
+  const fmtHH = (n: number) => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toLocaleString('es-CL', { maximumFractionDigits: 1 })}M`;
+    if (n >= 10_000)    return `${Math.round(n / 1_000).toLocaleString('es-CL')}K`;
+    return n.toLocaleString('es-CL', { maximumFractionDigits: 0 });
+  };
 
   const discBreakdown = useMemo(() => {
     const map = new Map<string, { hh: number; count: number }>();
@@ -691,7 +746,7 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
               Carta Gantt ·{' '}
               <span className="text-[#0C1E4F]">{detail.length} actividades</span>
               {' · '}
-              <span className="text-[#0C1E4F]">{totalHH.toLocaleString('es-CL', { maximumFractionDigits: 0 })} HH</span>
+              <span className="text-[#0C1E4F]">{fmtHH(totalHH)} HH</span>
               {critCount > 0 && <span className="text-red-500"> · {critCount} RC</span>}
             </p>
           </div>
@@ -706,7 +761,7 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
               <Flame size={11} /> Ruta Crítica
             </button>
           )}
-          <button onClick={load} disabled={loading} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors">
+          <button onClick={() => load()} disabled={loading} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors">
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
           </button>
           <label className="flex items-center gap-2 px-4 py-2 bg-[#0C1E4F] text-white rounded-xl text-[11px] font-black uppercase tracking-widest cursor-pointer hover:bg-blue-700 transition-colors">
@@ -719,6 +774,29 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
           </div>
         </div>
       </div>
+
+      {/* ── Version selector pills ── */}
+      {versions.length > 1 && (
+        <div className="shrink-0 flex flex-wrap gap-1.5 items-center">
+          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1"><Save size={9} /> Versión:</span>
+          <button
+            onClick={() => { setActiveVersion(null); setTimeout(() => load(null), 0); }}
+            className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest border transition-colors ${!activeVersion ? 'bg-[#0C1E4F] text-white border-[#0C1E4F]' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+          >
+            Todas ({versions.reduce((s, v) => s + v.count, 0)})
+          </button>
+          {versions.map(v => (
+            <button
+              key={v.name}
+              onClick={() => { setActiveVersion(v.name); setTimeout(() => load(v.name), 0); }}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[9px] font-black uppercase tracking-widest transition-colors truncate max-w-[180px] ${activeVersion === v.name ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`}
+              title={v.name}
+            >
+              <FolderOpen size={9} /> {v.name.length > 20 ? v.name.substring(0, 18) + '…' : v.name} · {v.count}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* ── Discipline filter pills ── */}
       {discBreakdown.length > 0 && (
@@ -744,7 +822,7 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
                   color:           isActive ? '#fff' : dc.text,
                 }}
               >
-                {discipline} · {hh.toLocaleString('es-CL', { maximumFractionDigits: 0 })} HH
+                {discipline} · {fmtHH(Math.round(hh))} HH
               </button>
             );
           })}
@@ -887,9 +965,34 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
                 </div>
               </div>
 
-              <p className="text-[10px] text-amber-600 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 font-bold">
-                Esto reemplazará el programa actual del proyecto.
-              </p>
+              {/* Version mode selector */}
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Modo de importación</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setReplaceMode('replace')}
+                    className={`flex-1 px-3 py-2 rounded-xl border text-[10px] font-black transition-colors ${replaceMode === 'replace' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                  >
+                    Reemplazar versión{activeVersion ? ` "${activeVersion.length > 15 ? activeVersion.substring(0, 13) + '…' : activeVersion}"` : ' actual'}
+                  </button>
+                  <button
+                    onClick={() => setReplaceMode('new')}
+                    className={`flex-1 px-3 py-2 rounded-xl border text-[10px] font-black transition-colors ${replaceMode === 'new' ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                  >
+                    Nueva versión (mantener historial)
+                  </button>
+                </div>
+                {replaceMode === 'new' && (
+                  <p className="text-[9px] text-emerald-700 font-bold mt-1.5">
+                    Se creará una nueva versión sin eliminar las existentes.
+                  </p>
+                )}
+                {replaceMode === 'replace' && versions.length === 0 && (
+                  <p className="text-[9px] text-amber-600 font-bold mt-1.5">
+                    Esto reemplazará todas las actividades del proyecto.
+                  </p>
+                )}
+              </div>
 
               {error && (
                 <div className="flex items-center gap-2 text-rose-600 text-[11px] font-bold bg-rose-50 rounded-xl px-3 py-2">
@@ -903,7 +1006,8 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
                 Cancelar
               </button>
               <button onClick={() => saveActivities(mapped)}
-                className="px-6 py-2 bg-[#0C1E4F] text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-blue-700 transition-colors flex items-center gap-2">
+                disabled={!mapped.length}
+                className="px-6 py-2 bg-[#0C1E4F] text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
                 <CheckCircle2 size={13} /> Cargar {mapped.length} actividades
               </button>
             </div>

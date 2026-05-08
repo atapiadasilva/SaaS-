@@ -1,13 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
 import {
-  Box, Database, FileText,
-  Users, ShieldCheck, CalendarDays, GitBranch, Target,
-  ArrowRight, CheckCircle2, FileSearch2, Hammer, ChevronRight,
-  Settings2, AlertTriangle, Lock,
+  Box, Database, FileText, Users, ShieldCheck, CalendarDays,
+  GitBranch, Target, ArrowRight, CheckCircle2, FileSearch2,
+  Hammer, ChevronRight, Settings2, AlertTriangle, Lock, Star,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { BimConfig } from '@/components/modules/BimConfigModal';
@@ -19,7 +18,7 @@ const BimConfigModal = dynamic(() => import('@/components/modules/BimConfigModal
 const MODULES = [
   {
     id: 'awp',
-    name: 'Ingesta de Datos',
+    name: 'Ingesta',
     desc: 'Consola AWP · Importador, mapa nodal, integridad',
     icon: Database,
     path: 'cwp',
@@ -31,7 +30,7 @@ const MODULES = [
   },
   {
     id: 'programa',
-    name: 'Programa Maestro',
+    name: 'Programa',
     desc: 'Carta Gantt · WBS · HH por disciplina',
     icon: CalendarDays,
     path: 'programa',
@@ -43,7 +42,7 @@ const MODULES = [
   },
   {
     id: 'tidp',
-    name: 'Hilo Digital — TIDP',
+    name: 'Hilo Digital',
     desc: 'ISO 19650-2 · Planes de Entrega de Información',
     icon: GitBranch,
     path: 'tidp',
@@ -67,7 +66,7 @@ const MODULES = [
   },
   {
     id: 'bim',
-    name: 'Visualización 3D',
+    name: 'Vista 3D',
     desc: 'Modelos 3D vinculados a ACC · Autodesk Platform Services',
     icon: Box,
     path: 'bim',
@@ -91,7 +90,7 @@ const MODULES = [
   },
   {
     id: 'team',
-    name: 'Gestión de Equipo',
+    name: 'Equipo',
     desc: 'Usuarios, roles y permisos por módulo',
     icon: Users,
     path: 'team',
@@ -103,7 +102,7 @@ const MODULES = [
   },
   {
     id: 'roles',
-    name: 'Configuración de Roles',
+    name: 'Roles',
     desc: 'Define qué puede ver o editar cada rol',
     icon: ShieldCheck,
     path: 'roles',
@@ -133,32 +132,21 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!disabled) onChange(!checked); }}
       disabled={disabled}
       title={disabled ? 'Configura el módulo primero' : undefined}
-      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none ${
-        disabled
-          ? 'bg-slate-200 cursor-not-allowed opacity-50'
-          : checked ? 'bg-[#0C1E4F]' : 'bg-slate-200'
+      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none ${
+        disabled ? 'bg-slate-200 cursor-not-allowed opacity-50' : checked ? 'bg-[#0C1E4F]' : 'bg-slate-200'
       }`}
     >
-      <span
-        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200 ${
-          checked && !disabled ? 'translate-x-4' : 'translate-x-0.5'
-        }`}
-      />
+      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform duration-200 ${
+        checked && !disabled ? 'translate-x-3.5' : 'translate-x-0.5'
+      }`} />
     </button>
   );
 }
 
-// ─── Module chip ──────────────────────────────────────────────────────────────
+// ─── Compact module chip (2-col grid) ────────────────────────────────────────
 
-function ModuleChip({
-  mod,
-  enabled,
-  orgSlug,
-  projectId,
-  onToggle,
-  isOwner,
-  isConfigured,
-  onConfigClick,
+function CompactModuleChip({
+  mod, enabled, orgSlug, projectId, onToggle, isOwner, isConfigured, onConfigClick,
 }: {
   mod: typeof MODULES[0];
   enabled: boolean;
@@ -170,70 +158,40 @@ function ModuleChip({
   onConfigClick: () => void;
 }) {
   const Icon = mod.icon;
-  // Si un módulo require config y no está configurado, el toggle está bloqueado
   const toggleBlocked = mod.requiresConfig && !isConfigured;
+  const active = enabled && !toggleBlocked;
 
   return (
-    <div
-      className={`relative flex items-center gap-3 rounded-2xl border px-3 py-2.5 transition-all ${
-        enabled && !toggleBlocked
-          ? `${mod.bg} ring-1 ${mod.ring} border-transparent`
-          : 'bg-slate-50 border-slate-100 opacity-60'
-      }`}
-    >
-      <div className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ${enabled && !toggleBlocked ? mod.bg : 'bg-white'}`}>
-        <Icon size={14} className={enabled && !toggleBlocked ? mod.color : 'text-slate-300'} />
-      </div>
+    <div className={`flex items-center gap-1.5 rounded-xl border px-2 py-1.5 transition-all ${
+      active ? `${mod.bg} ring-1 ${mod.ring} border-transparent` : 'bg-slate-50 border-slate-100 opacity-50'
+    }`}>
+      <Icon size={11} className={active ? mod.color : 'text-slate-300'} />
+      <span className={`text-[9px] font-bold uppercase tracking-tight flex-1 truncate leading-none ${
+        active ? 'text-slate-700' : 'text-slate-400'
+      }`}>
+        {mod.name}
+      </span>
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <p className={`text-[10px] font-black uppercase tracking-tight leading-none truncate ${enabled && !toggleBlocked ? 'text-slate-800' : 'text-slate-400'}`}>
-            {mod.name}
-          </p>
-          {/* Badge "Sin configurar" solo si owner y requiere config */}
-          {mod.requiresConfig && !isConfigured && isOwner && (
-            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 text-[8px] font-black uppercase tracking-wide">
-              <AlertTriangle size={8} />
-              Sin configurar
-            </span>
-          )}
-          {/* Icono de lock si no es owner y no está configurado */}
-          {mod.requiresConfig && !isConfigured && !isOwner && (
-            <Lock size={9} className="text-slate-300" />
-          )}
-        </div>
-        <p className="text-[9px] text-slate-400 font-medium mt-0.5 leading-tight truncate">{mod.desc}</p>
-      </div>
-
-      <div className="flex items-center gap-1.5 shrink-0">
-        {/* Botón de configuración ⚙️ — solo para OWNER real y módulos configurables */}
-        {isOwner && mod.requiresConfig && (
+      <div className="flex items-center gap-1 shrink-0">
+        {isOwner && mod.requiresConfig && !isConfigured && (
           <button
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onConfigClick(); }}
-            title="Configurar módulo"
-            className={`p-1.5 rounded-lg transition-all hover:scale-110 ${
-              isConfigured
-                ? 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200'
-                : 'bg-amber-100 text-amber-600 hover:bg-amber-200 animate-pulse'
-            }`}
+            className="p-0.5 rounded bg-amber-100 text-amber-600 hover:bg-amber-200 animate-pulse"
           >
-            <Settings2 size={12} />
+            <Settings2 size={9} />
           </button>
         )}
-
-        <Toggle
-          checked={enabled}
-          onChange={(v) => onToggle(mod.id, v)}
-          disabled={toggleBlocked}
-        />
-
-        {enabled && !toggleBlocked && (
+        {!isOwner && mod.requiresConfig && !isConfigured && (
+          <Lock size={8} className="text-slate-300" />
+        )}
+        <Toggle checked={enabled} onChange={(v) => onToggle(mod.id, v)} disabled={toggleBlocked} />
+        {active && (
           <Link
             href={`/${orgSlug}/projects/${projectId}/${mod.path}`}
-            className={`p-1 rounded-lg ${mod.bg} ${mod.color} hover:scale-110 transition-transform`}
-            title={`Abrir ${mod.name}`}
+            onClick={(e) => e.stopPropagation()}
+            className={`p-0.5 rounded ${mod.bg} ${mod.color} hover:scale-110 transition-transform`}
           >
-            <ArrowRight size={11} />
+            <ArrowRight size={9} />
           </Link>
         )}
       </div>
@@ -243,49 +201,35 @@ function ModuleChip({
 
 // ─── Project Card ─────────────────────────────────────────────────────────────
 
-type ModuleConfig = Record<string, unknown>; // { bim?: BimConfig, ... }
+type ModuleConfig = Record<string, unknown>;
 
 function ProjectCard({
-  project,
-  orgSlug,
-  isOwner,
+  project, orgSlug, isOwner, isFavorite, onToggleFavorite,
 }: {
-  project: {
-    id: string;
-    name: string;
-    stage: Stage;
-    created_at: string;
-    active_modules: Record<string, boolean>;
-    module_config: ModuleConfig;
-  };
+  project: { id: string; name: string; stage: Stage; created_at: string; active_modules: Record<string, boolean>; module_config: ModuleConfig };
   orgSlug: string;
   isOwner: boolean;
+  isFavorite: boolean;
+  onToggleFavorite: (id: string) => void;
 }) {
   const [modules, setModules] = useState<Record<string, boolean>>(project.active_modules ?? {});
   const [moduleConfig, setModuleConfig] = useState<ModuleConfig>(project.module_config ?? {});
   const [saving, setSaving] = useState<string | null>(null);
-  const [configModalOpen, setConfigModalOpen] = useState<string | null>(null); // modId abierto
+  const [configModalOpen, setConfigModalOpen] = useState<string | null>(null);
 
   const stage = STAGE_CFG[project.stage] ?? STAGE_CFG.operacion;
-
   const isEnabled = (id: string) => modules[id] !== false;
   const getIsConfigured = (id: string) => {
     const mod = MODULES.find(m => m.id === id);
-    if (!mod?.requiresConfig) return true; // No requiere → siempre true
+    if (!mod?.requiresConfig) return true;
     return !!(moduleConfig[id] as any)?.urn;
   };
 
-  const activeCount = MODULES.filter(m => {
-    if (!isEnabled(m.id)) return false;
-    if (m.requiresConfig && !getIsConfigured(m.id)) return false;
-    return true;
-  }).length;
+  const activeCount = MODULES.filter(m => isEnabled(m.id) && !(m.requiresConfig && !getIsConfigured(m.id))).length;
 
   const handleToggle = async (modId: string, value: boolean) => {
-    // Extra guardia — no activar si no configurado
     const mod = MODULES.find(m => m.id === modId);
     if (mod?.requiresConfig && !getIsConfigured(modId) && value) return;
-
     const next = { ...modules, [modId]: value };
     setModules(next);
     setSaving(modId);
@@ -301,7 +245,6 @@ function ProjectCard({
         next.bim = cfg;
       } else {
         delete next.bim;
-        // Si borramos la config, también desactivamos el módulo
         setModules(prev2 => {
           const next2 = { ...prev2, bim: false };
           const supabase = createClient();
@@ -315,56 +258,71 @@ function ProjectCard({
 
   return (
     <>
-      <div className="bg-white rounded-3xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
-        {/* Card header */}
-        <div className="px-6 pt-5 pb-4 border-b border-slate-50 flex items-start justify-between gap-3">
-          <div className="min-w-0">
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all overflow-hidden group">
+        {/* Header */}
+        <div className="px-4 pt-3.5 pb-3 border-b border-slate-50 flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
             <Link
               href={`/${orgSlug}/projects/${project.id}`}
-              className="text-base font-black text-[#0C1E4F] hover:text-blue-600 transition-colors flex items-center gap-1.5 group"
+              className="text-sm font-black text-[#0C1E4F] hover:text-blue-600 flex items-center gap-1 group/link"
             >
               <span className="truncate">{project.name}</span>
-              <ChevronRight size={14} className="shrink-0 opacity-40 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
+              <ChevronRight size={12} className="shrink-0 opacity-30 group-hover/link:opacity-100 group-hover/link:translate-x-0.5 transition-all" />
             </Link>
-            <p className="text-[10px] text-slate-400 font-medium mt-0.5">
+            <p className="text-[9px] text-slate-400 font-medium mt-0.5">
               {new Date(project.created_at).toLocaleDateString('es-CL', { day: '2-digit', month: 'short', year: 'numeric' })}
             </p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${stage.bg} ${stage.color} border ${stage.border}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${stage.dot}`} />
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Star */}
+            <button
+              onClick={() => onToggleFavorite(project.id)}
+              title={isFavorite ? 'Quitar de favoritos' : 'Agregar a favoritos'}
+              className={`p-1.5 rounded-lg transition-all ${
+                isFavorite
+                  ? 'text-amber-400 bg-amber-50 hover:bg-amber-100'
+                  : 'text-slate-200 hover:text-amber-400 hover:bg-amber-50'
+              }`}
+            >
+              <Star size={13} fill={isFavorite ? 'currentColor' : 'none'} strokeWidth={isFavorite ? 0 : 1.5} />
+            </button>
+
+            {/* Stage badge */}
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${stage.bg} ${stage.color} border ${stage.border}`}>
+              <span className={`w-1 h-1 rounded-full ${stage.dot}`} />
               {stage.label}
             </span>
           </div>
         </div>
 
-        {/* Modules header */}
-        <div className="px-6 pt-3 pb-1 flex items-center justify-between">
-          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
-            Módulos ({activeCount}/{MODULES.length} activos)
-          </p>
-          {saving && <p className="text-[9px] text-blue-500 font-bold animate-pulse">Guardando…</p>}
-        </div>
+        {/* Modules grid */}
+        <div className="px-3 pt-2 pb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">
+              Módulos · <span className="text-[#0C1E4F]">{activeCount}</span>/{MODULES.length} activos
+            </p>
+            {saving && <p className="text-[8px] text-blue-500 animate-pulse">Guardando…</p>}
+          </div>
 
-        {/* Module chips */}
-        <div className="px-4 pb-5 grid grid-cols-1 gap-1.5">
-          {MODULES.map(mod => (
-            <ModuleChip
-              key={mod.id}
-              mod={mod}
-              enabled={isEnabled(mod.id)}
-              orgSlug={orgSlug}
-              projectId={project.id}
-              onToggle={handleToggle}
-              isOwner={isOwner}
-              isConfigured={getIsConfigured(mod.id)}
-              onConfigClick={() => setConfigModalOpen(mod.id)}
-            />
-          ))}
+          <div className="grid grid-cols-2 gap-1">
+            {MODULES.map(mod => (
+              <CompactModuleChip
+                key={mod.id}
+                mod={mod}
+                enabled={isEnabled(mod.id)}
+                orgSlug={orgSlug}
+                projectId={project.id}
+                onToggle={handleToggle}
+                isOwner={isOwner}
+                isConfigured={getIsConfigured(mod.id)}
+                onConfigClick={() => setConfigModalOpen(mod.id)}
+              />
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Modal de configuración BIM */}
       {configModalOpen === 'bim' && (
         <BimConfigModal
           projectId={project.id}
@@ -395,13 +353,71 @@ export default function ProjectsGrid({
   orgSlug: string;
   isOwner?: boolean;
 }) {
+  const [favorites, setFavorites] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`fav_projects_${orgSlug}`);
+      if (raw) setFavorites(new Set(JSON.parse(raw)));
+    } catch {}
+  }, [orgSlug]);
+
+  const toggleFavorite = (id: string) => {
+    setFavorites(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try { localStorage.setItem(`fav_projects_${orgSlug}`, JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  };
+
   if (projects.length === 0) return null;
 
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-      {projects.map(p => (
-        <ProjectCard key={p.id} project={p as any} orgSlug={orgSlug} isOwner={isOwner} />
+  const favProjects   = projects.filter(p => favorites.has(p.id));
+  const otherProjects = projects.filter(p => !favorites.has(p.id));
+
+  const renderGrid = (list: typeof projects) => (
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      {list.map(p => (
+        <ProjectCard
+          key={p.id}
+          project={p as any}
+          orgSlug={orgSlug}
+          isOwner={isOwner}
+          isFavorite={favorites.has(p.id)}
+          onToggleFavorite={toggleFavorite}
+        />
       ))}
+    </div>
+  );
+
+  return (
+    <div className="space-y-8">
+      {/* Favoritos */}
+      {favProjects.length > 0 && (
+        <section>
+          <div className="flex items-center gap-2 mb-3">
+            <Star size={13} className="text-amber-400" fill="currentColor" />
+            <h2 className="text-[10px] font-black uppercase tracking-widest text-amber-600">Favoritos</h2>
+            <span className="text-[9px] text-slate-400 font-semibold">({favProjects.length})</span>
+          </div>
+          {renderGrid(favProjects)}
+        </section>
+      )}
+
+      {/* Todos los proyectos */}
+      {otherProjects.length > 0 && (
+        <section>
+          {favProjects.length > 0 && (
+            <div className="flex items-center gap-2 mb-3">
+              <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Todos los proyectos</h2>
+              <span className="text-[9px] text-slate-400 font-semibold">({otherProjects.length})</span>
+            </div>
+          )}
+          {renderGrid(otherProjects)}
+        </section>
+      )}
     </div>
   );
 }

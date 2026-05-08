@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useRef, useEffect, useCallback, memo } from 'react';
 import {
   ChevronRight, ChevronDown, ZoomIn, ZoomOut, CalendarDays, BarChart,
   CheckCircle2, Search, X, Layers,
@@ -97,14 +97,15 @@ interface RowProps {
   onActivityClick?: (act: Activity) => void;
   selectedActivityId?: string;
   bimProgress: number;
+  isLeaf: boolean;
   onBimChange: (id: string, value: number) => void;
 }
 
-function GanttRow({
+const GanttRow = memo(function GanttRow({
   act, depth, expanded, hasChildren, onToggle,
   projectStart, colW, effective, onBarMouseDown,
   onActivityClick, selectedActivityId,
-  bimProgress, onBimChange,
+  bimProgress, isLeaf, onBimChange,
 }: RowProps) {
   const disc      = getDiscColor(act.discipline);
   const isCrit    = act.is_critical;
@@ -124,8 +125,8 @@ function GanttRow({
 
   const startBimEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (act.is_summary) return;
-    setBimInput(String(bimProgress));
+    if (!isLeaf) return;
+    setBimInput(String(Math.round(bimProgress)));
     setEditingBim(true);
     setTimeout(() => bimRef.current?.select(), 30);
   };
@@ -137,12 +138,12 @@ function GanttRow({
   };
 
   const rowBg = act.is_summary
-    ? 'bg-slate-50/70 hover:bg-slate-100/60'
+    ? 'bg-slate-50 hover:bg-slate-100'
     : is100
-      ? 'hover:bg-emerald-50/40'
+      ? 'bg-white hover:bg-emerald-50'
       : isCrit
-        ? 'bg-red-50/20 hover:bg-red-50/50'
-        : 'hover:bg-blue-50/30';
+        ? 'bg-red-50/40 hover:bg-red-50'
+        : 'bg-white hover:bg-blue-50/30';
 
   return (
     <div
@@ -212,13 +213,13 @@ function GanttRow({
         </span>
       </div>
 
-      {/* Avance BIM — editable */}
+      {/* Avance BIM — editable at leaf, rolled-up at parents */}
       <div
-        className={`shrink-0 border-r border-slate-100 px-2 flex flex-col justify-center gap-0.5 ${act.is_summary ? 'opacity-40' : 'cursor-pointer'}`}
+        className={`shrink-0 border-r border-slate-100 px-2 flex flex-col justify-center gap-0.5 ${isLeaf ? 'cursor-pointer hover:bg-red-50/40' : 'cursor-default'}`}
         style={{ width: 72 }}
         onClick={startBimEdit}
       >
-        {editingBim && !act.is_summary ? (
+        {editingBim && isLeaf ? (
           <input
             ref={bimRef}
             type="number" min="0" max="100"
@@ -234,11 +235,11 @@ function GanttRow({
             <div className="w-full h-1.5 rounded-full overflow-hidden bg-red-100">
               <div
                 className="h-full rounded-full transition-all"
-                style={{ width: `${bimProgress}%`, backgroundColor: '#DC2626' }}
+                style={{ width: `${bimProgress}%`, backgroundColor: isLeaf ? '#DC2626' : '#9F1239' }}
               />
             </div>
-            <span className={`text-[8px] font-black tabular-nums ${bimProgress > 0 ? 'text-red-600' : 'text-slate-300'}`}>
-              {bimProgress > 0 ? `${bimProgress}%` : '—'}
+            <span className={`text-[8px] font-black tabular-nums ${bimProgress > 0 ? (isLeaf ? 'text-red-600' : 'text-rose-800') : 'text-slate-300'}`}>
+              {bimProgress > 0 ? `${Math.round(bimProgress)}%` : (isLeaf ? '—' : '')}
             </span>
           </>
         )}
@@ -273,7 +274,7 @@ function GanttRow({
             )}
 
             {/* BIM progress marker — vertical red line */}
-            {!act.is_summary && bimProgress > 0 && bimProgress < 100 && (
+            {bimProgress > 0 && bimProgress < 100 && (
               <div
                 className="absolute top-0 bottom-0 pointer-events-none"
                 style={{
@@ -295,7 +296,7 @@ function GanttRow({
                 />
               </div>
             )}
-            {!act.is_summary && bimProgress === 100 && (
+            {bimProgress === 100 && (
               <div className="absolute inset-0 rounded-sm border-2 border-red-500 pointer-events-none" />
             )}
 
@@ -317,7 +318,18 @@ function GanttRow({
       </div>
     </div>
   );
-}
+}, (prev, next) =>
+  prev.act === next.act &&
+  prev.effective.start === next.effective.start &&
+  prev.effective.end === next.effective.end &&
+  prev.depth === next.depth &&
+  prev.expanded === next.expanded &&
+  prev.hasChildren === next.hasChildren &&
+  prev.colW === next.colW &&
+  prev.bimProgress === next.bimProgress &&
+  prev.isLeaf === next.isLeaf &&
+  prev.selectedActivityId === next.selectedActivityId
+);
 
 // ─── Main Gantt ───────────────────────────────────────────────────────────────
 
@@ -336,8 +348,13 @@ export default function GanttChart({
   const [zoomFactor,   setZoomFactor]   = useState(1);
   const [overrides,    setOverrides]    = useState<Map<string, Override>>(new Map());
   const [searchQuery,  setSearchQuery]  = useState('');
-  const [levelFilter,  setLevelFilter]  = useState<number | null>(null); // null = all
+  const [levelFilter,  setLevelFilter]  = useState<number | null>(2); // default N2
   const [localBim,     setLocalBim]     = useState<Map<string, number>>(new Map());
+
+  // Virtual scroll
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const [scrollTop,   setScrollTop]    = useState(0);
+  const [viewportH,   setViewportH]    = useState(700);
 
   // Seed localBim from activities.bim_progress
   useEffect(() => {
@@ -448,11 +465,42 @@ export default function GanttChart({
       });
     }
     roots.sort((a, b) => a.sort_order - b.sort_order);
-    return { roots, children };
+    return { roots, children, byWbs };
   }, [activities]);
 
   const treeRef = useRef(tree);
   treeRef.current = tree;
+
+  // HH-weighted BIM rollup: leaf nodes use localBim; parents roll up bottom-up
+  const bimRollup = useMemo(() => {
+    const result = new Map<string, number>();
+
+    function rollBim(wbsCode: string): { sumHH: number; sumBimHH: number } {
+      const act = tree.byWbs.get(wbsCode);
+      if (!act) return { sumHH: 0, sumBimHH: 0 };
+      const kids = tree.children.get(wbsCode) ?? [];
+
+      if (kids.length === 0) {
+        const bim = localBim.get(act.id) ?? act.bim_progress ?? 0;
+        const hh = act.hh || 0;
+        result.set(act.id, bim);
+        return { sumHH: hh, sumBimHH: hh * bim };
+      }
+
+      let sumHH = 0, sumBimHH = 0;
+      for (const child of kids) {
+        const r = rollBim(child.wbs_code);
+        sumHH += r.sumHH;
+        sumBimHH += r.sumBimHH;
+      }
+      const rolledBim = sumHH > 0 ? sumBimHH / sumHH : 0;
+      result.set(act.id, rolledBim);
+      return { sumHH, sumBimHH };
+    }
+
+    for (const root of tree.roots) rollBim(root.wbs_code);
+    return result;
+  }, [tree, localBim]);
 
   // ── Level collapse ────────────────────────────────────────────────────────
   const applyLevelCollapse = useCallback((level: number | null) => {
@@ -461,7 +509,7 @@ export default function GanttChart({
     const toCollapse = new Set<string>();
     function walk(acts: Activity[], depth: number) {
       for (const a of acts) {
-        if (depth >= level && tree.children.get(a.wbs_code)?.length) {
+        if (level !== null && depth >= level && tree.children.get(a.wbs_code)?.length) {
           toCollapse.add(a.wbs_code);
         }
         walk(tree.children.get(a.wbs_code) ?? [], depth + 1);
@@ -553,8 +601,85 @@ export default function GanttChart({
     return rows;
   }, [tree, collapsed, matchedIds]);
 
+  // Pre-compute row positions for virtual scroll
+  const rowMetrics = useMemo(() => {
+    let y = 0;
+    const items = visibleRows.map(({ act }) => {
+      const h = ROW_H(act);
+      const top = y; y += h;
+      return { top, height: h };
+    });
+    return { items, total: y };
+  }, [visibleRows]);
+
+  // Effective dates map — stable references per row
+  const effectiveMap = useMemo(() => {
+    const m = new Map<string, Override>();
+    for (const { act } of visibleRows) {
+      const ov = overrides.get(act.id);
+      m.set(act.id, ov ?? {
+        start: parseDate(act.start_date)?.getTime() ?? 0,
+        end:   parseDate(act.end_date)?.getTime()   ?? 0,
+      });
+    }
+    return m;
+  }, [visibleRows, overrides]);
+
+  // Visible row range for virtual rendering
+  const OVERSCAN = 8;
+  const { rStart, rEnd } = useMemo(() => {
+    const { items } = rowMetrics;
+    if (!items.length) return { rStart: 0, rEnd: 0 };
+    let s = 0;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].top + items[i].height > scrollTop) { s = Math.max(0, i - OVERSCAN); break; }
+    }
+    let e = items.length - 1;
+    for (let i = Math.max(0, s + OVERSCAN); i < items.length; i++) {
+      if (items[i].top > scrollTop + viewportH) { e = Math.min(items.length - 1, i + OVERSCAN); break; }
+    }
+    return { rStart: s, rEnd: e };
+  }, [rowMetrics, scrollTop, viewportH]);
+
+  // Measure container height
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    setViewportH(el.clientHeight);
+    const obs = new ResizeObserver(([e]) => setViewportH(e.contentRect.height));
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  // Auto-collapse to N2 on first load
+  const autoCollapsedRef = useRef(false);
+  useEffect(() => {
+    if (!autoCollapsedRef.current && activities.length > 0) {
+      autoCollapsedRef.current = true;
+      applyLevelCollapse(2);
+    }
+  }, [activities.length, applyLevelCollapse]);
+
   const totalHH = useMemo(() => activities.filter(a => !a.is_summary).reduce((s, a) => s + (a.hh || 0), 0), [activities]);
   const bimCount = useMemo(() => [...localBim.values()].filter(v => v > 0).length, [localBim]);
+
+  // Project-level weighted BIM progress: root rollup or direct weighted average of all leaves
+  const projectBim = useMemo(() => {
+    let sumHH = 0, sumBimHH = 0;
+    for (const root of tree.roots) {
+      const kids = tree.children.get(root.wbs_code);
+      if (!kids?.length) {
+        const hh = root.hh || 0;
+        const bim = bimRollup.get(root.id) ?? 0;
+        sumHH += hh; sumBimHH += hh * bim;
+      } else {
+        const rootBim = bimRollup.get(root.id) ?? 0;
+        sumHH += root.hh || 0;
+        sumBimHH += (root.hh || 0) * rootBim;
+      }
+    }
+    return sumHH > 0 ? sumBimHH / sumHH : 0;
+  }, [tree, bimRollup]);
 
   // ── Drag ──────────────────────────────────────────────────────────────────
   const dragRef = useRef<{ type: DragType; act: Activity; origSelf: Override; childSnap: Map<string, Override>; mouseX0: number; } | null>(null);
@@ -769,7 +894,10 @@ export default function GanttChart({
             {bimCount > 0 && (
               <>
                 <span className="text-slate-200">·</span>
-                <span className="text-red-500"><span className="font-black">{bimCount}</span> BIM</span>
+                <span className="text-red-500">BIM <span className="font-black">{Math.round(projectBim)}%</span></span>
+                <div className="w-16 h-1.5 rounded-full overflow-hidden bg-red-100">
+                  <div className="h-full rounded-full bg-red-500 transition-all" style={{ width: `${projectBim}%` }} />
+                </div>
               </>
             )}
           </div>
@@ -804,83 +932,111 @@ export default function GanttChart({
         <div className="shrink-0 border-r border-slate-200 px-2 py-2 flex items-center gap-1 bg-white" style={{ width: 72 }}>
           <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
           BIM
+          <span className="text-[7px] text-slate-300 font-bold">HH</span>
         </div>
         <div className="flex-1 overflow-hidden">
           {renderHeaders()}
         </div>
       </div>
 
-      {/* ── Rows ── */}
-      <div className="flex-1 overflow-auto bg-white relative">
-        <div style={{ minWidth: LEFT_W + totalDays * colW, paddingBottom: 64 }}>
+      {/* ── Rows (virtual scroll via spacers) ── */}
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-auto bg-white relative"
+        onScroll={e => setScrollTop((e.currentTarget as HTMLDivElement).scrollTop)}
+      >
+        {/* Outer container forces horizontal scroll width */}
+        <div style={{ minWidth: LEFT_W + totalDays * colW, position: 'relative' }}>
 
-          {/* Weekend grid */}
-          {scale === 'days' && (
-            <div className="absolute top-0 bottom-0 pointer-events-none flex" style={{ left: LEFT_W }}>
-              {monthsArr.map((m, i) => {
-                const days = Array.from({ length: m.days }, (_, i) => i + 1);
-                return (
-                  <div key={i} className="shrink-0 flex" style={{ width: m.days * colW }}>
-                    {days.map(d => {
-                      const date = new Date(m.date.getFullYear(), m.date.getMonth(), d);
-                      const isWeekend = date.getDay() === 0 || date.getDay() === 6;
-                      return <div key={d} className={`flex-1 border-r border-slate-50 ${isWeekend ? 'bg-slate-50/60' : ''}`} />;
-                    })}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Month grid lines */}
-          {scale === 'months' && (
-            <div className="absolute top-0 bottom-0 pointer-events-none" style={{ left: LEFT_W }}>
-              {monthsArr.map((m, i) => {
-                const x = (new Date(m.date.getFullYear(), m.date.getMonth(), 1).getTime() - projectStart.getTime()) / MS_DAY * colW;
-                const isCurrentMonth = new Date().getMonth() === m.date.getMonth() && new Date().getFullYear() === m.date.getFullYear();
-                return (
-                  <div key={i} className={`absolute top-0 bottom-0 pointer-events-none ${isCurrentMonth ? 'bg-red-50/20' : ''}`}
-                    style={{ left: x, width: m.days * colW, borderLeft: '1px solid #F1F5F9' }} />
-                );
-              })}
-            </div>
-          )}
-
-          {/* TODAY line */}
-          {todayOffset >= 0 && todayOffset <= totalDays && (
-            <div
-              className="absolute top-0 bottom-0 pointer-events-none z-20"
-              style={{ left: LEFT_W + todayOffset * colW, width: 2, background: 'linear-gradient(to bottom, #DC2626, #DC262630)' }}
-            >
-              <div className="absolute -top-0 left-1/2 -translate-x-1/2 bg-red-500 text-white text-[7px] font-black px-1.5 py-0.5 rounded-b whitespace-nowrap shadow-sm">
-                HOY
+          {/* ── Background overlays (pointer-events-none, z-0) ── */}
+          <div
+            className="absolute top-0 left-0 right-0 pointer-events-none"
+            style={{ height: rowMetrics.total + 64, zIndex: 0 }}
+          >
+            {/* Weekend columns */}
+            {scale === 'days' && (
+              <div className="absolute top-0 bottom-0 flex" style={{ left: LEFT_W }}>
+                {monthsArr.map((m, i) => {
+                  const days = Array.from({ length: m.days }, (_, j) => j + 1);
+                  return (
+                    <div key={i} className="shrink-0 flex" style={{ width: m.days * colW }}>
+                      {days.map(d => {
+                        const date = new Date(m.date.getFullYear(), m.date.getMonth(), d);
+                        const isWeekend = date.getDay() === 0 || date.getDay() === 6;
+                        return <div key={d} className={`flex-1 border-r border-slate-50 ${isWeekend ? 'bg-slate-50/60' : ''}`} />;
+                      })}
+                    </div>
+                  );
+                })}
               </div>
-            </div>
-          )}
+            )}
 
-          <div className="relative z-10">
-            {visibleRows.map(({ act, depth }) => (
-              <GanttRow
-                key={act.id}
-                act={act}
-                depth={depth}
-                expanded={!collapsed.has(act.wbs_code)}
-                hasChildren={!!tree.children.get(act.wbs_code)?.length}
-                onToggle={() => toggleCollapse(act.wbs_code)}
-                projectStart={projectStart}
-                colW={colW}
-                effective={getEff(act)}
-                onBarMouseDown={onBarMouseDown}
-                onActivityClick={onActivityClick}
-                selectedActivityId={selectedActivityId}
-                bimProgress={localBim.get(act.id) ?? act.bim_progress ?? 0}
-                onBimChange={handleBimChange}
-              />
-            ))}
+            {/* Month grid lines */}
+            {scale === 'months' && (
+              <div className="absolute top-0 bottom-0" style={{ left: LEFT_W }}>
+                {monthsArr.map((m, i) => {
+                  const x = (new Date(m.date.getFullYear(), m.date.getMonth(), 1).getTime() - projectStart.getTime()) / MS_DAY * colW;
+                  const isCurrentMonth = new Date().getMonth() === m.date.getMonth() && new Date().getFullYear() === m.date.getFullYear();
+                  return (
+                    <div
+                      key={i}
+                      className={`absolute top-0 bottom-0 ${isCurrentMonth ? 'bg-red-50/20' : ''}`}
+                      style={{ left: x, width: m.days * colW, borderLeft: '1px solid #F1F5F9' }}
+                    />
+                  );
+                })}
+              </div>
+            )}
+
+            {/* TODAY line */}
+            {todayOffset >= 0 && todayOffset <= totalDays && (
+              <div
+                className="absolute top-0 bottom-0"
+                style={{ left: LEFT_W + todayOffset * colW, width: 2, background: 'linear-gradient(to bottom, #DC2626, #DC262630)', zIndex: 5 }}
+              >
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 bg-red-500 text-white text-[7px] font-black px-1.5 py-0.5 rounded-b whitespace-nowrap shadow-sm">
+                  HOY
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Rows with virtual spacers (z-10, solid backgrounds) ── */}
+          <div style={{ position: 'relative', zIndex: 10 }}>
+            {/* Top spacer */}
+            <div style={{ height: rowMetrics.items[rStart]?.top ?? 0 }} />
+
+            {/* Rendered slice */}
+            {visibleRows.slice(rStart, rEnd + 1).map(({ act, depth }) => {
+              const kidsCount = tree.children.get(act.wbs_code)?.length ?? 0;
+              const isLeaf = kidsCount === 0;
+              return (
+                <GanttRow
+                  key={act.id}
+                  act={act}
+                  depth={depth}
+                  expanded={!collapsed.has(act.wbs_code)}
+                  hasChildren={kidsCount > 0}
+                  onToggle={() => toggleCollapse(act.wbs_code)}
+                  projectStart={projectStart}
+                  colW={colW}
+                  effective={effectiveMap.get(act.id) ?? { start: 0, end: 0 }}
+                  onBarMouseDown={onBarMouseDown}
+                  onActivityClick={onActivityClick}
+                  selectedActivityId={selectedActivityId}
+                  bimProgress={bimRollup.get(act.id) ?? 0}
+                  isLeaf={isLeaf}
+                  onBimChange={handleBimChange}
+                />
+              );
+            })}
+
+            {/* Bottom spacer */}
+            <div style={{ height: Math.max(0, rowMetrics.total - ((rowMetrics.items[rEnd]?.top ?? 0) + (rowMetrics.items[rEnd]?.height ?? 0))) + 64 }} />
           </div>
 
           {visibleRows.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 text-slate-300 gap-3">
+            <div className="flex flex-col items-center justify-center py-20 text-slate-300 gap-3" style={{ position: 'relative', zIndex: 10 }}>
               <CalendarDays size={48} className="opacity-20" />
               <p className="text-sm font-black uppercase tracking-widest">
                 {searchQuery ? 'Sin resultados' : 'Sin actividades cargadas'}

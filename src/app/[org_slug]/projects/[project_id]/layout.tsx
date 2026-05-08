@@ -7,7 +7,7 @@ import { ProjectMemberMenu } from "@/components/layout/ProjectMemberMenu";
 import { previewOrgRole, previewProjectRole } from "@/lib/rolePreview";
 import { getPreviewRole } from "@/lib/rolePreviewServer";
 
-const KNOWN_MODULE_KEYS = ['awp', 'programa', 'cwp', '4d', 'bim', 'vistas3d', 'tidp', '90dias', 'documents', 'team', 'roles'];
+const KNOWN_MODULE_KEYS = ['awp', 'programa', 'cwp', '4d', 'bim', 'vistas3d', 'tidp', '90dias', 'documents', 'team', 'roles', 'model'];
 
 // Módulos que requieren ser admin del proyecto para aparecer en la nav
 const ADMIN_ONLY_MODULES = ['team', 'roles'];
