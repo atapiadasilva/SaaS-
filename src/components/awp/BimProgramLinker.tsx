@@ -1,7 +1,8 @@
 'use client';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { MousePointer2, Layers, Trash2, Eye, EyeOff, BoxSelect, Save, Link2, Unlink, Play, Square, Search, ChevronRight, ChevronDown, X, RotateCcw, Filter, Palette, CalendarDays, GripHorizontal } from 'lucide-react';
+import { MousePointer2, Layers, Trash2, Eye, EyeOff, BoxSelect, Save, Link2, Unlink, Play, Square, Search, ChevronRight, ChevronDown, X, RotateCcw, Filter, Palette, CalendarDays, GripHorizontal, Loader2, Library } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { setBimLinkerKey } from '@/lib/supabase/projectConfig';
 import type { ForgeViewerHandle } from './ForgeViewer';
 import type { Activity } from './GanttChart';
 import { getDiscColor } from './GanttChart';
@@ -11,21 +12,22 @@ import { cleanDescription } from './PlanCharts';
 // Types
 interface SelectionSet { id: string; name: string; externalIds: string[]; color: string; activityId?: string; dbIds: number[]; }
 interface ProgramLink { id: string; project_id: string; activity_id: string; set_name: string; external_ids: string[]; color: string; }
-interface TreeNode { dbId: number; name: string; children: TreeNode[]; selected: boolean; }
+interface TreeNode { dbId: number; name: string; children: TreeNode[]; selected: boolean; leafCount: number; }
 
 const COLORS = ['#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#EC4899','#06B6D4','#F97316','#14B8A6','#6366F1'];
 
 // Mini tree component
-function MiniTree({ node, depth, onSelect }: { node: TreeNode; depth: number; onSelect: (dbId: number) => void }) {
+function MiniTree({ node, depth, onSelect }: { node: TreeNode; depth: number; onSelect: (dbId: number, name: string) => void }) {
   const [open, setOpen] = useState(depth < 1);
   const hasKids = node.children.length > 0;
   return (
     <div>
       <div className="flex items-center gap-1 hover:bg-blue-50 rounded px-1 py-0.5 cursor-pointer group" style={{ paddingLeft: depth * 12 }}
-        onClick={() => hasKids ? setOpen(!open) : onSelect(node.dbId)}>
+        onClick={() => hasKids ? setOpen(!open) : onSelect(node.dbId, node.name)}>
         {hasKids ? (open ? <ChevronDown size={10} className="text-slate-400 shrink-0" /> : <ChevronRight size={10} className="text-slate-400 shrink-0" />) : <div className="w-2.5" />}
         <span className="text-[10px] text-slate-600 truncate flex-1">{node.name || `#${node.dbId}`}</span>
-        {hasKids && <button onClick={e => { e.stopPropagation(); onSelect(node.dbId); }} className="text-[8px] text-blue-500 font-bold opacity-0 group-hover:opacity-100 shrink-0 px-1 bg-blue-50 rounded">SEL</button>}
+        <span className="text-[8px] font-bold text-slate-300 shrink-0 tabular-nums group-hover:text-slate-400">{node.leafCount}</span>
+        {hasKids && <button onClick={e => { e.stopPropagation(); onSelect(node.dbId, node.name); }} className="text-[8px] text-blue-500 font-bold opacity-0 group-hover:opacity-100 shrink-0 px-1 bg-blue-50 rounded ml-0.5">SEL</button>}
       </div>
       {open && node.children.map(c => <MiniTree key={c.dbId} node={c} depth={depth + 1} onSelect={onSelect} />)}
     </div>
@@ -68,6 +70,12 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
   // Drag & drop linking
   const [dragOverActId, setDragOverActId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Save selection to view library
+  const [saveViewName, setSaveViewName] = useState('');
+  const [saveViewColor, setSaveViewColor] = useState(COLORS[0]);
+  const [saveViewTarget, setSaveViewTarget] = useState<string>('new');
+  const [saveViewLoading, setSaveViewLoading] = useState(false);
 
   // Load data
   const loadActivities = useCallback(async () => {
@@ -129,8 +137,14 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
     if (!root) return;
     function buildNode(dbId: number, depth: number): TreeNode {
       const info = vr.getNodeInfo?.(dbId);
-      const children = depth < 3 ? (info?.childIds ?? []).slice(0, 50).map(c => buildNode(c, depth + 1)) : [];
-      return { dbId, name: info?.name ?? `#${dbId}`, children, selected: false };
+      if (depth < 3) {
+        const children = (info?.childIds ?? []).slice(0, 50).map(c => buildNode(c, depth + 1));
+        const leafCount = children.length === 0 ? 1 : children.reduce((s, c) => s + c.leafCount, 0);
+        return { dbId, name: info?.name ?? `#${dbId}`, children, selected: false, leafCount };
+      } else {
+        const childCount = info?.childIds?.length ?? 0;
+        return { dbId, name: info?.name ?? `#${dbId}`, children: [], selected: false, leafCount: Math.max(1, childCount) };
+      }
     }
     const rootNode = buildNode(root.dbId, 0);
     setTreeNodes(rootNode.children.length ? rootNode.children : [rootNode]);
@@ -190,7 +204,7 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
   }, [viewerRef]);
 
   // Select from tree
-  const selectFromTree = useCallback((dbId: number) => {
+  const selectFromTree = useCallback((dbId: number, nodeName: string) => {
     const vr = viewerRef.current;
     if (!vr) return;
     const info = vr.getNodeInfo?.(dbId);
@@ -205,6 +219,7 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
     }
     collect(dbId);
     if (allIds.length) { vr.select(allIds); vr.fitToView(allIds); }
+    setSaveViewName(nodeName);
   }, [viewerRef]);
 
   // Save selection set
@@ -221,6 +236,35 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
     viewerRef.current?.clearHighlights();
     viewerRef.current?.select([]);
   }, [newSetName, currentExternalIds, currentSelection, viewerRef]);
+
+  // Save current selection to view library
+  const saveSelectionToView = useCallback(async () => {
+    if (!saveViewName.trim() || !currentExternalIds.length) return;
+    setSaveViewLoading(true);
+    try {
+      const colorNode = { value: saveViewName.trim(), color: saveViewColor, visible: true, guids: currentExternalIds };
+      let newViews: SavedColorView[];
+      if (saveViewTarget === 'new') {
+        const newView: SavedColorView = {
+          id: `view_${Date.now()}`,
+          name: saveViewName.trim(),
+          keyCol: 'GUID', treeCol: '',
+          viewMode: 'all',
+          colorNodes: [colorNode],
+          createdAt: new Date().toISOString(),
+        };
+        newViews = [...savedViews, newView];
+      } else {
+        newViews = savedViews.map(v =>
+          v.id === saveViewTarget ? { ...v, colorNodes: [...v.colorNodes, colorNode] } : v
+        );
+      }
+      await setBimLinkerKey(projectId, 'savedViews', newViews);
+      setSavedViews(newViews);
+      setSaveViewName('');
+    } catch (e) { console.warn('saveSelectionToView error', e); }
+    finally { setSaveViewLoading(false); }
+  }, [saveViewName, saveViewColor, saveViewTarget, currentExternalIds, savedViews, projectId]);
 
   // Link set to activity
   const linkSetToActivity = useCallback(async (setId: string, activityId: string) => {
@@ -597,6 +641,47 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
             </div>
           </div>
         )}
+        {/* Save to view library */}
+        {currentSelection.length > 0 && (
+          <div className="px-3 py-2 border-b border-slate-100 bg-violet-50/60">
+            <p className="text-[9px] font-black text-violet-600 uppercase mb-1.5 flex items-center gap-1">
+              <Library size={9} /> Guardar en Librería de Vistas
+            </p>
+            <input
+              value={saveViewName}
+              onChange={e => setSaveViewName(e.target.value)}
+              placeholder="Nombre del grupo…"
+              className="w-full text-[10px] px-2 py-1 border border-violet-200 rounded focus:outline-none focus:ring-1 focus:ring-violet-300 mb-1.5"
+            />
+            <div className="flex gap-1 mb-1.5 flex-wrap">
+              {COLORS.map(c => (
+                <button key={c} onClick={() => setSaveViewColor(c)}
+                  className={`w-4 h-4 rounded-full border-2 transition-all ${saveViewColor === c ? 'border-slate-600 scale-125' : 'border-transparent hover:border-slate-400'}`}
+                  style={{ backgroundColor: c }} />
+              ))}
+            </div>
+            <select
+              value={saveViewTarget}
+              onChange={e => setSaveViewTarget(e.target.value)}
+              className="w-full text-[10px] px-2 py-1 border border-violet-200 rounded focus:outline-none mb-1.5 bg-white"
+            >
+              <option value="new">+ Nueva vista</option>
+              {savedViews.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+            <button
+              onClick={saveSelectionToView}
+              disabled={!saveViewName.trim() || saveViewLoading}
+              className="w-full py-1 bg-violet-500 text-white text-[9px] font-black rounded hover:bg-violet-600 transition disabled:opacity-30 flex items-center justify-center gap-1"
+            >
+              {saveViewLoading
+                ? <Loader2 size={10} className="animate-spin" />
+                : <Library size={9} />}
+              {saveViewTarget === 'new' ? 'Crear vista' : 'Agregar a vista'}
+              {!saveViewLoading && <span className="ml-1 font-normal opacity-70">({currentExternalIds.length} elem.)</span>}
+            </button>
+          </div>
+        )}
+
         {/* Property selector */}
         <div className="px-3 py-2 border-b border-slate-100 flex-shrink-0">
           <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Seleccionar por Propiedad</p>
@@ -621,6 +706,7 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
         <div className="flex-1 overflow-y-auto px-1 py-1">
           <p className="text-[9px] font-black text-slate-400 uppercase px-2 mb-1">Árbol del Modelo</p>
           {treeNodes.map(n => <MiniTree key={n.dbId} node={n} depth={0} onSelect={selectFromTree} />)}
+
         </div>
       </div>
 

@@ -21,21 +21,20 @@ export default function LoginPage() {
   const [resetSent, setResetSent] = useState(false);
 
   const handleResetPassword = async () => {
-    if (!email) {
-      setError("Ingresa tu correo para restablecer la contraseña.");
-      return;
-    }
+    if (!email) { setError("Ingresa tu correo para restablecer la contraseña."); return; }
     setLoading(true);
     setError(null);
-    const supabase = createClient();
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/callback?next=/auth/reset-password`,
-    });
-    setLoading(false);
-    if (error) {
-      setError(error.message);
-    } else {
-      setResetSent(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/callback?next=/auth/reset-password`,
+      });
+      if (error) setError(error.message);
+      else setResetSent(true);
+    } catch (err: any) {
+      setError(err?.message ?? "Error de conexión.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -45,45 +44,50 @@ export default function LoginPage() {
     setError(null);
     setSuccess(null);
 
-    const supabase = createClient();
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Tiempo de espera agotado. Verifica tu conexión e intenta de nuevo.")), 15000)
+    );
 
-    if (mode === "register") {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
-      if (error) {
-        setError(error.message);
-      } else if (data.user && data.user.identities?.length === 0) {
-        setError("Ya existe una cuenta con ese correo. Inicia sesión o usa '¿Olvidaste tu contraseña?'.");
-      } else {
-        setSuccess("¡Cuenta creada! Revisa tu email para confirmar tu cuenta, luego inicia sesión.");
-      }
-    } else {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) {
-        if (error.message.includes("Invalid login credentials")) {
-          setError("Correo o contraseña incorrectos. ¿Olvidaste tu contraseña?");
-        } else if (error.message.includes("Email not confirmed")) {
-          setError("Confirma tu email antes de iniciar sesión. Revisa tu bandeja.");
-        } else if (error.message.includes("rate limit") || error.message.includes("over_email_send_rate_limit")) {
-          setError("Demasiados intentos. Espera unos minutos e intenta de nuevo.");
-        } else {
+    try {
+      const supabase = createClient();
+
+      if (mode === "register") {
+        const { data, error } = await Promise.race([
+          supabase.auth.signUp({ email, password, options: { emailRedirectTo: `${window.location.origin}/auth/callback` } }),
+          timeout,
+        ]);
+        if (error) {
           setError(error.message);
+        } else if (data.user && data.user.identities?.length === 0) {
+          setError("Ya existe una cuenta con ese correo. Inicia sesión o usa '¿Olvidaste tu contraseña?'.");
+        } else {
+          setSuccess("¡Cuenta creada! Revisa tu email para confirmar tu cuenta, luego inicia sesión.");
         }
       } else {
-        window.location.href = "/organizaciones";
-        return;
+        const { error } = await Promise.race([
+          supabase.auth.signInWithPassword({ email, password }),
+          timeout,
+        ]);
+        if (error) {
+          if (error.message.includes("Invalid login credentials")) {
+            setError("Correo o contraseña incorrectos. ¿Olvidaste tu contraseña?");
+          } else if (error.message.includes("Email not confirmed")) {
+            setError("Confirma tu email antes de iniciar sesión. Revisa tu bandeja.");
+          } else if (error.message.includes("rate limit") || error.message.includes("over_email_send_rate_limit")) {
+            setError("Demasiados intentos. Espera unos minutos e intenta de nuevo.");
+          } else {
+            setError(error.message);
+          }
+        } else {
+          window.location.href = "/organizaciones";
+          return;
+        }
       }
+    } catch (err: any) {
+      setError(err?.message ?? "Error de conexión. Verifica tu red e intenta de nuevo.");
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   return (

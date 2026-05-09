@@ -2,6 +2,8 @@
 
 import { use, useState, useEffect, useRef, useCallback } from 'react';
 import * as XLSX from 'xlsx';
+import { detectAllTables } from '@/lib/excel/detectTables';
+import type { DetectedTable } from '@/lib/excel/detectTables';
 import {
   Database, Upload, Plus, Search, X, Check, Layers, BarChart3, Tag,
   Eye, EyeOff, Loader2, AlertCircle, RefreshCw, Trash2, GitMerge,
@@ -533,7 +535,20 @@ function UploadModal({ onClose, onSuccess, projectId }: UploadModalProps) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [pendingTables,   setPendingTables]   = useState<DetectedTable[]>([]);
+  const [showTablePicker, setShowTablePicker] = useState(false);
+  const fileRef            = useRef<HTMLInputElement>(null);
+  const pendingFileNameRef = useRef('');
+
+  const applyParsed = useCallback((json: Record<string, string>[], hdrs: string[], fname: string) => {
+    setHeaders(hdrs);
+    setRows(json);
+    setSelCols(new Set(hdrs));
+    setMatchKey(hdrs[0]);
+    setVName(fname.replace(/\.[^.]+$/, ''));
+    setStep('map');
+    setError(null);
+  }, []);
 
   const parseFile = useCallback((f: File) => {
     setFile(f);
@@ -542,23 +557,22 @@ function UploadModal({ onClose, onSuccess, projectId }: UploadModalProps) {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const wb = XLSX.read(data, { type: 'array' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const json = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: '' });
-        if (json.length === 0) { setError('Archivo vacío'); return; }
-        const hdrs = Object.keys(json[0]);
-        setHeaders(hdrs);
-        setRows(json as Record<string, string>[]);
-        setSelCols(new Set(hdrs));
-        setMatchKey(hdrs[0]);
-        setVName(f.name.replace(/\.[^.]+$/, ''));
-        setStep('map');
-        setError(null);
+        const tables = detectAllTables(wb);
+        if (!tables.length) { setError('Archivo vacío'); return; }
+        if (tables.length === 1) {
+          const t = tables[0];
+          applyParsed(t.rows as Record<string, string>[], t.headers, t.tableName);
+        } else {
+          pendingFileNameRef.current = f.name;
+          setPendingTables(tables);
+          setShowTablePicker(true);
+        }
       } catch {
         setError('Error al parsear el archivo');
       }
     };
     reader.readAsArrayBuffer(f);
-  }, []);
+  }, [applyParsed]);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -621,6 +635,50 @@ function UploadModal({ onClose, onSuccess, projectId }: UploadModalProps) {
   const previewCols = Array.from(selCols).slice(0, 8);
 
   return (
+    <>
+    {showTablePicker && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50">
+        <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-sm max-h-[80vh] flex flex-col overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <p className="text-[11px] font-black text-slate-800 uppercase tracking-widest">Seleccionar Tabla</p>
+              <p className="text-[9px] text-slate-400 mt-0.5">
+                {pendingTables.length} tablas en{' '}
+                <span className="font-bold text-slate-600">{pendingFileNameRef.current}</span>
+              </p>
+            </div>
+            <button onClick={() => setShowTablePicker(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {pendingTables.map((t, i) => (
+              <button key={i}
+                onClick={() => {
+                  applyParsed(t.rows as Record<string, string>[], t.headers, t.tableName);
+                  setShowTablePicker(false);
+                  setPendingTables([]);
+                }}
+                className="w-full text-left border border-slate-200 rounded-xl p-3 hover:border-[#0C1E4F]/40 hover:bg-[#0C1E4F]/5 transition group"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[10px] font-black text-slate-800 truncate group-hover:text-[#0C1E4F]">{t.tableName}</p>
+                    {t.tableName !== t.sheetName && (
+                      <span className="inline-block mt-0.5 text-[7px] bg-slate-100 text-slate-500 rounded-md px-1.5 py-0.5 font-bold">{t.sheetName}</span>
+                    )}
+                  </div>
+                  <span className="text-[8px] text-slate-400 shrink-0 tabular-nums whitespace-nowrap">{t.rows.length} filas</span>
+                </div>
+                <p className="text-[8px] text-slate-400 mt-1 truncate">
+                  {t.headers.slice(0, 4).join(' · ')}{t.headers.length > 4 ? ` +${t.headers.length - 4}` : ''}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    )}
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
       <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-2xl max-h-[90vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
@@ -763,6 +821,7 @@ function UploadModal({ onClose, onSuccess, projectId }: UploadModalProps) {
         )}
       </div>
     </div>
+    </>
   );
 }
 

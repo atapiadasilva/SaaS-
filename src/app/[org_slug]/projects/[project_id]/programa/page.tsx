@@ -3,6 +3,8 @@
 import { use, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { CalendarDays, Upload, FileText, Loader2, RefreshCw, X, AlertCircle, CheckCircle2, Filter, Flame, FileDown, ArrowRight, Monitor, FolderOpen, Save, FileCode2, Info } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { detectAllTables } from '@/lib/excel/detectTables';
+import type { DetectedTable } from '@/lib/excel/detectTables';
 import GanttChart, { Activity, getDiscColor, DISC_PALETTE } from '@/components/awp/GanttChart';
 import { supabase } from '@/lib/supabase';
 
@@ -475,9 +477,13 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
   const [activeVersion, setActiveVersion] = useState<string | null>(null);
   const [replaceMode, setReplaceMode] = useState<'replace' | 'new'>('replace');
 
+  const [pendingTables,   setPendingTables]   = useState<DetectedTable[]>([]);
+  const [showTablePicker, setShowTablePicker] = useState(false);
+
   // Pending BIM updates — flushed to Supabase with 1.5s debounce
-  const bimPendingRef = useRef<Record<string, number>>({});
-  const bimFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bimPendingRef      = useRef<Record<string, number>>({});
+  const bimFlushTimer      = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFileNameRef = useRef('');
 
   const flushBimToSupabase = useCallback(async () => {
     const updates = { ...bimPendingRef.current };
@@ -555,6 +561,27 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
     reset();
     await load(newSource);
   };
+
+  // ── Apply parsed Excel rows (called directly or from table picker) ──────────
+  const applyParsedExcel = useCallback((rows: any[], hdrs: string[]) => {
+    setHeaders(hdrs);
+    setPreview(rows);
+    setColMap({
+      wbs:      findCol(hdrs, ['WBS','CODIGO','CÓDIGO','ID']) ?? '',
+      desc:     findCol(hdrs, ['DESCRIPCION','DESCRIPCIÓN','NOMBRE','NAME','ACTIVIDAD']) ?? '',
+      cwp:      findCol(hdrs, ['CWP']) ?? '',
+      ewp:      findCol(hdrs, ['EWP']) ?? '',
+      pwp:      findCol(hdrs, ['PWP']) ?? '',
+      disc:     findCol(hdrs, ['DISCIPLINA','DISC']) ?? '',
+      hh:       findCol(hdrs, ['HH','HORAS','MAN','MANHOUR']) ?? '',
+      start:    findCol(hdrs, ['INICIO','START','COMIENZO']) ?? '',
+      end:      findCol(hdrs, ['TERMINO','TÉRMINO','FIN','END']) ?? '',
+      progress: findCol(hdrs, ['AVANCE','PROGRESO','PROGRESS','%']) ?? '',
+      parent:   findCol(hdrs, ['PADRE','PARENT']) ?? '',
+      summary:  findCol(hdrs, ['RESUMEN','SUMMARY','NIVEL']) ?? '',
+    });
+    setStep('excel-map');
+  }, []);
 
   // ── File handler ───────────────────────────────────────────────────────────
   const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -652,28 +679,16 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
-        const wb   = XLSX.read(evt.target?.result, { type: 'array', cellDates: true });
-        const ws   = wb.Sheets[wb.SheetNames[0]];
-        const rows: any[] = XLSX.utils.sheet_to_json(ws, { defval: '', raw: true });
-        if (!rows.length) { setError('Archivo vacío'); return; }
-        const hdrs = Object.keys(rows[0]);
-        setHeaders(hdrs);
-        setPreview(rows);
-        setColMap({
-          wbs:      findCol(hdrs, ['WBS','CODIGO','CÓDIGO','ID']) ?? '',
-          desc:     findCol(hdrs, ['DESCRIPCION','DESCRIPCIÓN','NOMBRE','NAME','ACTIVIDAD']) ?? '',
-          cwp:      findCol(hdrs, ['CWP']) ?? '',
-          ewp:      findCol(hdrs, ['EWP']) ?? '',
-          pwp:      findCol(hdrs, ['PWP']) ?? '',
-          disc:     findCol(hdrs, ['DISCIPLINA','DISC']) ?? '',
-          hh:       findCol(hdrs, ['HH','HORAS','MAN','MANHOUR']) ?? '',
-          start:    findCol(hdrs, ['INICIO','START','COMIENZO']) ?? '',
-          end:      findCol(hdrs, ['TERMINO','TÉRMINO','FIN','END']) ?? '',
-          progress: findCol(hdrs, ['AVANCE','PROGRESO','PROGRESS','%']) ?? '',
-          parent:   findCol(hdrs, ['PADRE','PARENT']) ?? '',
-          summary:  findCol(hdrs, ['RESUMEN','SUMMARY','NIVEL']) ?? '',
-        });
-        setStep('excel-map');
+        const wb     = XLSX.read(evt.target?.result, { type: 'array', cellDates: true });
+        const tables = detectAllTables(wb);
+        if (!tables.length) { setError('Archivo vacío'); return; }
+        if (tables.length === 1) {
+          applyParsedExcel(tables[0].rows, tables[0].headers);
+        } else {
+          pendingFileNameRef.current = file.name;
+          setPendingTables(tables);
+          setShowTablePicker(true);
+        }
       } catch { setError('Error leyendo el archivo Excel'); }
     };
     reader.readAsArrayBuffer(file);
@@ -1010,6 +1025,51 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
                 className="px-6 py-2 bg-[#0C1E4F] text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-blue-700 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
                 <CheckCircle2 size={13} /> Cargar {mapped.length} actividades
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Table picker modal ── */}
+      {showTablePicker && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-sm max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-black text-slate-800 uppercase tracking-widest">Seleccionar Tabla</p>
+                <p className="text-[9px] text-slate-400 mt-0.5">
+                  {pendingTables.length} tablas en{' '}
+                  <span className="font-bold text-slate-600">{pendingFileNameRef.current}</span>
+                </p>
+              </div>
+              <button onClick={() => setShowTablePicker(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {pendingTables.map((t, i) => (
+                <button key={i}
+                  onClick={() => {
+                    applyParsedExcel(t.rows, t.headers);
+                    setShowTablePicker(false);
+                    setPendingTables([]);
+                  }}
+                  className="w-full text-left border border-slate-200 rounded-xl p-3 hover:border-rose-300 hover:bg-rose-50/50 transition group"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] font-black text-slate-800 truncate group-hover:text-rose-700">{t.tableName}</p>
+                      {t.tableName !== t.sheetName && (
+                        <span className="inline-block mt-0.5 text-[7px] bg-slate-100 text-slate-500 rounded-md px-1.5 py-0.5 font-bold">{t.sheetName}</span>
+                      )}
+                    </div>
+                    <span className="text-[8px] text-slate-400 shrink-0 tabular-nums whitespace-nowrap">{t.rows.length} filas</span>
+                  </div>
+                  <p className="text-[8px] text-slate-400 mt-1 truncate">
+                    {t.headers.slice(0, 4).join(' · ')}{t.headers.length > 4 ? ` +${t.headers.length - 4}` : ''}
+                  </p>
+                </button>
+              ))}
             </div>
           </div>
         </div>

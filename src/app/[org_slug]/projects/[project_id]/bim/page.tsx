@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import type { ForgeViewerHandle, ElementProperties, NodeInfo, ModelIndex } from '@/components/awp/ForgeViewer';
 import type { BimConfig } from '@/components/modules/BimConfigModal';
 import { createClient } from '@/lib/supabase/client';
+import { setModuleConfigKey } from '@/lib/supabase/projectConfig';
 import {
   Box, Maximize2, RotateCcw, Settings2, Loader2, AlertCircle,
   Download, X, Search, Copy, Check, ChevronRight,
@@ -446,17 +447,10 @@ export default function BimPage({
     setBimIndex(index);
     setIndexState('saving');
     try {
-      const supabase = createClient();
-      const { data: proj } = await (supabase as any)
-        .from('projects').select('module_config').eq('id', project_id).single();
-      const existing = (proj?.module_config as Record<string, unknown>) ?? {};
-      await (supabase as any)
-        .from('projects')
-        .update({ module_config: { ...existing, bim_index: index } })
-        .eq('id', project_id);
+      await setModuleConfigKey(project_id, 'bim_index', index);
       setIndexState('ready');
     } catch {
-      setIndexState('ready'); // silently ignore save errors
+      setIndexState('ready');
     }
   }, [project_id]);
 

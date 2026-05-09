@@ -21,7 +21,7 @@ import {
   GripVertical, Play, Pause, Square, Trash2, Eye, EyeOff,
   Loader2, Download, ChevronDown, ChevronRight, ChevronUp,
   List, BarChart2, CalendarDays, ZoomIn, ZoomOut, RotateCcw,
-  Rewind, FastForward, Scissors,
+  Rewind, FastForward, Scissors, RefreshCw,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { get, set } from 'idb-keyval';
@@ -84,7 +84,8 @@ function applyModeToViewer(vr: ForgeViewerHandle, mode: PlayMode, ids: number[])
 const STORAGE_KEY = (pid: string) => `fourd_seq2_${pid}`;
 
 function buildGroupsFromBimLinker(bl: any): SeqGroup[] {
-  const src: any[] = bl.colorNodes || [];
+  // Prefer hierarchyNodes (always by treeCol) over colorNodes (may be by colorCol)
+  const src: any[] = (bl.hierarchyNodes?.length ? bl.hierarchyNodes : bl.colorNodes) || [];
   if (!src.length) return [];
   const ts = Date.now();
   const CWP_DAYS = 91;
@@ -99,12 +100,14 @@ function buildGroupsFromBimLinker(bl: any): SeqGroup[] {
       const iwpDays = iwpDaysArr[iwpIdx];
       const guids: string[] = n.guids || [];
       const tagNames: string[] = n.tagNames || [];
-      const tags: SeqTag[] = guids.length
-        ? splitExact(iwpDays, guids.length).map((d, ti) => ({
+      // Use tagNames to build TAG-level nodes even when guids have been stripped
+      const itemCount = tagNames.length || guids.length;
+      const tags: SeqTag[] = itemCount > 0
+        ? splitExact(iwpDays, itemCount).map((d, ti) => ({
             id: `t_${sectionId}_${iwpIdx}_${ti}_${ts}`,
-            name: tagNames[ti] || guids[ti],
+            name: tagNames[ti] || guids[ti] || `TAG ${ti + 1}`,
             duration: d,
-            guids: [guids[ti]],
+            guids: guids.length > ti ? [guids[ti]] : [],
             visible: true,
           }))
         : [{ id: `t_${sectionId}_${iwpIdx}_0_${ts}`, name: n.value || `IWP ${iwpIdx + 1}`, duration: iwpDays, guids: [], visible: true }];
@@ -164,6 +167,7 @@ interface GanttProps {
   projectStart: Date;
   collapsedSections: Set<string>;
   sectionOrder: string[];
+  levelNames: { cwp: string; iwp: string; tag: string };
   onGroupResize: (id: string, d: number) => void;
   onSectionResize: (id: string, d: number) => void;
   onSectionToggle: (id: string) => void;
@@ -178,7 +182,7 @@ interface GanttProps {
   onRemoveSubGroups: (id: string) => void;
 }
 
-const GanttView = React.memo(({ groups, totalDays, pxPerDay, currentDay, activeTagId, projectStart, collapsedSections, sectionOrder, onGroupResize, onSectionResize, onSectionToggle, onSectionMove, onGroupMove, onGroupToggle, onTagResize, onTagMove, onScrub, onScrubEnd, onSplitGroup, onRemoveSubGroups }: GanttProps) => {
+const GanttView = React.memo(({ groups, totalDays, pxPerDay, currentDay, activeTagId, projectStart, collapsedSections, sectionOrder, levelNames, onGroupResize, onSectionResize, onSectionToggle, onSectionMove, onGroupMove, onGroupToggle, onTagResize, onTagMove, onScrub, onScrubEnd, onSplitGroup, onRemoveSubGroups }: GanttProps) => {
   const TW = Math.max((totalDays + 30) * pxPerDay, 400);
   const NW = 320;
   
@@ -318,18 +322,18 @@ const GanttView = React.memo(({ groups, totalDays, pxPerDay, currentDay, activeT
                      </button>
                      <div className="w-2.5 h-2.5 rounded-sm bg-[#0C1E4F]/50 shrink-0" />
                      <span className="text-[10px] font-black text-[#0C1E4F] uppercase tracking-wide truncate flex-1">{group.sectionName}</span>
-                     <span className="text-[7px] font-mono text-[#0C1E4F]/40 shrink-0 bg-[#0C1E4F]/10 px-1 rounded">{iwpCount} IWP</span>
+                     <span className="text-[7px] font-mono text-[#0C1E4F]/40 shrink-0 bg-[#0C1E4F]/10 px-1 rounded">{iwpCount} {levelNames.iwp}</span>
                      {/* Move CWP up/down */}
-                     <div className="flex flex-col shrink-0 opacity-0 group-hover/sec:opacity-100 transition-opacity">
+                     <div className="flex flex-col shrink-0">
                        <button onClick={() => onSectionMove(group.sectionId!, 'up')}
                          disabled={sectionOrder.indexOf(group.sectionId!) === 0}
-                         className="w-4 h-3.5 flex items-center justify-center text-[#0C1E4F]/60 hover:text-[#0C1E4F] disabled:opacity-20 hover:bg-[#0C1E4F]/10 rounded-sm transition-colors">
-                         <ChevronUp size={9}/>
+                         className="w-5 h-4 flex items-center justify-center text-[#0C1E4F]/50 hover:text-[#0C1E4F] disabled:opacity-10 hover:bg-[#0C1E4F]/10 rounded-sm transition-colors">
+                         <ChevronUp size={11}/>
                        </button>
                        <button onClick={() => onSectionMove(group.sectionId!, 'down')}
                          disabled={sectionOrder.indexOf(group.sectionId!) === sectionOrder.length - 1}
-                         className="w-4 h-3.5 flex items-center justify-center text-[#0C1E4F]/60 hover:text-[#0C1E4F] disabled:opacity-20 hover:bg-[#0C1E4F]/10 rounded-sm transition-colors">
-                         <ChevronDown size={9}/>
+                         className="w-5 h-4 flex items-center justify-center text-[#0C1E4F]/50 hover:text-[#0C1E4F] disabled:opacity-10 hover:bg-[#0C1E4F]/10 rounded-sm transition-colors">
+                         <ChevronDown size={11}/>
                        </button>
                      </div>
                    </div>
@@ -430,10 +434,13 @@ const GanttView = React.memo(({ groups, totalDays, pxPerDay, currentDay, activeT
             }
             if (type === 'tag' && tag) {
               const isPreTag = dragPreview?.type?.startsWith('tag') && dragPreview?.id === tag.id;
-              const tStart = isPreTag ? dragPreview.startDay : tag.startDay;
-              const tEnd   = isPreTag ? dragPreview.endDay   : tag.endDay;
-              const tW     = Math.max((tEnd - tStart + 1) * pxPerDay, 4);
-              const tL     = tStart * pxPerDay;
+              const tStart  = isPreTag ? dragPreview.startDay : tag.startDay;
+              const tEnd    = isPreTag ? dragPreview.endDay   : tag.endDay;
+              const durDays = tEnd - tStart;
+              const isSubDay = durDays < 1;
+              // Sub-día = línea delgada (2px); ≥1 día = barra normal (mín 4px)
+              const tW      = Math.max(durDays * pxPerDay, isSubDay ? 2 : 4);
+              const tL      = tStart * pxPerDay;
               return (
                 <div key={`${tag.id}_${y}`} className={`flex items-center h-5 border-b border-slate-50 absolute w-full group/tag ${activeTagId === tag.id ? 'bg-blue-50' : group.sectionId ? 'bg-slate-50/50 hover:bg-slate-100/50' : 'bg-white hover:bg-slate-50/60'}`} style={{ top: y }}>
                   <div className={`shrink-0 sticky left-0 border-r border-slate-100 z-20 flex items-center h-full ${group.sectionId ? 'bg-slate-50/50 pl-12' : 'bg-white pl-10'}`} style={{ width: NW }}>
@@ -466,7 +473,7 @@ const GanttView = React.memo(({ groups, totalDays, pxPerDay, currentDay, activeT
                     {tW > 30 && (
                       <span className="absolute top-0 bottom-0 flex items-center pointer-events-none text-[7px] font-mono text-white/80 pl-1 overflow-hidden"
                         style={{ left: tL + 6, width: tW - 12 }}>
-                        {tEnd - tStart + 1}d
+                        {isSubDay ? '<1d' : `${Math.round(durDays)}d`}
                       </span>
                     )}
                   </div>
@@ -665,6 +672,7 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [sectionOrder, setSectionOrder] = useState<string[]>([]);
   const [clearConfirm, setClearConfirm] = useState(false);
+  const [levelNames, setLevelNames] = useState({ cwp: 'CWP', iwp: 'IWP', tag: 'TAG' });
 
   const toggleSection = (sectionId: string) => setCollapsedSections(prev => {
     const next = new Set(prev); next.has(sectionId) ? next.delete(sectionId) : next.add(sectionId); return next;
@@ -696,6 +704,8 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
   const currentDayRef  = useRef(0);
   const scheduledRef   = useRef<ScheduledGroup[]>([]);
   const applyTimer     = useRef<any>(null);
+  const isDirtyRef     = useRef(false);
+  const autoSaveTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── RAF play-loop refs (no React state inside tight loop) ─────────────────
   const rafIdRef       = useRef<number | null>(null);
@@ -716,15 +726,33 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
         const sb = createClient() as any;
         const { data } = await sb.from('projects').select('module_config').eq('id', projectId).single();
         const seq = data?.module_config?.fourd_sequence;
-        if (seq?.groups?.length) {
+        const bl  = data?.module_config?.bim_linker;
+
+        // Always load level names from bim_linker config if available
+        if (bl?.parentCol || bl?.treeCol || bl?.keyCol) {
+          setLevelNames({
+            cwp: bl.parentCol || 'CWP',
+            iwp: bl.treeCol   || 'IWP',
+            tag: bl.keyCol    || 'TAG',
+          });
+        }
+
+        // Use fourd_sequence only if it is at least as recent as bim_linker.
+        // If bim_linker was updated after the last sequence save, auto-reimport so
+        // the 3-level hierarchy (CWP → IWP → TAG) stays in sync.
+        const seqTs = seq?.savedAt ? new Date(seq.savedAt).getTime() : 0;
+        const blTs  = bl?.savedAt  ? new Date(bl.savedAt).getTime()  : 0;
+        const seqIsUpToDate = seq?.groups?.length && seqTs >= blTs;
+
+        if (seqIsUpToDate) {
           setGroups(seq.groups);
           if (seq.projectStart) setProjectStart(seq.projectStart);
           if (seq.sectionOrder) setSectionOrder(seq.sectionOrder);
           return;
         }
-        // No fourd_sequence — intenta auto-importar desde bim_linker si existe
-        const bl = data?.module_config?.bim_linker;
-        if (bl?.colorNodes?.length) {
+
+        // fourd_sequence is stale or absent — auto-import from bim_linker
+        if (bl?.colorNodes?.length || bl?.hierarchyNodes?.length) {
           const imported = buildGroupsFromBimLinker(bl);
           if (imported.length) {
             setGroups(imported);
@@ -741,6 +769,7 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
 
   const save = useCallback((list: SeqGroup[], start = projectStart) => {
     setGroups(list);
+    isDirtyRef.current = true;
     set(STORAGE_KEY(projectId), { groups: list, projectStart: start });
   }, [projectId, projectStart]);
 
@@ -754,7 +783,7 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
       await sb.from('projects').update({
         module_config: {
           ...cfg,
-          fourd_sequence: { groups, projectStart, sectionOrder: effectiveSectionOrder },
+          fourd_sequence: { groups, projectStart, sectionOrder: effectiveSectionOrder, savedAt: new Date().toISOString() },
         },
       }).eq('id', projectId);
       setSavedOk(true);
@@ -765,6 +794,17 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
       setSaving(false);
     }
   }, [projectId, groups, projectStart, effectiveSectionOrder]);
+
+  // Auto-save a Supabase 2s después de cualquier cambio del usuario
+  useEffect(() => {
+    if (!isDirtyRef.current) return;
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => {
+      isDirtyRef.current = false;
+      saveToServer();
+    }, 2000);
+    return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
+  }, [saveToServer]); // eslint-disable-line
 
   const scheduled = useMemo<ScheduledGroup[]>(() => {
     // Sort by effectiveSectionOrder (user-controlled), then preserve internal IWP order
@@ -796,43 +836,56 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
   }, [groups]);
   scheduledRef.current = scheduled; const totalDays = scheduled.length ? scheduled[scheduled.length-1].endDay : 0;
 
-  // ── Aplicar estado del visor en un día concreto (scrub / steps) ─────────────
+  // ── Aplicar estado Navisworks: futuro=original · activo=verde · completado=gris ─
+  // Navisworks 3 estados: futuro=oculto · activo=verde · completado=gris
   const applyDay = useCallback(async (targetDay: number) => {
     const vr = viewerRef.current;
     if (!vr || !vr.isUniversalIndexReady()) return;
     const t0 = performance.now();
+
+    const winDays  = horizonRef.current === 'weekly' ? 7 : horizonRef.current === 'monthly' ? 30 : 1;
+    const winStart = Math.max(0, targetDay - winDays);
+
     const allTags: any[] = [];
     scheduledRef.current.forEach(g => {
       if (g.scheduledSubGroups?.length) {
-        g.scheduledSubGroups.forEach(sg => allTags.push({ id: sg.id, startDay: sg.startDay, endDay: sg.endDay, guids: sg.guids, color: g.color, visible: true }));
+        g.scheduledSubGroups.forEach(sg => allTags.push({ startDay: sg.startDay, endDay: sg.endDay, guids: sg.guids, visible: true }));
       } else {
-        g.tags.forEach(t => allTags.push({ ...t, color: g.color }));
+        g.tags.forEach(t => allTags.push({ ...t }));
       }
     });
     allTags.sort((a, b) => a.startDay - b.startDay);
 
-    const colorMap = new Map<string, number[]>();
-    const idsAcc: number[] = [];
-    let tagCount = 0;
+    const completedIds: number[] = [];
+    const activeIds:    number[] = [];
     for (const tg of allTags) {
-      if (tg.startDay > targetDay) break;
+      if (tg.startDay > targetDay) break;  // futuro → oculto
       if (!tg.visible) continue;
-      tagCount++;
       const ids = vr.resolveByUniversalSync(tg.guids);
       if (!ids.length) continue;
-      idsAcc.push(...ids);
-      const bucket = colorMap.get(tg.color) ?? [];
-      bucket.push(...ids);
-      colorMap.set(tg.color, bucket);
+      if (tg.endDay >= winStart) activeIds.push(...ids);    // activo → verde
+      else                       completedIds.push(...ids); // completado → gris
     }
 
-    const resolveMs = (performance.now() - t0).toFixed(1);
-    vr.applyThemingBatch(colorMap);
-    applyModeToViewer(vr, playModeRef.current, idsAcc);
-    console.debug(`[4D][SCRUB] día ${targetDay.toFixed(1)} | tags: ${tagCount} | nodos: ${idsAcc.length} | resolve: ${resolveMs}ms | total: ${(performance.now()-t0).toFixed(1)}ms`);
+    const colorMap = new Map<string, number[]>();
+    if (completedIds.length) colorMap.set('#94A3B8', completedIds);
+    if (activeIds.length)    colorMap.set('#00d94d', activeIds);
 
-    // Actualizar caché acumulada para que el play posterior sea incremental
-    playAccColRef.current = colorMap;
+    const startedIds = [...completedIds, ...activeIds];
+    const mode = playModeRef.current;
+    vr.setGhosting(false);
+    if (startedIds.length > 0) {
+      if      (mode === 'isolate') { vr.isolateDbIds(startedIds); }
+      else if (mode === 'ghost')   { vr.isolateDbIds(startedIds); vr.setGhosting(true); }
+      else                         { vr.showAll(); }   // 'all': futuros visibles en color original
+      vr.applyThemingBatch(colorMap);
+    } else {
+      vr.showAll();
+      vr.clearHighlights();
+    }
+
+    console.debug(`[4D][SCRUB] día ${targetDay.toFixed(1)} | ventana:[${winStart.toFixed(0)},${targetDay.toFixed(0)}] | activos:${activeIds.length} completados:${completedIds.length} | ${(performance.now()-t0).toFixed(1)}ms`);
+    playAccColRef.current = new Map();
     playPrevTRef.current  = targetDay;
   }, [viewerRef]);
 
@@ -907,40 +960,39 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
         currentDayRef.current = t;
         setCurrentDay(t);
 
-        // Solo procesar los tags NUEVOS entre prevT y t
-        let newTagCount = 0;
-        let newNodeCount = 0;
+        // NAVISWORKS 3 estados: futuro=original · activo=verde · completado=gris
+        const winStart      = Math.max(0, t - stepDays);
+        const completedIds: number[] = [];
+        const activeIds:    number[] = [];
         for (const tg of playTagsRef.current) {
-          if (tg.startDay <= prevT) continue;  // ya procesado
-          if (tg.startDay > t) break;           // aún no corresponde
+          if (tg.startDay > t) break;
           if (!tg.visible) continue;
           const ids = vr.resolveByUniversalSync(tg.guids);
           if (!ids.length) continue;
-          newTagCount++;
-          newNodeCount += ids.length;
-          const bucket = playAccColRef.current.get(tg.color) ?? [];
-          bucket.push(...ids);
-          playAccColRef.current.set(tg.color, bucket);
+          if (tg.endDay >= winStart) activeIds.push(...ids);
+          else                       completedIds.push(...ids);
         }
         playPrevTRef.current = t;
+        const totalNodes = activeIds.length + completedIds.length;
 
-        // Contar total acumulado para los logs
-        let totalNodes = 0;
-        for (const ids of playAccColRef.current.values()) totalNodes += ids.length;
-
-        // Solo emitir GPU call si el total de nodos coloreados cambió (dedup RAF)
+        // Emitir GPU solo si cambió el total de nodos ya iniciados
         let gpuEmitted = false;
         if (totalNodes !== _lastAppliedNodes) {
           _lastAppliedNodes = totalNodes;
           gpuEmitted = true;
-          vr.applyThemingBatch(playAccColRef.current);
-
-          // applyModeToViewer solo en modo isolate/ghost (y solo si hay nodos)
-          // No llamar en modo 'all' — showAll() en cada frame es caro e innecesario
-          if (playModeRef.current !== 'all' && totalNodes > 0) {
-            const allIds: number[] = [];
-            for (const ids of playAccColRef.current.values()) allIds.push(...ids);
-            applyModeToViewer(vr, playModeRef.current, allIds);
+          const colorMap = new Map<string, number[]>();
+          if (completedIds.length) colorMap.set('#94A3B8', completedIds);
+          if (activeIds.length)    colorMap.set('#00d94d', activeIds);
+          const startedIds = [...completedIds, ...activeIds];
+          const mode = playModeRef.current;
+          vr.setGhosting(false);
+          if (startedIds.length > 0) {
+            if      (mode === 'isolate') { vr.isolateDbIds(startedIds); }
+            else if (mode === 'ghost')   { vr.isolateDbIds(startedIds); vr.setGhosting(true); }
+            else                         { vr.showAll(); }
+            vr.applyThemingBatch(colorMap);
+          } else {
+            vr.showAll(); vr.clearHighlights();
           }
         }
 
@@ -952,8 +1004,7 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
           _lastLogTs = now;
           console.debug(
             `[4D][PLAY] día ${t.toFixed(1)}/${totalDays} | ` +
-            `ticks: ${_tickCount} | nuevos: +${newTagCount} tags +${newNodeCount} nodos | ` +
-            `acum: ${playAccColRef.current.size} colores ${totalNodes} nodos | ` +
+            `ticks: ${_tickCount} | activos: ${totalNodes} nodos | ` +
             `GPU: ${gpuEmitted ? 'emit' : 'skip'} | tick: ${tickMs}ms`
           );
           _tickCount = 0;
@@ -961,7 +1012,8 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
 
         if (t >= totalDays) {
           setIsPlaying(false); playRef.current = false; rafIdRef.current = null;
-          console.info(`[4D][PLAY] Reproducción terminada — ${totalNodes} nodos coloreados`);
+          vr.clearHighlights(); vr.showAll();
+          console.info(`[4D][PLAY] Reproducción terminada`);
           return;
         }
       }
@@ -972,7 +1024,7 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
     rafIdRef.current = requestAnimationFrame(tick);
   }, [viewerRef, isPlaying, totalDays]);
 
-  // ── Stop: cancelar RAF y volver a día 0 ─────────────────────────────────────
+  // ── Stop: cancelar RAF, restaurar colores originales y volver a día 0 ────────
   const handleStop = useCallback(() => {
     playRef.current = false;
     if (rafIdRef.current) { cancelAnimationFrame(rafIdRef.current); rafIdRef.current = null; }
@@ -980,8 +1032,10 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
     playAccColRef.current = new Map();
     playPrevTRef.current  = 0;
     setCurrentDay(0); currentDayRef.current = 0;
-    applyDay(0);
-  }, [applyDay]);
+    // Restaurar colores originales inmediatamente
+    const vr = viewerRef.current;
+    if (vr) { vr.clearHighlights(); vr.showAll(); }
+  }, [viewerRef]);
 
   // ── Step backward / forward 1 día ────────────────────────────────────────
   const handleStepBack = useCallback(async () => {
@@ -1022,14 +1076,15 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
   const handleRemoveSubGroups = (gId: string) =>
     save(groups.map(x => x.id === gId ? { ...x, subGroups: undefined } : x));
 
-  // Resize/move group bar → redistribute tags proportionally
+  // Resize/move group bar → redistribute tags proportionally (mantiene fracciones sub-día)
   const handleGroupResize = (gId: string, newTotalDays: number) => {
     const g = groups.find(x => x.id === gId); if (!g || !g.tags.length) return;
     const old = g.tags.reduce((s, t) => s + t.duration, 0) || newTotalDays;
-    let rem = Math.max(g.tags.length, newTotalDays);
+    const minD = 0.001;
+    let rem = Math.max(minD * g.tags.length, newTotalDays);
     const tags = g.tags.map((t, i) => {
-      if (i === g.tags.length - 1) return { ...t, duration: Math.max(1, rem) };
-      const d = Math.max(1, Math.round(t.duration / old * newTotalDays));
+      if (i === g.tags.length - 1) return { ...t, duration: Math.max(minD, rem) };
+      const d = Math.max(minD, t.duration / old * newTotalDays);
       rem -= d; return { ...t, duration: d };
     });
     save(groups.map(x => x.id === gId ? { ...x, tags } : x));
@@ -1040,14 +1095,15 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
     const sGroups = groups.filter(g => g.sectionId === sectionId);
     if (!sGroups.length) return;
     const oldTotal = sGroups.reduce((s, g) => s + g.tags.reduce((ts, t) => ts + t.duration, 0), 0) || newTotalDays;
+    const minD = 0.001;
     const newGroups = groups.map(g => {
       if (g.sectionId !== sectionId) return g;
       const gOld = g.tags.reduce((s, t) => s + t.duration, 0) || 1;
-      const gNew = Math.max(1, Math.round(gOld / oldTotal * newTotalDays));
+      const gNew = Math.max(minD * g.tags.length, gOld / oldTotal * newTotalDays);
       let rem = gNew;
       const tags = g.tags.map((t, i) => {
-        if (i === g.tags.length - 1) return { ...t, duration: Math.max(1, rem) };
-        const d = Math.max(1, Math.round(t.duration / gOld * gNew));
+        if (i === g.tags.length - 1) return { ...t, duration: Math.max(minD, rem) };
+        const d = Math.max(minD, t.duration / gOld * gNew);
         rem -= d; return { ...t, duration: d };
       });
       return { ...g, tags };
@@ -1055,9 +1111,9 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
     save(newGroups);
   };
 
-  // Resize individual tag bar
+  // Resize individual tag bar (permite sub-día)
   const handleTagResize = (gId: string, tId: string, newDuration: number) =>
-    save(groups.map(g => g.id !== gId ? g : { ...g, tags: g.tags.map(t => t.id !== tId ? t : { ...t, duration: Math.max(1, newDuration) }) }));
+    save(groups.map(g => g.id !== gId ? g : { ...g, tags: g.tags.map(t => t.id !== tId ? t : { ...t, duration: Math.max(0.001, newDuration) }) }));
 
   // Move tag (shift start by absorbing/giving duration to neighbour)
   const handleTagMove = (gId: string, tId: string, delta: number) => {
@@ -1082,18 +1138,41 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
       const sb = createClient() as any;
       const { data } = await sb.from('projects').select('module_config').eq('id', projectId).single();
       const bl = data?.module_config?.bim_linker; if (!bl) return;
+      if (bl.parentCol || bl.treeCol || bl.keyCol) {
+        setLevelNames({ cwp: bl.parentCol || 'CWP', iwp: bl.treeCol || 'IWP', tag: bl.keyCol || 'TAG' });
+      }
       setSectionOrder([]); setCollapsedSections(new Set());
       const imported = buildGroupsFromBimLinker(bl);
       if (imported.length) save(imported);
     } finally { setImporting(false); }
   };
 
-  // ── Expand/collapse helpers ───────────────────────────────────────────────
-  const collapseAll  = () => save(groups.map(g => ({ ...g, collapsed: true  })));
-  const expandAll    = () => save(groups.map(g => ({ ...g, collapsed: false })));
-  const isAllExpanded  = groups.length > 0 && groups.every(g => !g.collapsed);
-  const isAllCollapsed = groups.length > 0 && groups.every(g =>  g.collapsed);
-  const totalTags      = groups.reduce((s, g) => s + g.tags.length, 0);
+  // ── Expand/collapse — 3 niveles jerárquicos ──────────────────────────────
+  // Nivel 1 (CWP): solo secciones visibles, grupos y tags ocultos
+  const collapseToNivel = () => {
+    const allSecs = [...new Set(groups.map(g => g.sectionId || '').filter(Boolean))];
+    setCollapsedSections(new Set(allSecs));
+    save(groups.map(g => ({ ...g, collapsed: true })));
+  };
+  // Nivel 2 (IWP): secciones + grupos visibles, tags ocultos
+  const collapseToIwp = () => {
+    setCollapsedSections(new Set());
+    save(groups.map(g => ({ ...g, collapsed: true })));
+  };
+  // Nivel 3 (TAG): todo visible
+  const expandToTag = () => {
+    setCollapsedSections(new Set());
+    save(groups.map(g => ({ ...g, collapsed: false })));
+  };
+
+  const hasSections  = groups.some(g => !!g.sectionId);
+  const isAtNivelLevel = hasSections && collapsedSections.size > 0;
+  const isAtIwpLevel   = !isAtNivelLevel && groups.length > 0 && groups.every(g =>  g.collapsed);
+  const isAtTagLevel   = !isAtNivelLevel && groups.length > 0 && groups.every(g => !g.collapsed);
+
+  const totalCwps = effectiveSectionOrder.length;
+  const totalIwps = groups.length;
+  const totalTags = groups.reduce((s, g) => s + g.tags.length, 0);
 
   // ── Limpiar programa ──────────────────────────────────────────────────────
   const clearSchedule = () => {
@@ -1102,6 +1181,30 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
     setCollapsedSections(new Set());
     setClearConfirm(false);
   };
+
+  // ── Resequenciar: redistribuye duraciones proporcionalmente en el orden actual ──
+  const resequence = useCallback(() => {
+    const CWP_DAYS = 91;
+    const cwpMap: Record<string, SeqGroup[]> = {};
+    groups.forEach(g => {
+      const k = g.sectionId || 'General';
+      if (!cwpMap[k]) cwpMap[k] = [];
+      cwpMap[k].push(g);
+    });
+    const newGroups: SeqGroup[] = [];
+    effectiveSectionOrder.forEach(sectionId => {
+      const iwps = cwpMap[sectionId]; if (!iwps) return;
+      const iwpDays = CWP_DAYS / iwps.length;
+      iwps.forEach(g => {
+        const tagDays = iwpDays / (g.tags.length || 1);
+        newGroups.push({ ...g, tags: g.tags.map(t => ({ ...t, duration: tagDays })) });
+      });
+    });
+    // Append any groups without a section (shouldn't exist but guard anyway)
+    groups.forEach(g => { if (!g.sectionId && !newGroups.find(x => x.id === g.id)) newGroups.push(g); });
+    setSectionOrder(effectiveSectionOrder);
+    save(newGroups);
+  }, [groups, effectiveSectionOrder, save]);
 
   return (
     <div className="flex flex-col h-full bg-white">
@@ -1143,29 +1246,37 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
           </>
         )}
 
-        {/* Expand / Collapse niveles */}
+        {/* Expand / Collapse — 3 niveles jerárquicos */}
         {groups.length > 0 && (
           <div className="flex items-center gap-1 shrink-0">
             <span className="text-[8px] text-slate-400 font-bold shrink-0">Niveles:</span>
+            {hasSections && (
+              <button
+                onClick={collapseToNivel}
+                title={`Solo ${levelNames.cwp}`}
+                className={`flex items-center gap-0.5 px-2 py-1 rounded-lg border text-[9px] font-black transition ${isAtNivelLevel ? 'border-[#0C1E4F] bg-[#0C1E4F] text-white' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                <ChevronRight size={9}/> {levelNames.cwp}
+              </button>
+            )}
             <button
-              onClick={collapseAll}
-              title="Colapsar todo (solo CWP)"
-              className={`flex items-center gap-0.5 px-2 py-1 rounded-lg border text-[9px] font-black transition ${isAllCollapsed ? 'border-[#0C1E4F] bg-[#0C1E4F] text-white' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-              <ChevronRight size={9}/> CWP
+              onClick={collapseToIwp}
+              title={`${levelNames.cwp} + ${levelNames.iwp}`}
+              className={`flex items-center gap-0.5 px-2 py-1 rounded-lg border text-[9px] font-black transition ${isAtIwpLevel ? 'border-[#0C1E4F] bg-[#0C1E4F] text-white' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+              <ChevronRight size={9}/> {levelNames.iwp}
             </button>
             <button
-              onClick={expandAll}
-              title="Expandir todo (CWP + TAGs)"
-              className={`flex items-center gap-0.5 px-2 py-1 rounded-lg border text-[9px] font-black transition ${isAllExpanded ? 'border-[#0C1E4F] bg-[#0C1E4F] text-white' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-              <ChevronDown size={9}/> TAGs
+              onClick={expandToTag}
+              title={`${levelNames.cwp} + ${levelNames.iwp} + ${levelNames.tag}`}
+              className={`flex items-center gap-0.5 px-2 py-1 rounded-lg border text-[9px] font-black transition ${isAtTagLevel ? 'border-[#0C1E4F] bg-[#0C1E4F] text-white' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+              <ChevronDown size={9}/> {levelNames.tag}
             </button>
           </div>
         )}
 
-        {/* Stats */}
+        {/* Stats — 3 niveles */}
         {groups.length > 0 && (
           <span className="text-[8px] text-slate-400 font-mono bg-slate-100 px-1.5 py-0.5 rounded shrink-0">
-            {groups.length} CWP · {totalTags} TAG · {totalDays}d
+            {hasSections ? `${totalCwps} ${levelNames.cwp} · ` : ''}{totalIwps} {levelNames.iwp} · {totalTags} {levelNames.tag} · {Math.round(totalDays)}d
           </span>
         )}
 
@@ -1184,6 +1295,13 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
               <RotateCcw size={10}/> Limpiar
             </button>
           )
+        )}
+
+        {/* Resequenciar */}
+        {groups.length > 0 && hasSections && (
+          <button onClick={resequence} className="flex items-center gap-1 px-3 py-1 bg-violet-50 text-violet-600 border border-violet-200 rounded-lg text-[9px] font-black hover:bg-violet-100 shrink-0">
+            <RefreshCw size={10}/> Resequenciar
+          </button>
         )}
 
         {/* Import */}
@@ -1291,11 +1409,19 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
           <option value={5}>5s / paso</option>
         </select>
 
-        {/* Play mode */}
-        <button onClick={() => setPlayMode(m => m==='isolate'?'ghost':m==='ghost'?'all':'isolate')} title="Modo de visualización"
-          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg text-[9px] font-black uppercase text-blue-600 transition shrink-0">
-          {playMode}
-        </button>
+        {/* Play mode — 3 botones sincronizados con el visor */}
+        <div className="flex bg-slate-100 rounded-lg p-0.5 gap-0.5 shrink-0">
+          {([['isolate','Aislar'],['ghost','Fantasma'],['all','Todo']] as const).map(([m, label]) => (
+            <button key={m} onClick={() => {
+              setPlayMode(m);
+              playModeRef.current = m;
+              if (!playRef.current) applyDay(currentDayRef.current);
+            }}
+              className={`px-2 py-1 rounded-md text-[9px] font-black transition ${playMode === m ? 'bg-white shadow text-[#0C1E4F]' : 'text-slate-400 hover:text-slate-600'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
 
         {/* Indexing indicator */}
         {indexing && (
@@ -1315,6 +1441,7 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
             projectStart={new Date(projectStart)}
             collapsedSections={collapsedSections}
             sectionOrder={effectiveSectionOrder}
+            levelNames={levelNames}
             onGroupResize={handleGroupResize}
             onSectionResize={handleSectionResize}
             onSectionToggle={toggleSection}

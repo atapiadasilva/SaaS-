@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import * as XLSX from 'xlsx';
+import { detectAllTables } from '@/lib/excel/detectTables';
+import type { DetectedTable } from '@/lib/excel/detectTables';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -88,7 +90,10 @@ export default function SourceOfTruth({ entities = [], projectId }: SourceOfTrut
   const [filterDiscipline, setFilterDiscipline] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingTables,   setPendingTables]   = useState<DetectedTable[]>([]);
+  const [showTablePicker, setShowTablePicker] = useState(false);
+  const fileInputRef       = useRef<HTMLInputElement>(null);
+  const pendingFileNameRef = useRef('');
 
   // ── Estado del extractor ───────────────────────────────────────────────
   const [showExtractor, setShowExtractor] = useState(false);
@@ -223,31 +228,44 @@ export default function SourceOfTruth({ entities = [], projectId }: SourceOfTrut
   };
 
   // ── Importar Excel ─────────────────────────────────────────────────────
+  const importCwpRows = useCallback(async (rows: any[]) => {
+    try {
+      const parsed: CWPRecord[] = rows.map((row: any) => ({
+        cwp_code: String(row['CWP'] || row['cwp_code'] || '').trim().toUpperCase(),
+        cwp_description: String(row['DESCRIPCION_CWP'] || row['DESCRIPCION'] || row['DESCRIPTION'] || '').trim(),
+        discipline: String(row['DISCIPLINA'] || row['discipline'] || '').trim().toUpperCase(),
+        ewp_code: String(row['EWP'] || row['ewp_code'] || '').trim().toUpperCase(),
+        pwp_code: String(row['PWP'] || row['pwp_code'] || '').trim().toUpperCase(),
+        area: String(row['AREA'] || row['area'] || '').trim().toUpperCase(),
+        tags: String(row['TAGS'] || row['tags'] || '').trim(),
+        is_active: true,
+      })).filter((r: CWPRecord) => r.cwp_code);
+      if (!parsed.length) { showToast('error', 'No se encontraron filas con columna CWP.'); return; }
+      if (!projectId) return;
+      const upsertRows = parsed.map(r => ({ project_id: projectId, ...r }));
+      const { error } = await supabase.from('cwp_master').upsert(upsertRows, { onConflict: 'project_id,cwp_code' });
+      if (error) throw error;
+      showToast('success', `${parsed.length} CWPs importados correctamente.`);
+      await load();
+    } catch { showToast('error', 'Error al importar.'); }
+  }, [projectId, load]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = async (ev) => {
+    reader.onload = (ev) => {
       try {
-        const wb = XLSX.read(ev.target?.result, { type: 'binary' });
-        const rows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' });
-        const parsed: CWPRecord[] = rows.map(row => ({
-          cwp_code: String(row['CWP'] || row['cwp_code'] || '').trim().toUpperCase(),
-          cwp_description: String(row['DESCRIPCION_CWP'] || row['DESCRIPCION'] || row['DESCRIPTION'] || '').trim(),
-          discipline: String(row['DISCIPLINA'] || row['discipline'] || '').trim().toUpperCase(),
-          ewp_code: String(row['EWP'] || row['ewp_code'] || '').trim().toUpperCase(),
-          pwp_code: String(row['PWP'] || row['pwp_code'] || '').trim().toUpperCase(),
-          area: String(row['AREA'] || row['area'] || '').trim().toUpperCase(),
-          tags: String(row['TAGS'] || row['tags'] || '').trim(),
-          is_active: true,
-        })).filter(r => r.cwp_code);
-        if (!parsed.length) { showToast('error', 'No se encontraron filas con columna CWP.'); return; }
-        if (!projectId) return;
-        const upsertRows = parsed.map(r => ({ project_id: projectId, ...r }));
-        const { error } = await supabase.from('cwp_master').upsert(upsertRows, { onConflict: 'project_id,cwp_code' });
-        if (error) throw error;
-        showToast('success', `${parsed.length} CWPs importados correctamente.`);
-        await load();
+        const wb     = XLSX.read(ev.target?.result, { type: 'binary' });
+        const tables = detectAllTables(wb);
+        if (!tables.length) { showToast('error', 'Archivo vacío.'); return; }
+        if (tables.length === 1) {
+          importCwpRows(tables[0].rows);
+        } else {
+          pendingFileNameRef.current = file.name;
+          setPendingTables(tables);
+          setShowTablePicker(true);
+        }
       } catch { showToast('error', 'Error al importar.'); }
     };
     reader.readAsBinaryString(file);
@@ -678,6 +696,51 @@ export default function SourceOfTruth({ entities = [], projectId }: SourceOfTrut
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Table picker modal */}
+      {showTablePicker && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-sm max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-black text-slate-800 uppercase tracking-widest">Seleccionar Tabla</p>
+                <p className="text-[9px] text-slate-400 mt-0.5">
+                  {pendingTables.length} tablas en{' '}
+                  <span className="font-bold text-slate-600">{pendingFileNameRef.current}</span>
+                </p>
+              </div>
+              <button onClick={() => setShowTablePicker(false)} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {pendingTables.map((t, i) => (
+                <button key={i}
+                  onClick={() => {
+                    importCwpRows(t.rows);
+                    setShowTablePicker(false);
+                    setPendingTables([]);
+                  }}
+                  className="w-full text-left border border-slate-200 rounded-xl p-3 hover:border-emerald-300 hover:bg-emerald-50/50 transition group"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] font-black text-slate-800 truncate group-hover:text-emerald-700">{t.tableName}</p>
+                      {t.tableName !== t.sheetName && (
+                        <span className="inline-block mt-0.5 text-[7px] bg-slate-100 text-slate-500 rounded-md px-1.5 py-0.5 font-bold">{t.sheetName}</span>
+                      )}
+                    </div>
+                    <span className="text-[8px] text-slate-400 shrink-0 tabular-nums whitespace-nowrap">{t.rows.length} filas</span>
+                  </div>
+                  <p className="text-[8px] text-slate-400 mt-1 truncate">
+                    {t.headers.slice(0, 4).join(' · ')}{t.headers.length > 4 ? ` +${t.headers.length - 4}` : ''}
+                  </p>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

@@ -998,6 +998,11 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
           // Clave: reduce calidad durante rotación/pan → máxima fluidez en navegación
           try { viewer.prefs?.set('optimizeNavigation',   true);  } catch {}
           try { viewer.prefs?.set('lineRendering',        false); } catch {}
+
+          // ── Fondo blanco por defecto (Blanco simple = lightPreset 10) ────
+          try { viewer.setLightPreset(10); } catch {}
+          try { viewer.setEnvMapBackground(false); } catch {}
+
           console.log('[BIM] Viewer iniciado — optimizeNavigation ON, consolidación activada');
 
           // ── Frame-time profiler ──────────────────────────────────────────
@@ -1088,6 +1093,10 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
                   modelRef.current = model;
                   setStatus('ready');
                   onReady?.();
+
+                  // Re-apply white background after model load (Forge resets env on geometry load)
+                  try { viewer.setLightPreset(10); } catch {}
+                  try { viewer.setEnvMapBackground(false); } catch {}
 
                   // ── Diagnóstico y optimizaciones post-carga ─────────────
                   try {

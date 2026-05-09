@@ -12,6 +12,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { get, set } from 'idb-keyval';
+import { detectAllTables } from '@/lib/excel/detectTables';
+import type { DetectedTable } from '@/lib/excel/detectTables';
 import {
   X, Loader2, Check, AlertCircle,
   ChevronDown, Link2,
@@ -21,6 +23,7 @@ import {
   Play, BookmarkPlus, Bookmark, FileText, Settings2,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { setModuleConfigKey } from '@/lib/supabase/projectConfig';
 import type { ForgeViewerHandle } from './ForgeViewer';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -48,13 +51,16 @@ export interface SavedColorView {
   createdAt: string;
 }
 
+type ConfigNode = { value: string; color: string; visible: boolean; guids: string[]; parent?: string; tagNames?: string[] };
+
 interface SavedLinkerConfig {
   connCol?: string;
   keyCol: string;
   treeCol: string;
   parentCol?: string;
   colorCol?: string;
-  colorNodes: Array<{ value: string; color: string; visible: boolean; guids: string[]; parent?: string; tagNames?: string[] }>;
+  colorNodes: ConfigNode[];
+  hierarchyNodes?: ConfigNode[];
   savedViews: SavedColorView[];
   savedAt: string;
 }
@@ -238,11 +244,17 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
   const [result,     setResult]     = useState<{ matched: number; total: number } | null>(null);
   const [error,      setError]      = useState<string | null>(null);
   const [savedOk,    setSavedOk]    = useState(false);
+  const [saveError,  setSaveError]  = useState<string | null>(null);
   const [indexReady, setIndexReady] = useState(false);
   const [indexProgress, setIndexProgress] = useState<number | null>(null);
 
-  const resolvedDbIdsRef = useRef<number[]>([]);
-  const fileRef          = useRef<HTMLInputElement>(null);
+  const [pendingTables,   setPendingTables]   = useState<DetectedTable[]>([]);
+  const [showTablePicker, setShowTablePicker] = useState(false);
+
+  const resolvedDbIdsRef   = useRef<number[]>([]);
+  const fileRef            = useRef<HTMLInputElement>(null);
+  const pendingFileNameRef = useRef('');
+  const hierarchyNodesRef  = useRef<ConfigNode[]>([]);
 
   const activeVersion = versions.find(v => v.id === activeId) ?? null;
   const rows    = activeVersion?.rows    ?? [];
@@ -278,6 +290,10 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
           setColorCol(saved.colorCol ?? '');
           if (saved.colorNodes?.length) { setColorNodes(saved.colorNodes.map(n => ({ ...n, guids: n.guids ?? [] }))); setTreeBuilt(true); }
           if (saved.savedViews?.length) setSavedViews(saved.savedViews);
+          // Restaurar hierarchyNodes al ref para que persist no los sobreescriba con vacío
+          if (saved.hierarchyNodes?.length) {
+            hierarchyNodesRef.current = saved.hierarchyNodes.map(n => ({ ...n, guids: n.guids ?? [] }));
+          }
         }
       } catch {}
     })();
@@ -285,53 +301,69 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
 
   const persist = useCallback(async (views: SavedColorView[], nodes: ColorNode[], cc = connCol, kc = keyCol, tc = treeCol, pc = parentCol, clc = colorCol) => {
     if (!supabaseProjectId) return;
-    setSaving(true);
+    setSaving(true); setSaveError(null);
     try {
-      const sb = createClient() as any;
-      const { data: proj } = await sb.from('projects').select('module_config').eq('id', supabaseProjectId).single();
-      const existing = (proj?.module_config as Record<string, unknown>) ?? {};
-      await sb.from('projects').update({
-        module_config: { ...existing, bim_linker: {
-          connCol: cc || undefined, keyCol: kc, treeCol: tc, parentCol: pc || undefined,
-          colorCol: clc || undefined,
-          colorNodes: nodes.map(({ value, color, visible, guids, parent, tagNames }) => ({ value, color, visible, guids: guids ?? [], parent, tagNames })),
-          savedViews: views,
-          savedAt: new Date().toISOString(),
-        } as SavedLinkerConfig }
-      }).eq('id', supabaseProjectId);
+      // Strip guids from working colorNodes — re-derived from the file on load.
+      // Use atomic RPC to avoid overwriting concurrent writes from other components.
+      const hn = hierarchyNodesRef.current;
+      await setModuleConfigKey(supabaseProjectId, 'bim_linker', {
+        connCol: cc || undefined, keyCol: kc, treeCol: tc, parentCol: pc || undefined,
+        colorCol: clc || undefined,
+        colorNodes: nodes.map(({ value, color, visible, parent, tagNames }) => ({ value, color, visible, guids: [], parent, tagNames })),
+        // hierarchyNodes conserva los GUIDs — el secuenciador 4D los necesita para animar el modelo
+        hierarchyNodes: hn.length
+          ? hn.map(({ value, color, visible, parent, tagNames, guids }) => ({ value, color, visible, guids, parent, tagNames }))
+          : undefined,
+        savedViews: views,
+        savedAt: new Date().toISOString(),
+      } as SavedLinkerConfig);
       setSavedOk(true); setTimeout(() => setSavedOk(false), 2500);
-    } catch {} finally { setSaving(false); }
+    } catch (e: any) {
+      setSaveError(e?.message ?? 'Error al guardar');
+      setTimeout(() => setSaveError(null), 4000);
+    } finally { setSaving(false); }
   }, [supabaseProjectId, connCol, keyCol, treeCol, parentCol, colorCol]);
+
+  const applyTable = useCallback((tableRows: DataRow[], cols: string[], label: string) => {
+    if (!tableRows.length) { setError('Tabla vacía.'); return; }
+    const autoKey = cols.find(c => keyCol && c.toLowerCase() === keyCol.toLowerCase()) ??
+      cols.find(c => /^(guid|globalid|element.?id|id)$/i.test(c.trim())) ?? '';
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const defaultName = `${label} - ${now.toLocaleDateString()} ${timeStr}`;
+    const newVer: FileVersion = { id: `${Date.now()}`, fileName: defaultName, date: now.toISOString().slice(0,10), rows: tableRows, columns: cols };
+    setVersions(prev => {
+      const next = [newVer, ...prev].slice(0, 5);
+      if (supabaseProjectId) set(`bim-linker-versions-${supabaseProjectId}`, next).catch(()=>{});
+      return next;
+    });
+    setActiveId(newVer.id);
+    if (autoKey) setKeyCol(autoKey);
+    setColorNodes([]); setTreeBuilt(false); setResult(null);
+  }, [keyCol, supabaseProjectId]);
 
   const loadFile = useCallback(async (file: File) => {
     setError(null);
     try {
-      let parsed: DataRow[] = [];
       if (file.name.endsWith('.csv')) {
-        parsed = parseCSV(await file.text());
+        const parsed = parseCSV(await file.text());
+        if (!parsed.length) { setError('Archivo vacío.'); return; }
+        applyTable(parsed, Object.keys(parsed[0]), file.name.replace(/\.[^/.]+$/, ''));
       } else {
         const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-        parsed   = XLSX.utils.sheet_to_json<DataRow>(wb.Sheets[wb.SheetNames[0]], { defval: '' });
+        const tables = detectAllTables(wb);
+        if (!tables.length) { setError('No se encontraron datos en el archivo.'); return; }
+        if (tables.length === 1) {
+          const t = tables[0];
+          applyTable(t.rows as DataRow[], t.headers, t.tableName);
+        } else {
+          pendingFileNameRef.current = file.name;
+          setPendingTables(tables);
+          setShowTablePicker(true);
+        }
       }
-      if (!parsed.length) { setError('Archivo vacío.'); return; }
-      const cols = Object.keys(parsed[0]);
-      const autoKey = cols.find(c => keyCol && c.toLowerCase() === keyCol.toLowerCase()) ??
-        cols.find(c => /^(guid|globalid|element.?id|id)$/i.test(c.trim())) ?? '';
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      const nameOnly = file.name.replace(/\.[^/.]+$/, '');
-      const defaultName = `${nameOnly} - ${now.toLocaleDateString()} ${timeStr}`;
-      const newVer: FileVersion = { id: `${Date.now()}`, fileName: defaultName, date: now.toISOString().slice(0,10), rows: parsed, columns: cols };
-      setVersions(prev => {
-        const next = [newVer, ...prev].slice(0, 5);
-        if (supabaseProjectId) set(`bim-linker-versions-${supabaseProjectId}`, next).catch(()=>{});
-        return next;
-      });
-      setActiveId(newVer.id);
-      if (autoKey) setKeyCol(autoKey);
-      setColorNodes([]); setTreeBuilt(false); setResult(null);
     } catch (e: any) { setError(`Error: ${e.message}`); }
-  }, [keyCol]);
+  }, [applyTable]);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => { const f = e.target.files?.[0]; if (f) loadFile(f); e.target.value = ''; };
   const onDrop = (e: React.DragEvent) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) loadFile(f); };
@@ -339,26 +371,58 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
   const buildColorTree = useCallback(() => {
     const groupBy = colorCol || treeCol;
     if (!groupBy || !rows.length) return;
-    const groupGuids:    Record<string, string[]> = {};
-    const groupTagNames: Record<string, string[]> = {};
-    const groupParent:   Record<string, string>   = {};
-    for (const row of rows) {
-      const guid    = connCol   ? String(row[connCol]    ?? '').trim() : '';
-      const tagName = keyCol    ? String(row[keyCol]     ?? '').trim() : guid;
-      const grpVal  = String(row[groupBy]   ?? '').trim() || '(vacío)';
-      const cwp     = parentCol ? String(row[parentCol]  ?? '').trim() : '';
-      if (!grpVal) continue;
-      if (!groupGuids[grpVal]) { groupGuids[grpVal] = []; groupTagNames[grpVal] = []; if (cwp) groupParent[grpVal] = cwp; }
-      if (guid) { groupGuids[grpVal].push(guid); groupTagNames[grpVal].push(tagName || guid); }
+
+    function buildNodes(by: string) {
+      const groupGuids:    Record<string, string[]> = {};
+      const groupTagNames: Record<string, string[]> = {};
+      const groupParent:   Record<string, string>   = {};
+      for (const row of rows) {
+        const guid    = connCol   ? String(row[connCol]    ?? '').trim() : '';
+        const tagName = keyCol    ? String(row[keyCol]     ?? '').trim() : guid;
+        const grpVal  = String(row[by]         ?? '').trim() || '(vacío)';
+        const cwp     = parentCol ? String(row[parentCol]  ?? '').trim() : '';
+        if (!grpVal) continue;
+        if (!groupGuids[grpVal]) { groupGuids[grpVal] = []; groupTagNames[grpVal] = []; if (cwp) groupParent[grpVal] = cwp; }
+        if (guid) { groupGuids[grpVal].push(guid); groupTagNames[grpVal].push(tagName || guid); }
+      }
+      return Object.entries(groupGuids).sort((a, b) => b[1].length - a[1].length)
+        .map(([value, guids], i) => ({
+          value, guids,
+          tagNames: groupTagNames[value],
+          color:   PALETTE_HEX[i % PALETTE_HEX.length],
+          visible: true,
+          parent:  groupParent[value] || undefined,
+        }));
     }
-    const nodes = Object.entries(groupGuids).sort((a, b) => b[1].length - a[1].length)
-      .map(([value, guids], i) => ({
-        value, guids,
-        tagNames: groupTagNames[value],
-        color:   PALETTE_HEX[i % PALETTE_HEX.length],
-        visible: true,
-        parent:  groupParent[value] || undefined,
+
+    const nodes = buildNodes(groupBy);
+
+    // Build hierarchy using compound (parentCol + treeCol) key so every (Nivel, Nombre)
+    // pair becomes its own IWP node — this ensures all 16 floors appear as separate sections.
+    if (parentCol && treeCol) {
+      const map: Record<string, { guids: string[]; tagNames: string[]; cwp: string; iwp: string }> = {};
+      for (const row of rows) {
+        const guid    = connCol ? String(row[connCol] ?? '').trim() : '';
+        const tagName = keyCol  ? String(row[keyCol]  ?? '').trim() : guid;
+        const cwp = String(row[parentCol] ?? '').trim();
+        const iwp = String(row[treeCol]   ?? '').trim();
+        if (!cwp || !iwp) continue;
+        const key = `${cwp}\x00${iwp}`;
+        if (!map[key]) map[key] = { guids: [], tagNames: [], cwp, iwp };
+        if (guid) { map[key].guids.push(guid); map[key].tagNames.push(tagName || guid); }
+      }
+      hierarchyNodesRef.current = Object.values(map).map((v, i) => ({
+        value:     v.iwp,
+        guids:     v.guids,
+        tagNames:  v.tagNames,
+        color:     PALETTE_HEX[i % PALETTE_HEX.length],
+        visible:   true,
+        parent:    v.cwp,
       }));
+    } else {
+      hierarchyNodesRef.current = [];
+    }
+
     setColorNodes(nodes);
     setTreeBuilt(true); setResult(null);
     persist(savedViews, nodes);
@@ -482,8 +546,9 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
             </div>
           </div>
           <div className="flex items-center gap-1">
-            {savedOk && <Check size={12} className="text-emerald-500" />}
-            {saving  && <Loader2 size={12} className="animate-spin text-slate-300" />}
+            {savedOk    && <Check size={12} className="text-emerald-500" />}
+            {saveError  && <span className="text-[9px] font-bold text-red-500 max-w-[120px] truncate" title={saveError}>⚠ {saveError}</span>}
+            {saving     && <Loader2 size={12} className="animate-spin text-slate-300" />}
           </div>
         </div>
       </div>
@@ -801,6 +866,52 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
           </div>
         )}
       </div>
+
+      {/* ── Table picker modal ── */}
+      {showTablePicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-sm max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-black text-slate-800 uppercase tracking-widest">Seleccionar Tabla</p>
+                <p className="text-[9px] text-slate-400 mt-0.5">
+                  {pendingTables.length} tablas detectadas en{' '}
+                  <span className="font-bold text-slate-600">{pendingFileNameRef.current}</span>
+                </p>
+              </div>
+              <button onClick={() => setShowTablePicker(false)}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition">
+                <X size={13} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {pendingTables.map((t, i) => (
+                <button key={i}
+                  onClick={() => {
+                    applyTable(t.rows as DataRow[], t.headers, t.tableName);
+                    setShowTablePicker(false);
+                    setPendingTables([]);
+                  }}
+                  className="w-full text-left border border-slate-200 rounded-xl p-3 hover:border-red-300 hover:bg-red-50/50 transition group"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] font-black text-slate-800 truncate group-hover:text-red-700">{t.tableName}</p>
+                      {t.tableName !== t.sheetName && (
+                        <span className="inline-block mt-0.5 text-[7px] bg-slate-100 text-slate-500 rounded-md px-1.5 py-0.5 font-bold">{t.sheetName}</span>
+                      )}
+                    </div>
+                    <span className="text-[8px] text-slate-400 shrink-0 tabular-nums whitespace-nowrap">{t.rows.length} filas</span>
+                  </div>
+                  <p className="text-[8px] text-slate-400 mt-1 truncate">
+                    {t.headers.slice(0, 4).join(' · ')}{t.headers.length > 4 ? ` +${t.headers.length - 4}` : ''}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
