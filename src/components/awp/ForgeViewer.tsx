@@ -50,6 +50,9 @@ export interface NodeInfo {
 
 export interface ForgeViewerHandle {
   getSelectedIds:          () => number[];
+  getIsolatedNodes:        () => number[];
+  /** Sube un nivel en el árbol de instancias. Devuelve null si es la raíz o el árbol no está listo. */
+  getParentDbId:           (dbId: number) => number | null;
   /** Expande dbIds padre → nodos hoja (geometría real). Usar antes de cachear dbIds. */
   getLeafDbIds:            (dbIds: number[]) => number[];
   highlight:               (dbIds: number[], rgba: { r: number; g: number; b: number; a: number }) => void;
@@ -63,11 +66,15 @@ export interface ForgeViewerHandle {
   isolate:                 (dbIds: number[]) => void;
   fitToView:               (dbIds?: number[]) => void;
   navigateTo:              (dbId: number) => void;
+  getRootId:               () => number | null;
+  getChildren:             (dbId: number) => { dbId: number; name: string; childCount: number }[];
+  getLeafDbIds:            (dbIds: number[]) => number[];
   getNodeName:             (dbId: number) => string | null;
   getChildCount:           (dbId: number) => number;
   getNodeInfo:             (dbId: number) => NodeInfo | null;
   getProperties:           (dbId: number) => Promise<ElementProperties>;
   getExternalIdMapping:    () => Promise<Record<string, number>>;
+  getExternalIds:          (dbIds: number[]) => Promise<string[]>;
   resolveExternalIds:      (externalIds: string[]) => Promise<number[]>;
   highlightByExternalIds:  (externalIds: string[], rgba: { r: number; g: number; b: number; a: number }) => Promise<void>;
   exportAllProperties:     (propNames: string[]) => Promise<string>;
@@ -101,6 +108,10 @@ export interface ForgeViewerHandle {
   isUniversalIndexReady:   () => boolean;
   isolateDbIds:            (dbIds: number[]) => void;
   setGhosting:             (enabled: boolean) => void;
+  /** Cambia el color de fondo del visor (gradiente r1,g1,b1 -> r2,g2,b2) */
+  setBackgroundColor:      (r1: number, g1: number, b1: number, r2: number, g2: number, b2: number) => void;
+  /** Activa/desactiva la selección geométrica (profunda) para el barrido */
+  setDeepSelection:        (enabled: boolean) => void;
   restoreAll:              () => void;
   /**
    * Pre-carga un ModelIndex guardado en Supabase.
@@ -260,17 +271,21 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
     // Universal index: ANY property value → dbId[]
     const universalIndex  = useRef<Record<string, number[]> | null>(null);
     const universalBuildPromise = useRef<Promise<void> | null>(null);
+    // Deep selection toggle
+    const deepSelectionRef = useRef(false);
     // Property headers discovered by the background scan
     const propHeadersRef  = useRef<string[]>([]);
     // GUID index (same as propIndexCache['GUID'] but kept separately for compat)
     const guidIndexRef2   = useRef<Record<string, number> | null>(null);
     // Keep latest callbacks in refs to avoid stale closures in useEffect
-    const onIndexReadyRef    = useRef(onIndexReady);
-    onIndexReadyRef.current  = onIndexReady;
-    const onIndexProgressRef = useRef(onIndexProgress);
+    const onIndexReadyRef      = useRef(onIndexReady);
+    onIndexReadyRef.current    = onIndexReady;
+    const onIndexProgressRef   = useRef(onIndexProgress);
     onIndexProgressRef.current = onIndexProgress;
-    const cachedIndexRef     = useRef(cachedIndex);
-    cachedIndexRef.current   = cachedIndex;
+    const cachedIndexRef       = useRef(cachedIndex);
+    cachedIndexRef.current     = cachedIndex;
+    const onSelectionChangeRef = useRef(onSelectionChange);
+    onSelectionChangeRef.current = onSelectionChange;
 
     const [status,       setStatus]       = useState<'loading' | 'ready' | 'error'>('loading');
     const [errMsg,       setErrMsg]       = useState('');
@@ -312,6 +327,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
     // Expose imperative API
     useImperativeHandle(ref, () => ({
       getSelectedIds: () => viewerRef.current?.getSelection() ?? [],
+      getIsolatedNodes: () => viewerRef.current?.getIsolatedNodes() ?? [],
 
       getLeafDbIds: (dbIds: number[]): number[] => {
         const model = modelRef.current;
@@ -438,14 +454,29 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         v.select([dbId]);
       },
 
-      /** Nombre de un nodo sin recorrer ancestros (O(1)). */
-      getNodeName: (dbId: number): string | null => {
+      getRootId: (): number | null => {
         if (!modelRef.current) return null;
         const tree = modelRef.current.getInstanceTree?.();
-        return tree ? (tree.getNodeName(dbId) ?? null) : null;
+        return tree ? tree.getRootId() : null;
       },
 
-      /** Cuántos hijos directos tiene un nodo (O(n) hijos, sin recursión). */
+      getChildren: (dbId: number): { dbId: number; name: string; childCount: number }[] => {
+        if (!modelRef.current) return [];
+        const tree = modelRef.current.getInstanceTree?.();
+        if (!tree) return [];
+        const children: { dbId: number; name: string; childCount: number }[] = [];
+        tree.enumNodeChildren(dbId, (cid: number) => {
+          let count = 0;
+          tree.enumNodeChildren(cid, () => { count++; }, false);
+          children.push({
+            dbId: cid,
+            name: tree.getNodeName(cid) || `Nodo ${cid}`,
+            childCount: count
+          });
+        }, false);
+        return children;
+      },
+
       getChildCount: (dbId: number): number => {
         if (!modelRef.current) return 0;
         const tree = modelRef.current.getInstanceTree?.();
@@ -453,6 +484,13 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         let count = 0;
         tree.enumNodeChildren(dbId, () => { count++; }, false);
         return count;
+      },
+
+      getParentDbId: (dbId: number): number | null => {
+        const tree = modelRef.current?.getInstanceTree?.();
+        if (!tree) return null;
+        const p = tree.getNodeParentId(dbId);
+        return (p != null && p !== dbId) ? p : null;
       },
 
       getNodeInfo: (dbId: number) => {
@@ -507,29 +545,48 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
 
       // ── ID mapping ─────────────────────────────────────────────────────────
 
-      getExternalIdMapping: () =>
-        new Promise((resolve, reject) => {
-          if (!modelRef.current) { reject(new Error('Modelo no cargado')); return; }
-          modelRef.current.getExternalIdMapping(
-            (mapping: Record<string, number>) => resolve(mapping),
-            (err: any) => reject(new Error(err))
-          );
-        }),
 
-      resolveExternalIds: (externalIds: string[]) =>
-        new Promise((resolve, reject) => {
-          if (!modelRef.current) { reject(new Error('Modelo no cargado')); return; }
-          modelRef.current.getExternalIdMapping(
-            (mapping: Record<string, number>) => {
-              const set = new Set(externalIds);
-              const dbIds = Object.entries(mapping)
-                .filter(([eid]) => set.has(eid))
-                .map(([, dbId]) => dbId);
-              resolve(dbIds);
-            },
-            (err: any) => reject(new Error(err))
-          );
-        }),
+      getExternalIdMapping: async () => {
+        const v = viewerRef.current;
+        if (!v) return {};
+        return new Promise<Record<string, number>>((resolve) => {
+          v.model.getExternalIdMapping((map: any) => resolve(map));
+        });
+      },
+
+      getExternalIds: async (dbIds: number[]) => {
+        const v = viewerRef.current;
+        if (!v || !modelRef.current) return [];
+        return new Promise<string[]>((resolve, reject) => {
+          v.model.getExternalIdMapping((mapping: Record<string, number>) => {
+            const dbIdSet = new Set(dbIds);
+            const extIds = Object.entries(mapping)
+              .filter(([, id]) => dbIdSet.has(id))
+              .map(([ext]) => ext);
+            resolve(extIds);
+          }, (err: any) => reject(new Error(String(err))));
+        });
+      },
+
+      resolveExternalIds: async (externalIds: string[]) => {
+        const v = viewerRef.current;
+        if (!v || !modelRef.current) return [];
+        try {
+          const mapping = await new Promise<Record<string, number>>((res, rej) => {
+            const timeout = setTimeout(() => rej(new Error('Mapping timeout')), 10000);
+            modelRef.current!.getExternalIdMapping((m) => { clearTimeout(timeout); res(m); }, (err) => { clearTimeout(timeout); rej(err); });
+          });
+          const set = new Set(externalIds);
+          const result: number[] = [];
+          for (const [eid, dbId] of Object.entries(mapping)) {
+            if (set.has(eid)) result.push(dbId);
+          }
+          return result;
+        } catch (e) {
+          console.warn('Error en resolveExternalIds:', e);
+          return [];
+        }
+      },
 
       highlightByExternalIds: async (externalIds, rgba) => {
         const v = viewerRef.current;
@@ -775,49 +832,61 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
             const allDbIds: number[] = [];
             tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
 
-            const idx: Record<string, number[]> = {};
+            const idx: Record<string, Set<number>> = {};
             const addDbId = (k: string, id: number) => {
-              if (!idx[k]) idx[k] = [];
-              else if (idx[k].includes(id)) return;
-              idx[k].push(id);
+              if (!idx[k]) idx[k] = new Set();
+              idx[k].add(id);
             };
-            const CHUNK_SIZE = 1000;
+            const CHUNK_SIZE = 2000;
 
             const processChunk = async (startIndex: number) => {
               if (onProgress) onProgress(Math.min(99, Math.round((startIndex / allDbIds.length) * 100)));
               if (startIndex >= allDbIds.length) {
-                universalIndex.current = idx;
-                try { await set(`universal-idx-${urn}`, idx); } catch (e) { console.warn('IDB save err', e); }
+                // Convert Sets to arrays for final index
+                const finalIdx: Record<string, number[]> = {};
+                for (const [k, set] of Object.entries(idx)) {
+                  finalIdx[k] = Array.from(set);
+                }
+                universalIndex.current = finalIdx;
+                try { await set(`universal-idx-${urn}`, finalIdx); } catch (e) { console.warn('IDB save err', e); }
                 if (onProgress) onProgress(100);
                 resolve();
                 return;
               }
-            const chunk = allDbIds.slice(startIndex, startIndex + CHUNK_SIZE);
-            viewerRef.current.model.getBulkProperties(
-              chunk,
-              null,
-              (results: any[]) => {
-                for (const r of results) {
-                  for (const p of (r.properties ?? [])) {
-                    const raw = p.displayValue;
-                    if (raw == null || raw === '') continue;
-                    const key = String(raw).trim();
-                    if (key.length >= 3) {
-                      addDbId(key, r.dbId);
-                      const lower = key.toLowerCase();
-                      if (lower !== key) addDbId(lower, r.dbId);
+              const chunk = allDbIds.slice(startIndex, startIndex + CHUNK_SIZE);
+              viewerRef.current.model.getBulkProperties(
+                chunk,
+                null,
+                (results: any[]) => {
+                  for (const r of results) {
+                    if (r.properties) {
+                      for (const p of r.properties) {
+                        const raw = p.displayValue;
+                        if (raw == null || raw === '') continue;
+                        const key = String(raw).trim();
+                        if (key.length >= 2) { // Permitir 2 chars (ej. C1)
+                          addDbId(key, r.dbId);
+                          const lower = key.toLowerCase();
+                          if (lower !== key) addDbId(lower, r.dbId);
+                        }
+                      }
+                    }
+                    if (r.name && r.name.length >= 2) {
+                      const kn = r.name.trim();
+                      addDbId(kn, r.dbId);
+                      addDbId(kn.toLowerCase(), r.dbId);
+                    }
+                    if (r.externalId && r.externalId.length >= 2) {
+                      addDbId(r.externalId.trim(), r.dbId);
                     }
                   }
-                  if (r.name && r.name.length >= 3) addDbId(r.name.trim(), r.dbId);
-                  if (r.externalId && r.externalId.length >= 3) addDbId(r.externalId.trim(), r.dbId);
-                }
-                setTimeout(() => processChunk(startIndex + CHUNK_SIZE), 40);
-              },
-              (err: any) => reject(new Error(String(err)))
-            );
-          };
-          processChunk(0);
-        });
+                  setTimeout(() => processChunk(startIndex + CHUNK_SIZE), 10);
+                },
+                (err: any) => reject(new Error(String(err)))
+              );
+            };
+            processChunk(0);
+          });
         })();
         return universalBuildPromise.current;
       },
@@ -881,8 +950,11 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
       },
 
       resolveByUniversal: async (values: string[]) => {
+        if (!universalIndex.current && universalBuildPromise.current) {
+          await universalBuildPromise.current;
+        }
         if (!universalIndex.current) return [];
-        const idx    = universalIndex.current;
+        const idx = universalIndex.current;
         const result: number[] = [];
         const seen   = new Set<number>();
         for (const v of values) {
@@ -924,6 +996,26 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         const v = viewerRef.current;
         if (!v) return;
         v.prefs.set('ghosting', enabled);
+      },
+
+      setDeepSelection: (enabled) => {
+        deepSelectionRef.current = enabled;
+        console.log(`[BIM] Selección profunda: ${enabled ? 'ON' : 'OFF'}`);
+        // Si la extensión está cargada, podemos ajustar su modo también
+        const v = viewerRef.current;
+        if (v) {
+          const ext = v.getExtension('Autodesk.BoxSelection');
+          if (ext) {
+            // El modo 'REGULAR' es por píxeles, pero podemos forzar el modo de intersección
+            // si la API lo permite, aunque nuestra lógica manual lo sobreescribirá.
+          }
+        }
+      },
+
+      setBackgroundColor: (r1, g1, b1, r2, g2, b2) => {
+        const v = viewerRef.current;
+        if (!v) return;
+        v.setBackgroundColor(r1, g1, b1, r2, g2, b2);
       },
 
       restoreAll: () => {
@@ -1076,9 +1168,60 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
           resizeObserver = new ResizeObserver(() => { viewer.resize(); });
           resizeObserver.observe(containerRef.current!);
 
-          // Selection event
+          // Selection event — use ref so latest callback is always called
           viewer.addEventListener(AV.SELECTION_CHANGED_EVENT, (e: any) => {
-            onSelectionChange?.(e.dbIdArray ?? []);
+            onSelectionChangeRef.current?.(e.dbIdArray ?? []);
+          });
+
+          // ── Box Selection Extension ──────────────────────────────────────
+          viewer.loadExtension('Autodesk.BoxSelection').then((ext: any) => {
+            console.log('[BIM] Extensión BoxSelection cargada');
+            
+            // Escuchar el evento de selección por cuadro
+            viewer.addEventListener('boxSelection', async (e: any) => {
+              if (!deepSelectionRef.current) return;
+              
+              const model = modelRef.current;
+              if (!model) return;
+              const tree = model.getInstanceTree();
+              if (!tree) return;
+
+              // e.rect es el rectángulo en pantalla [x, y, width, height]
+              // Usamos la API interna del selector para obtener intersecciones geométricas
+              // Esto es mucho más preciso que el búfer de píxeles para objetos pequeños
+              const canvas = viewer.canvas;
+              const rect = e.rect;
+              
+              // Normalizar coordenadas para el frustum
+              const x1 = rect.x;
+              const y1 = rect.y;
+              const x2 = rect.x + rect.width;
+              const y2 = rect.y + rect.height;
+
+              try {
+                // viewer.impl.selector.getSelection es una forma de obtener la selección
+                // Pero para "Deep Selection" (geométrica), usamos un frustum intersection
+                const dbIds: number[] = [];
+                
+                // Obtenemos todos los dbIds que intersectan el área (basado en AABB)
+                // Esto incluirá pernos y elementos ocultos/pequeños
+                (viewer.impl as any).selector.getSelection(
+                  new (window as any).THREE.Box2(
+                    new (window as any).THREE.Vector2(x1, y1),
+                    new (window as any).THREE.Vector2(x2, y2)
+                  ),
+                  true, // true = intersect (inclusivo), false = contains
+                  (ids: number[]) => {
+                    if (ids && ids.length > 0) {
+                      console.log(`[BIM][DEEP] Selección geométrica encontró ${ids.length} elementos`);
+                      viewer.select(ids);
+                    }
+                  }
+                );
+              } catch (err) {
+                console.warn('[BIM][DEEP] Error en selección profunda:', err);
+              }
+            });
           });
 
           const docUrn = urn.startsWith('urn:') ? urn : `urn:${urn}`;

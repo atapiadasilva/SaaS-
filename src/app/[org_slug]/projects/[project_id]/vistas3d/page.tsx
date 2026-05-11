@@ -1,13 +1,14 @@
 'use client';
 
-import { use, useState, useEffect, useRef } from 'react';
+import { use, useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase/client';
 import { setBimLinkerKey } from '@/lib/supabase/projectConfig';
-import { Loader2, MonitorPlay, Check, Layers, AlertCircle, MousePointer2, Paintbrush, EyeOff, Plus, Save, CheckCircle2, Copy, Trash2, X, Merge } from 'lucide-react';
+import { Loader2, MonitorPlay, Check, Layers, AlertCircle, MousePointer2, Paintbrush, EyeOff, Plus, Save, CheckCircle2, Copy, Trash2, X, Merge, ChevronUp, ChevronDown, Pencil, Clock, Camera, History, BoxSelect } from 'lucide-react';
 import type { BimConfig } from '@/components/modules/BimConfigModal';
 import type { ForgeViewerHandle } from '@/components/awp/ForgeViewer';
 import type { SavedColorView } from '@/components/awp/BimDataLinker';
+import ModelTree from '@/components/awp/ModelTree';
 
 const ForgeViewer = dynamic(() => import('@/components/awp/ForgeViewer'), { ssr: false });
 
@@ -23,17 +24,78 @@ export default function Vistas3DPage({
   const [loading, setLoading] = useState(true);
   const [viewerReady, setViewerReady] = useState(false);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  const [activeVersionId, setActiveVersionId] = useState<string | null>(null); // null = Draft/Current
   const [activeViewMode, setActiveViewMode] = useState<'all'|'isolate'|'ghost'>('all');
   const [activeNodes, setActiveNodes] = useState<SavedColorView['colorNodes']>([]);
   const [applying, setApplying] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [deepSelection, setDeepSelection] = useState(false);
+
+  // Inline rename: nodes
+  const [renamingNodeIdx, setRenamingNodeIdx] = useState<number | null>(null);
+  const [renamingValue,   setRenamingValue]   = useState('');
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  // Inline rename: view title
+  const [renamingViewId,    setRenamingViewId]    = useState<string | null>(null);
+  const [renamingViewValue, setRenamingViewValue] = useState('');
+  const renameViewRef = useRef<HTMLInputElement>(null);
 
   // Merge modal state
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeSelected, setMergeSelected] = useState<Set<string>>(new Set());
   const [mergeName, setMergeName] = useState('');
 
+  // ─── Compatibilidad con GUIDs comprimidos almacenados anteriormente ────────────
+  const decompressGuids = async (compressed: string | string[]): Promise<string[]> => {
+    if (Array.isArray(compressed)) return compressed;
+    if (!compressed) return [];
+    if (compressed.startsWith('GZ:')) {
+      if (typeof DecompressionStream === 'undefined') return [];
+      try {
+        const binary = atob(compressed.slice(3));
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+        const text = await new Response(stream).text();
+        return text ? text.split(',') : [];
+      } catch (e) {
+        return [];
+      }
+    }
+    return compressed.split(',');
+  };
+
+  const compressGuids = async (guids: string[]): Promise<string> => {
+    if (!guids || guids.length === 0) return '';
+    const str = guids.join(',');
+    if (typeof CompressionStream === 'undefined') return str;
+    try {
+      const stream = new Blob([str]).stream().pipeThrough(new CompressionStream('gzip'));
+      const buffer = await new Response(stream).arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      return 'GZ:' + btoa(binary);
+    } catch (e) {
+      return str;
+    }
+  };
+
+
   const viewerRef = useRef<ForgeViewerHandle>(null);
+  const [treeOpen, setTreeOpen] = useState(false);
+
+  // Selection state
+  const [selectionCount, setSelectionCount] = useState(0);
+  // Bidirectional tree↔viewer sync
+  const [highlightedTreeDbId, setHighlightedTreeDbId] = useState<number | null>(null);
+  const treeRootDbIds = useRef<Set<number>>(new Set());
+  // Inline add-category
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [newCategoryInput, setNewCategoryInput] = useState('');
+  // Paint feedback: index of node just painted
+  const [paintedNodeIdx, setPaintedNodeIdx] = useState<number | null>(null);
 
   useEffect(() => {
     let retries = 0;
@@ -44,33 +106,181 @@ export default function Vistas3DPage({
           .from('projects').select('module_config').eq('id', project_id).single();
         const mc = data?.module_config as Record<string, unknown> | null;
         const bim = mc?.bim as BimConfig | undefined;
-        const linker = mc?.bim_linker as { savedViews?: SavedColorView[] } | undefined;
-        if (linker?.savedViews) setSavedViews(linker.savedViews);
+        const linker = mc?.bim_linker as any;
+        if (linker) {
+          if (linker.savedViews) {
+            const loadedViews = await Promise.all((linker.savedViews as SavedColorView[]).map(async v => ({
+              ...v,
+              colorNodes: await Promise.all(v.colorNodes.map(async n => ({
+                ...n,
+                guids: await decompressGuids(n.guids as unknown as (string | string[]))
+              }))),
+              versions: v.versions ? await Promise.all(v.versions.map(async ver => ({
+                ...ver,
+                colorNodes: await Promise.all(ver.colorNodes.map(async n => ({
+                  ...n,
+                  guids: await decompressGuids(n.guids as unknown as (string | string[]))
+                })))
+              }))) : []
+            })));
+            setSavedViews(loadedViews);
+          }
+        }
         if (bim) {
           setConfig(bim);
-          setLoading(false);
         } else if (retries < 3) {
-          // Config may not be saved yet — retry silently up to 3×
           retries++;
           setTimeout(load, 3000);
-        } else {
-          setLoading(false);
         }
+        setLoading(false);
       } catch (e) { console.error('Error cargando vistas 3D', e); setLoading(false); }
     };
     load();
   }, [project_id]);
 
-  const persistDbIds = async (updatedViews: SavedColorView[]) => {
+  useEffect(() => {
+    if (viewerReady && viewerRef.current) {
+      viewerRef.current.setDeepSelection(deepSelection);
+    }
+  }, [viewerReady, deepSelection]);
+
+  // Selection count is updated via onSelectionChange on ForgeViewer (event-driven, no polling)
+
+  // Auto-aplicar removido por solicitud del usuario para iniciar con el modelo limpio
+  /*
+  useEffect(() => {
+    if (viewerReady && savedViews.length > 0 && !activeViewId && !applying) {
+      applyView(savedViews[0]);
+    }
+  }, [viewerReady, savedViews.length > 0]);
+  */
+
+  // Guarda SOLO bim_linker.savedViews via RPC atómica (1 sola llamada, sin leer antes).
+  // Payload mínimo: guid + categoría + nombre + color (sin dbIds).
+  // Guarda las vistas en Supabase.
+  // Ahora PERSISTIMOS los dbIds para que la carga sea instantánea al volver a entrar.
+  const persistViews = async (views: SavedColorView[]) => {
     try {
-      await setBimLinkerKey(project_id, 'savedViews', updatedViews);
-    } catch (e) { console.warn('[BIM] Error guardando:', e); }
+      const compressedViews = await Promise.all(views.map(async v => {
+        // Compresion de nodos principales
+        const colorNodes = await Promise.all(sanitizeNodes(v.colorNodes).map(async n => {
+          const { guids, ...rest } = n;
+          return {
+            ...rest,
+            guids: (guids && guids.length > 50) ? await compressGuids(guids) : (guids || [])
+          };
+        }));
+
+        // Compresion de versiones
+        const versions = v.versions ? await Promise.all(v.versions.map(async ver => ({
+          ...ver,
+          colorNodes: await Promise.all(ver.colorNodes.map(async n => {
+            const { guids, ...rest } = n;
+            return {
+              ...rest,
+              guids: (guids && guids.length > 50) ? await compressGuids(guids) : (guids || [])
+            };
+          }))
+        }))) : [];
+
+        return { ...v, colorNodes, versions };
+      }));
+      await setBimLinkerKey(project_id, 'savedViews', compressedViews);
+    } catch (e) {
+      console.error('[BIM] Error persistiendo vistas:', e);
+    }
+  };
+
+  // ─── Versiones / Snapshots ──────────────────────────────────────────────────
+  const handleCreateSnapshot = async (viewId: string) => {
+    const name = prompt('Nombre para esta versión (ej: "Semana 10", "Hito Civil"):', `Versión ${new Date().toLocaleDateString()}`);
+    if (!name) return;
+
+    setSavedViews(prev => {
+      const updated = prev.map(v => {
+        if (v.id !== viewId) return v;
+        const newVersion = {
+          id: `ver_${Date.now()}`,
+          name,
+          createdAt: new Date().toISOString(),
+          colorNodes: JSON.parse(JSON.stringify(activeNodes)) // Deep copy
+        };
+        return {
+          ...v,
+          versions: [newVersion, ...(v.versions || [])]
+        };
+      });
+      persistViews(updated);
+      return updated;
+    });
+    setSavedSuccess(true);
+    setTimeout(() => setSavedSuccess(false), 2000);
+  };
+
+  const handleSelectVersion = (versionId: string | null) => {
+    setActiveVersionId(versionId);
+    const view = savedViews.find(v => v.id === activeViewId);
+    if (!view) return;
+
+    if (versionId === null) {
+      // Volver al Draft/Actual
+      setActiveNodes(view.colorNodes);
+      applyView(view, view.colorNodes);
+    } else {
+      // Cargar versión histórica
+      const ver = view.versions?.find(v => v.id === versionId);
+      if (ver) {
+        setActiveNodes(ver.colorNodes);
+        applyView(view, ver.colorNodes);
+      }
+    }
+  };
+
+  const handleDeleteVersion = (viewId: string, versionId: string) => {
+    if (!confirm('¿Eliminar esta versión del historial?')) return;
+    setSavedViews(prev => {
+      const updated = prev.map(v => {
+        if (v.id !== viewId) return v;
+        return {
+          ...v,
+          versions: (v.versions || []).filter(ver => ver.id !== versionId)
+        };
+      });
+      persistViews(updated);
+      return updated;
+    });
+    if (activeVersionId === versionId) handleSelectVersion(null);
+  };
+
+  const sanitizeNodes = (nodes: SavedColorView['colorNodes']): SavedColorView['colorNodes'] => {
+    const seenDbIds = new Set<number>();
+    const seenGuids = new Set<string>();
+    // REGLA DE ORO: El último en la lista o el más reciente manda.
+    // Procesamos de ABAJO HACIA ARRIBA (reverse) para que los conjuntos inferiores (nuevos) tengan prioridad.
+    const reversed = [...nodes].reverse();
+    const cleaned = reversed.map(node => {
+      const dbIds = (node.dbIds || []).filter(id => {
+        if (seenDbIds.has(id)) return false;
+        seenDbIds.add(id);
+        return true;
+      });
+      const guids = (node.guids || []).filter(g => {
+        if (seenGuids.has(g)) return false;
+        seenGuids.add(g);
+        return true;
+      });
+      return { ...node, dbIds, guids };
+    });
+    return cleaned.reverse();
   };
 
   const applyView = async (view: SavedColorView | null, overrideNodes?: SavedColorView['colorNodes'], overrideMode?: 'all'|'isolate'|'ghost') => {
     if (!view) return;
     const mode  = overrideMode ?? (activeViewId === view.id ? activeViewMode : view.viewMode);
-    const nodes = overrideNodes ?? (activeViewId === view.id ? activeNodes : view.colorNodes);
+    let nodes = overrideNodes ?? (activeViewId === view.id ? activeNodes : view.colorNodes);
+    
+    // REGLA DE ORO: Un elemento solo puede estar en un conjunto.
+    nodes = sanitizeNodes(nodes);
 
     if (activeViewId !== view.id) {
       setActiveViewId(view.id);
@@ -78,61 +288,162 @@ export default function Vistas3DPage({
       setActiveViewMode(view.viewMode);
     }
 
+      const vr = viewerRef.current;
+      if (!vr) return;
+      setApplying(true);
+      try {
+        const visible = nodes.filter(n => n.visible);
+        const hidden  = nodes.filter(n => !n.visible);
+        const colorMap = new Map<string, number[]>();
+        let allDbIds: number[] = [];
+        let hiddenDbIds: number[] = [];
+
+        // Limpiar colores previos inmediatamente para dar feedback visual
+        vr.clearHighlights();
+        vr.showAll();
+        vr.setGhosting(false);
+
+        // dbIds === undefined → never resolved (legacy), needs GUID lookup.
+        // dbIds === [] → explicitly empty (elements removed), trust it, don't re-resolve.
+        // dbIds.length > 0 → cached, use directly.
+        const needsResolution = (n: typeof nodes[0]) =>
+          n.dbIds === undefined && (n.guids?.length ?? 0) > 0;
+
+        const allCached = visible.every(n => !needsResolution(n));
+
+        if (allCached) {
+          for (const node of visible) {
+            const ids = node.dbIds ?? [];
+            if (ids.length) {
+              colorMap.set(node.color, [...(colorMap.get(node.color) ?? []), ...ids]);
+              allDbIds.push(...ids);
+            }
+          }
+          for (const node of hidden) {
+            if (node.dbIds?.length) hiddenDbIds.push(...node.dbIds);
+          }
+          vr.applyThemingBatch(colorMap);
+        } else {
+          if (!vr.isUniversalIndexReady()) await vr.buildUniversalIndex();
+          const resolved = await Promise.all(
+            visible.map(async node => {
+              let rawIds: number[];
+              if (node.dbIds !== undefined) {
+                // Trust explicit dbIds (even if empty — means node was cleared)
+                rawIds = node.dbIds;
+              } else if (node.guids?.length) {
+                // Legacy: no dbIds stored yet → resolve from GUIDs
+                rawIds = await vr.resolveByUniversal(node.guids);
+                if (!rawIds.length) {
+                  try { rawIds = await vr.resolveExternalIds(node.guids); } catch { rawIds = []; }
+                }
+              } else {
+                rawIds = [];
+              }
+              const leafIds = rawIds.length ? vr.getLeafDbIds(rawIds) : rawIds;
+              if (leafIds.length) {
+                colorMap.set(node.color, [...(colorMap.get(node.color) ?? []), ...leafIds]);
+                allDbIds.push(...leafIds);
+              }
+              return { node, dbIds: leafIds };
+            })
+          );
+          vr.applyThemingBatch(colorMap);
+
+          const resolvedMap = new Map(resolved.map(r => [r.node.value, r.dbIds]));
+
+          // Use prev inside setSavedViews to avoid overwriting nodes added AFTER applyView started.
+          // view.colorNodes may be stale if onAssignMultiple already pushed a new node via setSavedViews.
+          setSavedViews(prev => {
+            const liveView = prev.find(v => v.id === view.id);
+            if (!liveView) return prev;
+            const mergedColorNodes = liveView.colorNodes.map(n => ({
+              ...n, dbIds: resolvedMap.get(n.value) ?? n.dbIds,
+            }));
+            const updatedView = { ...liveView, colorNodes: mergedColorNodes };
+            persistViews(prev.map(v => v.id !== view.id ? v : updatedView));
+            return prev.map(v => v.id !== view.id ? v : updatedView);
+          });
+
+          setActiveNodes(prev => prev.map(n => {
+            const ids = resolvedMap.get(n.value);
+            return ids !== undefined ? { ...n, dbIds: ids } : n;
+          }));
+
+          // Recolectar IDs ocultos resueltos
+          for (const node of hidden) {
+            const ids = resolvedMap.get(node.value);
+            if (ids?.length) hiddenDbIds.push(...ids);
+          }
+        }
+
+        if (mode === 'isolate' && allDbIds.length) vr.isolateDbIds(allDbIds);
+        else if (mode === 'ghost' && allDbIds.length) { vr.isolateDbIds(allDbIds); vr.setGhosting(true); }
+        else if (mode === 'all' && hiddenDbIds.length) {
+          vr.hide(hiddenDbIds);
+        }
+        
+        // RE-APLICAR COLORES al final para asegurar que ganen a los cambios de modo
+        setTimeout(() => vr.applyThemingBatch(colorMap), 100);
+      } catch (e) { console.warn('[BIM] Error aplicando vista:', e); }
+      finally { setApplying(false); }
+    };
+
+  const handleZoomNode = (nodeIndex: number) => {
     const vr = viewerRef.current;
     if (!vr) return;
-    setApplying(true);
-    try {
-      const visible = nodes.filter(n => n.visible);
-      const colorMap = new Map<string, number[]>();
-      let allDbIds: number[] = [];
-
-      const allCached = visible.every(n => n.dbIds && n.dbIds.length > 0);
-      if (allCached) {
-        for (const node of visible) {
-          const ids = node.dbIds!;
-          colorMap.set(node.color, [...(colorMap.get(node.color) ?? []), ...ids]);
-          allDbIds.push(...ids);
-        }
-      } else {
-        if (!vr.isUniversalIndexReady()) await vr.buildUniversalIndex();
-        const resolved = await Promise.all(
-          visible.map(async node => {
-            const rawIds = node.dbIds?.length ? node.dbIds : await vr.resolveByUniversal(node.guids ?? []);
-            const leafIds = rawIds.length ? vr.getLeafDbIds(rawIds) : rawIds;
-            return { node, dbIds: leafIds };
-          })
-        );
-        for (const { node, dbIds } of resolved) {
-          if (!dbIds.length) continue;
-          colorMap.set(node.color, [...(colorMap.get(node.color) ?? []), ...dbIds]);
-          allDbIds.push(...dbIds);
-        }
-        const resolvedMap = new Map(resolved.map(r => [r.node.value, r.dbIds]));
-        const updatedViews = savedViews.map(v => v.id !== view.id ? v : {
-          ...v,
-          colorNodes: v.colorNodes.map(n => ({ ...n, dbIds: resolvedMap.get(n.value) ?? n.dbIds })),
-        });
-        setActiveNodes(prev => prev.map(n => {
-          const ids = resolvedMap.get(n.value);
-          return ids?.length ? { ...n, dbIds: ids } : n;
-        }));
-        setSavedViews(updatedViews);
-        persistDbIds(updatedViews);
-      }
-
-      vr.showAll(); vr.setGhosting(false);
-      vr.applyThemingBatch(colorMap);
-      if (mode === 'isolate' && allDbIds.length) vr.isolateDbIds(allDbIds);
-      else if (mode === 'ghost' && allDbIds.length) { vr.isolateDbIds(allDbIds); vr.setGhosting(true); }
-    } catch (e) { console.warn('[BIM] Error aplicando vista:', e); }
-    finally { setApplying(false); }
+    const node = activeNodes[nodeIndex];
+    if (node.dbIds?.length) vr.fitToView(node.dbIds);
   };
 
-  const updateNode = (index: number, changes: Partial<SavedColorView['colorNodes'][0]>) => {
+  const handleRemoveFromNode = async (viewId: string, nodeIndex: number) => {
+    const vr = viewerRef.current;
+    if (!vr) return;
+    const selected = vr.getSelectedIds();
+
+    let nextNodes: typeof activeNodes;
+
+    if (selected.length === 0) {
+      // No selection → clear ALL elements from this group (they go back to vacío)
+      nextNodes = activeNodes.map((n, i) => i !== nodeIndex ? n : { ...n, dbIds: [], guids: [] });
+    } else {
+      // Has selection → remove only the selected elements from this group
+      const leafToRemove = vr.getLeafDbIds(selected);
+      const removeDbSet = new Set(leafToRemove);
+      let removeGuids: string[] = [];
+      try { removeGuids = await vr.getExternalIds(leafToRemove); } catch {}
+      const removeGuidSet = new Set(removeGuids);
+      nextNodes = activeNodes.map((n, i) => i !== nodeIndex ? n : {
+        ...n,
+        dbIds: (n.dbIds || []).filter(id => !removeDbSet.has(id)),
+        guids: (n.guids || []).filter(g => !removeGuidSet.has(g)),
+      });
+      vr.select([]);
+    }
+
+    setActiveNodes(nextNodes);
+    setSavedViews(prev => {
+      const updated = prev.map(v => v.id !== viewId ? v : { ...v, colorNodes: nextNodes });
+      persistViews(updated);
+      return updated;
+    });
+
+    const view = savedViews.find(v => v.id === viewId);
+    if (view) applyView(view, nextNodes);
+  };
+
+  // Update state only — used by color picker onChange to avoid re-painting on every drag tick
+  const updateNodeState = (index: number, changes: Partial<SavedColorView['colorNodes'][0]>) => {
     const next = [...activeNodes];
     const cachedDbIds = savedViews.find(v => v.id === activeViewId)?.colorNodes[index]?.dbIds;
     next[index] = { ...next[index], dbIds: next[index].dbIds?.length ? next[index].dbIds : cachedDbIds, ...changes };
     setActiveNodes(next);
+    return next;
+  };
+
+  // Update state AND re-paint the viewer
+  const updateNode = (index: number, changes: Partial<SavedColorView['colorNodes'][0]>) => {
+    const next = updateNodeState(index, changes);
     const view = savedViews.find(v => v.id === activeViewId);
     if (view) applyView(view, next);
   };
@@ -142,37 +453,30 @@ export default function Vistas3DPage({
     if (view) applyView(view, activeNodes, activeViewMode);
   };
 
-  // ── Delete a single color node — elements absorbed into (vacío) ──────────
+  // ── Delete a single color node — elements return to original model colors ──
   const handleDeleteNode = async (viewId: string, nodeIndex: number) => {
-    const deleted = activeNodes[nodeIndex];
-    const rest    = activeNodes.filter((_, i) => i !== nodeIndex);
-
-    // Merge deleted node's elements into (vacío), creating it if needed
-    const VACIO = '(vacío)';
-    const vacioIdx = rest.findIndex(n => n.value === VACIO);
-    let next: SavedColorView['colorNodes'];
-    if (vacioIdx >= 0) {
-      next = rest.map((n, i) => i !== vacioIdx ? n : {
-        ...n,
-        guids:  [...(n.guids  ?? []), ...(deleted.guids  ?? [])],
-        dbIds:  [...(n.dbIds  ?? []), ...(deleted.dbIds  ?? [])],
-      });
-    } else {
-      next = [...rest, {
-        value:   VACIO,
-        color:   '#94a3b8',
-        visible: true,
-        guids:   deleted.guids  ?? [],
-        dbIds:   deleted.dbIds  ?? [],
-      }];
-    }
-
+    const next = activeNodes.filter((_, i) => i !== nodeIndex);
     setActiveNodes(next);
     const updatedViews = savedViews.map(v => v.id !== viewId ? v : { ...v, colorNodes: next });
     setSavedViews(updatedViews);
-    const view = savedViews.find(v => v.id === viewId);
-    if (view) applyView({ ...view, colorNodes: next }, next);
-    await persistDbIds(updatedViews);
+    persistViews(updatedViews);
+    const updatedView = updatedViews.find(v => v.id === viewId);
+    if (updatedView) await applyView(updatedView, next);
+  };
+
+  const handleMoveNode = async (viewId: string, nodeIndex: number, direction: 'up' | 'down') => {
+    if (direction === 'up' && nodeIndex === 0) return;
+    if (direction === 'down' && nodeIndex === activeNodes.length - 1) return;
+
+    const next = [...activeNodes];
+    const swapIdx = direction === 'up' ? nodeIndex - 1 : nodeIndex + 1;
+    [next[nodeIndex], next[swapIdx]] = [next[swapIdx], next[nodeIndex]];
+    
+    setActiveNodes(next);
+    
+    const updatedViews = savedViews.map(v => v.id !== viewId ? v : { ...v, colorNodes: next });
+    setSavedViews(updatedViews);
+    await persistViews(updatedViews);
   };
 
   // ── Duplicate a view ──────────────────────────────────────────────────────
@@ -185,21 +489,25 @@ export default function Vistas3DPage({
       name: `${original.name} (copia)`,
       createdAt: new Date().toISOString(),
     };
-    const updatedViews = [...savedViews, copy];
-    setSavedViews(updatedViews);
-    await persistDbIds(updatedViews);
+    setSavedViews(prev => {
+      const updated = [...prev, copy];
+      persistViews(updated);
+      return updated;
+    });
   };
 
   // ── Delete a view ────────────────────────────────────────────────────────
   const handleDeleteView = async (viewId: string) => {
     if (!confirm('¿Eliminar esta vista permanentemente?')) return;
-    const updatedViews = savedViews.filter(v => v.id !== viewId);
-    setSavedViews(updatedViews);
+    setSavedViews(prev => {
+      const updated = prev.filter(v => v.id !== viewId);
+      persistViews(updated);
+      return updated;
+    });
     if (activeViewId === viewId) {
       setActiveViewId(null); setActiveNodes([]);
       viewerRef.current?.showAll(); viewerRef.current?.clearHighlights();
     }
-    await persistDbIds(updatedViews);
   };
 
   // ── Merge views ───────────────────────────────────────────────────────────
@@ -231,9 +539,11 @@ export default function Vistas3DPage({
       colorNodes: Array.from(merged.values()),
       createdAt: new Date().toISOString(),
     };
-    const updatedViews = [...savedViews, newView];
-    setSavedViews(updatedViews);
-    await persistDbIds(updatedViews);
+    setSavedViews(prev => {
+      const updated = [...prev, newView];
+      persistViews(updated);
+      return updated;
+    });
     setMergeOpen(false);
     setMergeSelected(new Set());
     setMergeName('');
@@ -242,57 +552,100 @@ export default function Vistas3DPage({
   const handleAssignSelectionToNode = async (viewId: string, nodeIndex: number) => {
     const vr = viewerRef.current;
     if (!vr) return;
-    const rawSelectedDbIds = vr.getSelectedIds();
-    if (!rawSelectedDbIds.length) return;
+    let rawSelectedDbIds = vr.getSelectedIds();
+    if (!rawSelectedDbIds.length && vr.getIsolatedNodes) {
+      rawSelectedDbIds = vr.getIsolatedNodes();
+    }
+    if (!rawSelectedDbIds.length) {
+      alert("Por favor selecciona o aísla (filtra) elementos en el modelo antes de asignar.");
+      return;
+    }
     const selectedDbIds = vr.getLeafDbIds ? vr.getLeafDbIds(rawSelectedDbIds) : rawSelectedDbIds;
     setApplying(true);
     try {
       let selectedGuids: string[] = [];
       try {
-        const map = await vr.getExternalIdMapping();
-        const rev = new Map(Object.entries(map).map(([k, v]) => [v, k]));
-        selectedGuids = selectedDbIds.map(id => rev.get(id)).filter(Boolean) as string[];
+        selectedGuids = await vr.getExternalIds(selectedDbIds);
       } catch {}
       const dbSet = new Set(selectedDbIds);
       const gSet  = new Set(selectedGuids);
-      const updatedViews = savedViews.map(v => {
+      const nextViews = savedViews.map(v => {
         if (v.id !== viewId) return v;
-        return { ...v, colorNodes: v.colorNodes.map((node, i) => i === nodeIndex
-          ? { ...node, dbIds: Array.from(new Set([...(node.dbIds||[]), ...selectedDbIds])), guids: Array.from(new Set([...(node.guids||[]), ...selectedGuids])) }
-          : { ...node, dbIds: (node.dbIds||[]).filter(id => !dbSet.has(id)), guids: (node.guids||[]).filter(g => !gSet.has(g)) }
-        )};
+        return { ...v, colorNodes: v.colorNodes.map((node, i) => {
+          if (i === nodeIndex) {
+            return {
+              ...node,
+              dbIds: Array.from(new Set([...(node.dbIds||[]), ...selectedDbIds])),
+              guids: Array.from(new Set([...(node.guids||[]), ...selectedGuids]))
+            };
+          }
+          // Limpiar de todos los demás grupos
+          return {
+            ...node,
+            dbIds: (node.dbIds||[]).filter(id => !dbSet.has(id)),
+            guids: (node.guids||[]).filter(g => !gSet.has(g))
+          };
+        })};
       });
-      setSavedViews(updatedViews);
+      setSavedViews(nextViews);
       if (activeViewId === viewId) {
-        const newNodes = updatedViews.find(v => v.id === viewId)!.colorNodes;
+        const newNodes = nextViews.find(v => v.id === viewId)!.colorNodes;
         setActiveNodes(newNodes);
-        const colorMap = new Map<string, number[]>();
-        newNodes.filter(n => n.visible).forEach(n => {
-          if (n.dbIds?.length) colorMap.set(n.color, [...(colorMap.get(n.color)??[]), ...n.dbIds]);
-        });
-        vr.applyThemingBatch(colorMap);
+        applyView(nextViews.find(v => v.id === viewId)!, newNodes);
       }
-      await persistDbIds(updatedViews);
+      persistViews(nextViews);
       vr.select([]);
+      // Visual feedback: flash the painted node green briefly
+      setPaintedNodeIdx(nodeIndex);
+      setTimeout(() => setPaintedNodeIdx(null), 1800);
     } catch (e) { console.error('Error asignando selección', e); }
     finally { setApplying(false); }
   };
 
-  const handleAddNewCategory = async (viewId: string) => {
-    const newName = prompt('Nombre de la nueva categoría:');
-    if (!newName?.trim()) return;
-    const color = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
-    const newNode = { value: newName.trim(), color, visible: true, guids: [], dbIds: [] };
-    const updatedViews = savedViews.map(v => v.id !== viewId ? v : { ...v, colorNodes: [...v.colorNodes, newNode] });
-    setSavedViews(updatedViews);
-    if (activeViewId === viewId) setActiveNodes([...activeNodes, newNode]);
-    await persistDbIds(updatedViews);
+  const handleAddNewCategory = (viewId: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const color = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+    const newNode = { value: trimmed, color, visible: true, guids: [], dbIds: [] };
+    setSavedViews(prev => {
+      const updated = prev.map(v => v.id !== viewId ? v : { ...v, colorNodes: [...v.colorNodes, newNode] });
+      persistViews(updated);
+      return updated;
+    });
+    if (activeViewId === viewId) setActiveNodes(prev => [...prev, newNode]);
+    setAddingCategory(false);
+    setNewCategoryInput('');
   };
+
+  const handleRenameView = useCallback(async (viewId: string, newName: string) => {
+    const trimmed = newName.trim();
+    setRenamingViewId(null);
+    if (!trimmed) return;
+    setSavedViews(prev => {
+      const updated = prev.map(v => v.id !== viewId ? v : { ...v, name: trimmed });
+      persistViews(updated);
+      return updated;
+    });
+  }, [savedViews]);
+
+  const handleRenameNode = useCallback(async (viewId: string, idx: number, newValue: string) => {
+    const trimmed = newValue.trim();
+    setRenamingNodeIdx(null);
+    if (!trimmed || trimmed === activeNodes[idx]?.value) return;
+    const next = activeNodes.map((n, i) => i === idx ? { ...n, value: trimmed } : n);
+    setActiveNodes(next);
+    setSavedViews(prev => {
+      const updated = prev.map(v => v.id !== viewId ? v : { ...v, colorNodes: next });
+      persistViews(updated);
+      return updated;
+    });
+
+  }, [activeNodes, savedViews]);
 
   const handleSaveChanges = async (viewId: string) => {
     setApplying(true);
     try {
-      const updatedViews = savedViews.map(v => {
+      const nextViews = savedViews.map(v => {
         if (v.id !== viewId) return v;
         const mergedNodes = activeNodes.map(an => {
           const cached = v.colorNodes.find(cn => cn.value === an.value);
@@ -300,11 +653,19 @@ export default function Vistas3DPage({
         });
         return { ...v, colorNodes: mergedNodes, viewMode: activeViewMode };
       });
-      setSavedViews(updatedViews);
-      await persistDbIds(updatedViews);
+      setSavedViews(nextViews);
+      await persistViews(nextViews);
+      
+      // Forzar re-pintado inmediato para confirmar visualmente
+      const currentView = nextViews.find(v => v.id === viewId);
+      if (currentView) applyView(currentView, currentView.colorNodes);
+
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 2000);
-    } catch (e) { console.error('Error guardando vista', e); }
+    } catch (e: any) {
+      console.error('Error guardando vista', e);
+      alert('⚠️ Error al guardar: ' + (e?.message ?? 'Error desconocido'));
+    }
     finally { setApplying(false); }
   };
 
@@ -325,18 +686,61 @@ export default function Vistas3DPage({
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col h-[calc(100vh-65px)] overflow-hidden -mx-8 -my-8 bg-[#0C1E4F]">
+    <div className="flex flex-col h-[calc(100vh-65px)] overflow-hidden -mx-8 -my-8 bg-white">
 
       {/* ── Top bar ── */}
-      <div className="shrink-0 bg-[#0C1E4F] px-5 py-2.5 flex items-center justify-between border-b border-white/5">
-        <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-xl bg-blue-500/20 flex items-center justify-center">
-            <MonitorPlay size={13} className="text-blue-400" />
+      <div className="shrink-0 bg-white px-5 py-2 flex items-center justify-between border-b border-slate-200">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center">
+              <MonitorPlay size={14} className="text-blue-600" />
+            </div>
+            <div>
+              <p className="text-[11px] font-black text-slate-900 uppercase tracking-widest leading-none">Vistas 3D</p>
+              {config && <p className="text-[9px] text-slate-500 font-bold mt-0.5 truncate max-w-[200px]">{config.modelName}</p>}
+            </div>
           </div>
-          <div>
-            <p className="text-[11px] font-black text-white uppercase tracking-widest leading-none">Vistas 3D Guardadas</p>
-            {config && <p className="text-[9px] text-blue-300 font-bold mt-0.5 truncate max-w-[260px]">{config.modelName}</p>}
+
+          <div className="h-8 w-[1px] bg-slate-200 mx-2" />
+
+          {/* View Selector Dropdown */}
+          <div className="flex items-center gap-3">
+            <select
+              value={activeViewId || ''}
+              onChange={e => {
+                const view = savedViews.find(v => v.id === e.target.value);
+                if (view) applyView(view);
+              }}
+              className="bg-slate-100 text-[11px] font-black text-slate-900 py-1.5 px-3 rounded-lg border-none outline-none focus:ring-2 focus:ring-blue-500/20 transition-all min-w-[200px]"
+            >
+              <option value="">Seleccionar vista...</option>
+              {savedViews.map(v => (
+                <option key={v.id} value={v.id}>{v.name}</option>
+              ))}
+            </select>
+            
+            <div className="flex items-center gap-1">
+              <button onClick={() => activeViewId && handleDuplicateView(activeViewId)} disabled={!activeViewId}
+                className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-blue-600 transition disabled:opacity-30" title="Duplicar">
+                <Copy size={14} />
+              </button>
+              <button onClick={() => activeViewId && handleDeleteView(activeViewId)} disabled={!activeViewId}
+                className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-red-500 transition disabled:opacity-30" title="Eliminar">
+                <Trash2 size={14} />
+              </button>
+            </div>
           </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {savedViews.length >= 2 && (
+            <button
+              onClick={() => { setMergeOpen(true); setMergeSelected(new Set()); setMergeName(''); }}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-[10px] font-black uppercase tracking-wide hover:bg-blue-700 shadow-sm transition"
+            >
+              <Merge size={12} /> Fusionar Vistas
+            </button>
+          )}
         </div>
       </div>
 
@@ -356,148 +760,479 @@ export default function Vistas3DPage({
           </div>
         ) : (
           <>
+            {/* ── Left Sidebar (Model Tree) ── */}
+            {viewerReady && treeOpen && (
+              <div className="w-[280px] bg-[#0a1628] border-r border-white/5 flex flex-col shadow-2xl relative z-10 shrink-0">
+                <div className="p-3 border-b border-white/5 shrink-0 flex items-center justify-between">
+                  <h3 className="text-[11px] font-black text-white uppercase tracking-widest flex items-center gap-2">
+                    <Layers size={13} className="text-blue-400" /> Árbol del Modelo
+                  </h3>
+                  <button onClick={() => setTreeOpen(false)} className="text-white/30 hover:text-white transition">
+                    <X size={14} />
+                  </button>
+                </div>
+                <ModelTree
+                  viewerRef={viewerRef}
+                  highlightedDbId={highlightedTreeDbId}
+                  onRootsLoaded={(ids) => { treeRootDbIds.current = new Set(ids); }}
+                  onSelectNode={(dbId) => {
+                    const vr = viewerRef.current;
+                    if (vr) {
+                      vr.select([dbId]);
+                      vr.fitToView([dbId]);
+                    }
+                    setHighlightedTreeDbId(dbId);
+                  }}
+                  onAssignBranch={async (dbId, name) => {
+                    if (!activeViewId) {
+                      alert('Selecciona o crea una Vista activa primero en la barra derecha.');
+                      return;
+                    }
+                    const vr = viewerRef.current;
+                    if (!vr) return;
+                    setApplying(true);
+                    try {
+                      // Extrar dbIds hoja de la rama
+                      const leafIds = vr.getLeafDbIds([dbId]);
+                      if (!leafIds.length) { alert('La rama está vacía.'); return; }
+                      
+                      // Extraer GUIDs reales
+                      // OPTIMIZATION: If the name is long enough, use it as a Universal Index key to save 99% of JSON payload size.
+                      // If it's too short or contains weird chars, fallback to extracting all externalIds.
+                      let guids: string[] = [];
+                      if (name && name.length >= 3) {
+                        guids = [name.trim()];
+                      } else {
+                        guids = await vr.getExternalIds(leafIds);
+                      }
+                      
+                      const color = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+                      const newNode = { value: name, color, visible: true, guids, dbIds: leafIds };
+                      
+                      setSavedViews(prev => {
+                        const updated = prev.map(v => {
+                          if (v.id !== activeViewId) return v;
+                          // Restar de existentes
+                          const cleanedNodes = v.colorNodes.map(n => ({
+                            ...n,
+                            dbIds: (n.dbIds || []).filter(id => !leafIds.includes(id)),
+                            guids: (n.guids || []).filter(g => !guids.includes(g))
+                          }));
+                          return { ...v, colorNodes: [...cleanedNodes, newNode] };
+                        });
+                        persistViews(updated);
+                        return updated;
+                      });
+                      setActiveNodes(prev => {
+                        const cleaned = prev.map(n => ({
+                          ...n,
+                          dbIds: (n.dbIds || []).filter(id => !leafIds.includes(id))
+                        }));
+                        const final = [...cleaned, newNode];
+                        // Disparar la actualización del visor inmediatamente
+                        const currentView = savedViews.find(v => v.id === activeViewId);
+                        if (currentView) applyView(currentView, final);
+                        return final;
+                      });
+                    } catch (e) {
+                      console.error(e);
+                    } finally {
+                      setApplying(false);
+                    }
+                  }}
+                  onCheckedChange={(branchDbIds) => {
+                    const vr = viewerRef.current;
+                    if (!vr) return;
+                    if (!branchDbIds.length) {
+                      vr.showAll();
+                      vr.setGhosting(false);
+                      // Re-apply active view colors if there is one
+                      const activeView = savedViews.find(v => v.id === activeViewId);
+                      if (activeView) applyView(activeView);
+                      return;
+                    }
+                    const leafIds = branchDbIds.flatMap(id => vr.getLeafDbIds([id]));
+                    if (!leafIds.length) return;
+                    vr.isolateDbIds(leafIds);
+                    vr.setGhosting(true);
+                    vr.fitToView(leafIds);
+                  }}
+                  onAssignMultiple={async (items) => {
+                    if (!activeViewId) {
+                      alert('Selecciona o crea una Vista activa primero en la barra derecha.');
+                      return;
+                    }
+                    const vr = viewerRef.current;
+                    if (!vr) return;
+                    setApplying(true);
+                    try {
+                      const allLeafIds: number[] = [];
+                      const allGuids: string[] = [];
+                      for (const { dbId, name } of items) {
+                        const leafIds = vr.getLeafDbIds([dbId]);
+                        allLeafIds.push(...leafIds);
+                        if (name && name.length >= 3) {
+                          allGuids.push(name.trim());
+                        } else {
+                          const guids = await vr.getExternalIds(leafIds);
+                          allGuids.push(...guids);
+                        }
+                      }
+                      const uniqueLeafIds = [...new Set(allLeafIds)];
+                      const uniqueGuids = [...new Set(allGuids)];
+                      if (!uniqueLeafIds.length) return;
+                      const nodeName = items.length === 1
+                        ? items[0].name
+                        : `${items[0].name} (+${items.length - 1})`;
+                      const color = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+                      const newNode = { value: nodeName, color, visible: true, guids: uniqueGuids, dbIds: uniqueLeafIds };
+                      // Build final state from current (non-stale) activeNodes and savedViews
+                      const finalActiveNodes = [
+                        ...activeNodes.map(n => ({
+                          ...n,
+                          dbIds: (n.dbIds || []).filter(id => !uniqueLeafIds.includes(id)),
+                          guids: (n.guids || []).filter(g => !uniqueGuids.includes(g)),
+                        })),
+                        newNode,
+                      ];
+                      const updatedViews = savedViews.map(v => {
+                        if (v.id !== activeViewId) return v;
+                        const cleanedNodes = v.colorNodes.map(n => ({
+                          ...n,
+                          dbIds: (n.dbIds || []).filter(id => !uniqueLeafIds.includes(id)),
+                          guids: (n.guids || []).filter(g => !uniqueGuids.includes(g)),
+                        }));
+                        return { ...v, colorNodes: [...cleanedNodes, newNode] };
+                      });
+                      const updatedView = updatedViews.find(v => v.id === activeViewId)!;
+                      setSavedViews(updatedViews);
+                      persistViews(updatedViews);
+                      setActiveNodes(finalActiveNodes);
+                      await applyView(updatedView, finalActiveNodes);
+                    } catch (e) {
+                      console.error(e);
+                    } finally {
+                      setApplying(false);
+                    }
+                  }}
+                />
+              </div>
+            )}
+
+            {/* ── Center Viewer ── */}
             <div className="flex-1 relative">
-              <ForgeViewer ref={viewerRef} urn={config.urn} onReady={() => setViewerReady(true)} />
+              {/* Toggle Tree Button */}
+              {viewerReady && !treeOpen && (
+                <button
+                  onClick={() => setTreeOpen(true)}
+                  className="absolute top-4 left-4 z-20 bg-[#0a1628]/90 backdrop-blur-md border border-white/10 text-white px-3 py-2 rounded shadow-xl flex items-center gap-2 hover:bg-white/10 transition group"
+                >
+                  <Layers size={14} className="text-blue-400 group-hover:scale-110 transition-transform" />
+                  <span className="text-[10px] font-black uppercase tracking-widest">Árbol</span>
+                </button>
+              )}
+              <ForgeViewer
+                ref={viewerRef}
+                urn={config.urn}
+                onReady={() => setViewerReady(true)}
+                onSelectionChange={(dbIds) => {
+                  setSelectionCount(dbIds.length);
+                  if (!dbIds.length) {
+                    setHighlightedTreeDbId(null);
+                    return;
+                  }
+                  const vr = viewerRef.current;
+                  if (!vr) return;
+                  const roots = treeRootDbIds.current;
+                  if (!roots.size) return;
+                  // Walk UP the instance tree from selected dbId until we hit a tree root
+                  let cur: number | null = dbIds[0];
+                  const visited = new Set<number>();
+                  while (cur !== null && !visited.has(cur)) {
+                    if (roots.has(cur)) {
+                      setHighlightedTreeDbId(cur);
+                      setTreeOpen(true);
+                      return;
+                    }
+                    visited.add(cur);
+                    cur = vr.getParentDbId(cur);
+                  }
+                  setHighlightedTreeDbId(null);
+                }}
+              />
             </div>
 
-            {/* ── Sidebar ── */}
+            {/* ── Right Sidebar (Category Details) ── */}
             {viewerReady && (
-              <div className="w-[292px] bg-[#0a1628] border-l border-white/5 flex flex-col shadow-2xl relative z-10 shrink-0">
-
-                {/* Header */}
-                <div className="p-4 border-b border-white/5 shrink-0 flex items-center justify-between">
-                  <div>
-                    <h3 className="text-[11px] font-black text-white uppercase tracking-widest flex items-center gap-2">
-                      <Layers size={13} className="text-blue-400" /> Librería de Vistas
-                    </h3>
-                    <p className="text-[9px] text-white/30 mt-0.5">{savedViews.length} vista{savedViews.length !== 1 ? 's' : ''}</p>
-                  </div>
-                  {savedViews.length >= 2 && (
-                    <button
-                      onClick={() => { setMergeOpen(true); setMergeSelected(new Set()); setMergeName(''); }}
-                      className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 text-[9px] font-black uppercase tracking-wide transition"
-                      title="Fusionar vistas"
-                    >
-                      <Merge size={11} /> Fusionar
-                    </button>
-                  )}
-                </div>
-
-                {/* Views list */}
-                <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                  {savedViews.length === 0 ? (
-                    <div className="text-center py-6">
-                      <p className="text-[10px] text-white/30 italic">No hay vistas guardadas.</p>
-                      <p className="text-[8px] text-white/20 mt-1">Créalas desde "Visor BIM" → Vincular Datos.</p>
+              <div className="w-[340px] bg-slate-50 border-l border-slate-200 flex flex-col shadow-xl relative z-10 shrink-0">
+                {!activeViewId ? (
+                  <div className="flex-1 flex flex-col items-center justify-center p-8 text-center gap-4">
+                    <div className="w-16 h-16 rounded-3xl bg-blue-500/5 flex items-center justify-center">
+                      <MonitorPlay size={32} className="text-blue-200" />
                     </div>
-                  ) : savedViews.map(view => (
-                    <div key={view.id} className="mb-2">
+                    <div>
+                      <p className="text-[11px] font-black text-slate-900 uppercase tracking-widest">Selecciona una Vista</p>
+                      <p className="text-[10px] text-slate-400 mt-2">Elige una vista del menú superior para empezar a gestionar sus grupos y colores.</p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Active View Header — two rows so nothing gets clipped */}
+                    <div className="px-3 pt-3 pb-2 border-b border-slate-200 bg-white space-y-2">
+                      {/* Row 1: view name + rename */}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Layers size={13} className="text-blue-600 shrink-0" />
+                        {renamingViewId === activeViewId ? (
+                          <input
+                            ref={renameViewRef}
+                            autoFocus
+                            value={renamingViewValue}
+                            onChange={e => setRenamingViewValue(e.target.value)}
+                            onBlur={() => handleRenameView(activeViewId!, renamingViewValue)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') handleRenameView(activeViewId!, renamingViewValue);
+                              if (e.key === 'Escape') setRenamingViewId(null);
+                            }}
+                            className="flex-1 text-[11px] font-black text-slate-900 bg-slate-50 border border-blue-400 rounded px-2 py-0.5 outline-none min-w-0"
+                          />
+                        ) : (
+                          <span
+                            className="flex-1 text-[11px] font-black text-slate-900 uppercase tracking-wide truncate cursor-text"
+                            onDoubleClick={() => { setRenamingViewId(activeViewId!); setRenamingViewValue(savedViews.find(v => v.id === activeViewId)?.name || ''); }}
+                            title={savedViews.find(v => v.id === activeViewId)?.name}
+                          >
+                            {savedViews.find(v => v.id === activeViewId)?.name}
+                          </span>
+                        )}
+                        <button
+                          onClick={() => { setRenamingViewId(activeViewId!); setRenamingViewValue(savedViews.find(v => v.id === activeViewId)?.name || ''); }}
+                          className="shrink-0 p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-600 transition"
+                          title="Renombrar"
+                        >
+                          <Pencil size={11} />
+                        </button>
+                      </div>
 
-                      {/* View card */}
-                      <div className={`rounded-xl border transition overflow-hidden group/card ${
-                        activeViewId === view.id ? 'bg-amber-500/10 border-amber-500/30' : 'bg-white/5 border-white/5 hover:bg-white/8 hover:border-white/10'
-                      }`}>
-                        {/* Main row */}
-                        <div className="flex items-center gap-2 px-3 py-2.5">
-                          <button onClick={() => applyView(view)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
-                            <div className={`w-2 h-2 rounded-full shrink-0 ${activeViewId === view.id ? 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]' : 'bg-white/20'}`} />
-                            <div className="flex-1 min-w-0">
-                              <p className={`text-[10px] font-black truncate ${activeViewId === view.id ? 'text-amber-300' : 'text-white/80'}`}>{view.name}</p>
-                              <p className="text-[8px] text-white/40 truncate uppercase tracking-wider">{view.colorNodes.length} grupos</p>
-                            </div>
-                          </button>
+                      {/* Row 2: action buttons */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          onClick={() => handleCreateSnapshot(activeViewId!)}
+                          className="flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[9px] font-black uppercase tracking-wide transition-all shadow-sm active:scale-95 shrink-0"
+                          title="Guardar estado actual como versión"
+                        >
+                          <Camera size={11} /> Snapshot
+                        </button>
+                        <button
+                          onClick={() => setShowTimeline(!showTimeline)}
+                          className={`p-1.5 rounded-lg border transition-all shrink-0 ${showTimeline ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                          title="Historial de versiones"
+                        >
+                          <History size={13} />
+                        </button>
+                        <button
+                          onClick={() => { const next = !deepSelection; setDeepSelection(next); viewerRef.current?.setDeepSelection(next); }}
+                          className={`flex items-center gap-1 px-2 py-1 rounded-lg border transition-all shrink-0 ${deepSelection ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-500 hover:border-indigo-400 hover:text-indigo-600'}`}
+                          title="Selección Profunda — captura pernos y geometría oculta"
+                        >
+                          <BoxSelect size={11} />
+                          <span className="text-[8px] font-black uppercase">Profunda</span>
+                        </button>
+                        <select
+                          value={activeViewMode}
+                          onChange={e => {
+                            const v = savedViews.find(v => v.id === activeViewId)!;
+                            setActiveViewMode(e.target.value as any);
+                            applyView(v, activeNodes, e.target.value as any);
+                          }}
+                          className="flex-1 min-w-0 bg-slate-100 text-[9px] text-blue-600 font-black outline-none cursor-pointer px-2 py-1 rounded"
+                        >
+                          <option value="all">Ver todo</option>
+                          <option value="isolate">Aislar</option>
+                          <option value="ghost">Fantasma</option>
+                        </select>
+                      </div>
 
-                          {/* Action buttons */}
-                          <div className="flex items-center gap-0.5 opacity-0 group-hover/card:opacity-100 transition-opacity shrink-0">
-                            <button
-                              onClick={() => handleDuplicateView(view.id)}
-                              title="Duplicar vista"
-                              className="p-1.5 rounded text-white/30 hover:text-blue-300 hover:bg-blue-400/10 transition"
-                            ><Copy size={10} /></button>
-                            <button
-                              onClick={() => handleDeleteView(view.id)}
-                              title="Eliminar vista"
-                              className="p-1.5 rounded text-white/30 hover:text-red-400 hover:bg-red-400/10 transition"
-                            ><Trash2 size={10} /></button>
+                      {/* Version Banner (if viewing history) */}
+                      {activeVersionId && (
+                        <div className="mx-4 mt-2 p-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-amber-700">
+                            <Clock size={12} />
+                            <span className="text-[10px] font-bold uppercase tracking-tight">Viendo Histórico</span>
                           </div>
-
-                          {applying && activeViewId === view.id && <Loader2 size={12} className="animate-spin text-amber-400 shrink-0" />}
-                          {activeViewId === view.id && !applying && <Check size={12} className="text-amber-400 shrink-0" />}
+                          <button onClick={() => handleSelectVersion(null)} className="text-[10px] font-black text-amber-800 underline hover:no-underline">
+                            VOLVER
+                          </button>
                         </div>
+                      )}
 
-                        {/* Color tree panel (active view only) */}
-                        {activeViewId === view.id && (
-                          <div className="px-2 py-2 bg-black/20 border-t border-white/5">
-                            <div className="flex items-center justify-between px-1 mb-2">
-                              <p className="text-[9px] font-black tracking-widest text-white/40 uppercase">Árbol de Color</p>
-                              <div className="flex items-center gap-1">
-                                <button onClick={handleHideSelection} title="Ocultar selección" className="p-1 hover:bg-white/10 rounded text-white/30 hover:text-white transition">
-                                  <EyeOff size={11} />
-                                </button>
-                                <select
-                                  value={activeViewMode}
-                                  onChange={e => { setActiveViewMode(e.target.value as any); applyView(view, activeNodes, e.target.value as any); }}
-                                  className="bg-transparent text-[9px] text-amber-300 font-bold outline-none cursor-pointer"
-                                >
-                                  <option value="all" className="bg-[#0a1628]">Mostrar todos</option>
-                                  <option value="isolate" className="bg-[#0a1628]">Aislar vista</option>
-                                  <option value="ghost" className="bg-[#0a1628]">Modo fantasma</option>
-                                </select>
+                      {/* Timeline / History Panel */}
+                      {showTimeline && (
+                        <div className="mx-4 mt-4 pt-4 border-t border-slate-100 animate-in slide-in-from-top duration-300">
+                          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                            <History size={10} /> Línea de Tiempo del Proyecto
+                          </p>
+                          <div className="space-y-2 max-h-[200px] overflow-y-auto pr-2">
+                            <div 
+                              onClick={() => handleSelectVersion(null)}
+                              className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between ${!activeVersionId ? 'bg-blue-50 border-blue-200 ring-1 ring-blue-100' : 'bg-white border-slate-100 hover:border-blue-200'}`}
+                            >
+                              <div>
+                                <p className="text-[10px] font-black text-slate-900 uppercase">Estado Actual (Draft)</p>
+                                <p className="text-[9px] text-slate-400 font-bold">Últimos cambios en vivo</p>
                               </div>
+                              {!activeVersionId && <CheckCircle2 size={14} className="text-blue-500" />}
                             </div>
 
-                            <div className="max-h-48 overflow-y-auto space-y-0.5 px-1">
-                              {activeNodes.map((node, idx) => (
-                                <div key={node.value} className="flex items-center gap-1 p-1 rounded hover:bg-white/5 transition group/node">
-                                  <input type="color" value={node.color} onBlur={applyColorsNow}
-                                    onChange={e => updateNode(idx, { color: e.target.value })}
-                                    className="w-4 h-4 rounded cursor-pointer border-none bg-transparent shrink-0" />
-                                  <span className="flex-1 text-[9px] font-bold text-white/70 truncate pl-0.5" title={node.value}>
-                                    {node.value || '(sin valor)'}
+                            {(savedViews.find(v => v.id === activeViewId)?.versions || []).map((ver) => (
+                              <div 
+                                key={ver.id}
+                                onClick={() => handleSelectVersion(ver.id)}
+                                className={`p-2 rounded-lg border cursor-pointer transition-all flex items-center justify-between group ${activeVersionId === ver.id ? 'bg-amber-50 border-amber-200 ring-1 ring-amber-100' : 'bg-white border-slate-100 hover:border-amber-200'}`}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-[10px] font-black text-slate-900 uppercase truncate">{ver.name}</p>
+                                  <p className="text-[9px] text-slate-400 font-bold">
+                                    {new Date(ver.createdAt).toLocaleDateString()}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <button onClick={(e) => { e.stopPropagation(); handleDeleteVersion(activeViewId!, ver.id); }} 
+                                    className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-red-500 transition">
+                                    <Trash2 size={12} />
+                                  </button>
+                                  {activeVersionId === ver.id && <CheckCircle2 size={14} className="text-amber-500" />}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <p className="px-4 mt-4 text-[9px] text-slate-400 font-bold uppercase tracking-wider">Gestión de Árbol de Color</p>
+                    </div>
+
+                    {/* Selection indicator — shown when viewer has elements selected */}
+                    {selectionCount > 0 && (
+                      <div className="mx-2 mt-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg flex items-center gap-2">
+                        <Paintbrush size={11} className="text-amber-500 shrink-0" />
+                        <span className="text-[10px] font-black text-amber-700 flex-1">
+                          {selectionCount} elem. seleccionados
+                        </span>
+                        <span className="text-[9px] text-amber-500">↓ Pintar en grupo</span>
+                      </div>
+                    )}
+
+                    {/* Categories List (Compact) */}
+                    <div className="flex-1 overflow-y-auto px-2 py-2 space-y-0.5">
+                      {activeNodes.map((node, idx) => {
+                        const isPainted = paintedNodeIdx === idx;
+                        const hasSelection = selectionCount > 0;
+                        return (
+                          <div key={`${node.value}-${idx}`}
+                            className={`group/node border-b border-slate-100 flex items-center gap-2 p-1.5 transition-colors rounded ${isPainted ? 'bg-emerald-50 border-emerald-200' : 'bg-white hover:bg-slate-50'}`}>
+                            <input type="color" value={node.color}
+                              onChange={e => updateNodeState(idx, { color: e.target.value })}
+                              onBlur={applyColorsNow}
+                              className="w-4 h-4 rounded-sm cursor-pointer border-none bg-transparent shrink-0" />
+
+                            <div className="flex-1 min-w-0">
+                              {renamingNodeIdx === idx ? (
+                                <input
+                                  ref={renameInputRef}
+                                  autoFocus
+                                  value={renamingValue}
+                                  onChange={e => setRenamingValue(e.target.value)}
+                                  onBlur={() => handleRenameNode(activeViewId!, idx, renamingValue)}
+                                  onKeyDown={e => { if (e.key === 'Enter') handleRenameNode(activeViewId!, idx, renamingValue); if (e.key === 'Escape') setRenamingNodeIdx(null); }}
+                                  className="w-full text-[10px] font-bold text-slate-900 bg-white border border-blue-400 rounded px-1 py-0.5 outline-none"
+                                />
+                              ) : (
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-slate-700 truncate cursor-text hover:text-blue-600 pr-2"
+                                    onDoubleClick={() => { setRenamingNodeIdx(idx); setRenamingValue(node.value); }}>
+                                    {isPainted ? '✓ ' : ''}{node.value}
                                   </span>
-                                  <span className="text-[8px] text-white/30 shrink-0 w-6 tabular-nums text-right">
+                                  <span className="text-[9px] font-bold text-slate-300 tabular-nums shrink-0">
                                     {(node as any).guids?.length || node.dbIds?.length || 0}
                                   </span>
-                                  <div className="flex opacity-0 group-hover/node:opacity-100 transition-opacity gap-0.5">
-                                    <button onClick={() => handleSelectNodeElements(idx)} title="Seleccionar en modelo"
-                                      className="p-1 text-blue-400 hover:text-blue-300 hover:bg-blue-400/10 rounded transition">
-                                      <MousePointer2 size={9} />
-                                    </button>
-                                    <button onClick={() => handleAssignSelectionToNode(view.id, idx)} title="Asignar selección"
-                                      className="p-1 text-amber-400 hover:text-amber-300 hover:bg-amber-400/10 rounded transition">
-                                      <Paintbrush size={9} />
-                                    </button>
-                                    <button onClick={() => handleDeleteNode(view.id, idx)} title="Eliminar este grupo"
-                                      className="p-1 text-red-400/60 hover:text-red-400 hover:bg-red-400/10 rounded transition">
-                                      <Trash2 size={9} />
-                                    </button>
-                                  </div>
-                                  <input type="checkbox" checked={node.visible}
-                                    onChange={e => updateNode(idx, { visible: e.target.checked })}
-                                    className="accent-blue-500 cursor-pointer w-3 h-3 shrink-0 ml-0.5" />
                                 </div>
-                              ))}
+                              )}
                             </div>
 
-                            <div className="px-1 pt-2 space-y-1">
-                              <button onClick={() => handleAddNewCategory(view.id)}
-                                className="w-full py-1.5 flex items-center justify-center gap-1.5 text-[9px] font-bold text-amber-500/70 hover:text-amber-400 hover:bg-amber-500/10 border border-dashed border-amber-500/20 rounded-lg transition">
-                                <Plus size={10} /> Añadir categoría
+                            {/* Actions: paint button always visible when selection active */}
+                            <div className={`flex items-center gap-0.5 transition-opacity ${hasSelection || isPainted ? 'opacity-100' : 'opacity-0 group-hover/node:opacity-100'}`}>
+                              <button onClick={() => handleZoomNode(idx)}
+                                className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition" title="Ver en modelo">
+                                <MousePointer2 size={11} />
                               </button>
-                              <button onClick={() => handleSaveChanges(view.id)} disabled={applying}
-                                className={`w-full py-1.5 flex items-center justify-center gap-1.5 text-[9px] font-bold rounded-lg transition disabled:opacity-50 ${
-                                  savedSuccess ? 'text-emerald-300 bg-emerald-400/20' : 'text-emerald-400 bg-emerald-400/10 hover:bg-emerald-400/20'
-                                }`}>
-                                {applying ? <Loader2 size={10} className="animate-spin" /> : savedSuccess ? <CheckCircle2 size={10} /> : <Save size={10} />}
-                                {savedSuccess ? '¡Guardado!' : 'Guardar configuración'}
+                              <button onClick={() => handleAssignSelectionToNode(activeViewId!, idx)}
+                                className={`p-1 rounded transition ${hasSelection ? 'text-amber-600 bg-amber-50 hover:bg-amber-100' : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'}`}
+                                title={hasSelection ? `Pintar ${selectionCount} elem. en este grupo` : 'Pintar selección'}>
+                                <Paintbrush size={11} />
+                              </button>
+                              <button onClick={() => handleRemoveFromNode(activeViewId!, idx)}
+                                className="p-1 text-slate-400 hover:text-orange-500 hover:bg-orange-50 rounded transition"
+                                title={hasSelection ? 'Quitar seleccionados de este grupo' : 'Vaciar grupo (elementos vuelven a sin color)'}>
+                                <Trash2 size={11} />
+                              </button>
+                              <button onClick={() => handleDeleteNode(activeViewId!, idx)}
+                                className="p-1 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded transition"
+                                title="Eliminar categoría">
+                                <X size={11} />
                               </button>
                             </div>
+
+                            <input type="checkbox" checked={node.visible}
+                              onChange={e => updateNode(idx, { visible: e.target.checked })}
+                              className="accent-blue-600 cursor-pointer w-3.5 h-3.5 shrink-0 ml-1" />
                           </div>
-                        )}
-                      </div>
+                        );
+                      })}
+
+                      {/* Inline add category */}
+                      {addingCategory ? (
+                        <div className="flex gap-1 mt-2">
+                          <input
+                            autoFocus
+                            value={newCategoryInput}
+                            onChange={e => setNewCategoryInput(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') handleAddNewCategory(activeViewId!, newCategoryInput);
+                              if (e.key === 'Escape') { setAddingCategory(false); setNewCategoryInput(''); }
+                            }}
+                            placeholder="Nombre de la categoría…"
+                            className="flex-1 text-[10px] px-2 py-1 border border-blue-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-400"
+                          />
+                          <button onClick={() => handleAddNewCategory(activeViewId!, newCategoryInput)}
+                            disabled={!newCategoryInput.trim()}
+                            className="px-2 py-1 bg-blue-500 text-white text-[9px] font-black rounded-lg hover:bg-blue-600 disabled:opacity-30 transition">
+                            <Check size={10} />
+                          </button>
+                          <button onClick={() => { setAddingCategory(false); setNewCategoryInput(''); }}
+                            className="px-2 py-1 bg-slate-100 text-slate-500 text-[9px] rounded-lg hover:bg-slate-200 transition">
+                            <X size={10} />
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setAddingCategory(true)}
+                          className="w-full py-2 flex items-center justify-center gap-2 text-[9px] font-black text-blue-600 hover:bg-blue-50 border border-dashed border-blue-200 rounded-lg mt-2 transition-all">
+                          <Plus size={12} /> AÑADIR CATEGORÍA
+                        </button>
+                      )}
                     </div>
-                  ))}
-                </div>
+
+                    {/* Save Button */}
+                    <div className="p-4 bg-white border-t border-slate-200">
+                      <button onClick={() => handleSaveChanges(activeViewId!)} disabled={applying}
+                        className={`w-full py-3 flex items-center justify-center gap-2 text-[11px] font-black rounded-xl transition-all shadow-sm ${
+                          savedSuccess ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white hover:bg-slate-800'
+                        }`}>
+                        {applying ? <Loader2 size={14} className="animate-spin" /> : savedSuccess ? <CheckCircle2 size={14} /> : <Save size={14} />}
+                        {savedSuccess ? '¡CAMBIOS GUARDADOS!' : 'GUARDAR CONFIGURACIÓN'}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </>
