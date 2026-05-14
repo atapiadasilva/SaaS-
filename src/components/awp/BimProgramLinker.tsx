@@ -52,7 +52,6 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
   const [newSetName, setNewSetName] = useState('');
   const [actFilter, setActFilter] = useState('');
   const [discFilter, setDiscFilter] = useState('ALL');
-  const [linkingSetId, setLinkingSetId] = useState<string | null>(null);
   const [treeNodes, setTreeNodes] = useState<TreeNode[]>([]);
   const [propNames, setPropNames] = useState<string[]>([]);
   const [selProp, setSelProp] = useState('');
@@ -62,14 +61,15 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
   const playRef = useRef(false);
   const colorIdx = useRef(0);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [deepSelection, setDeepSelection] = useState(false);
   
   // Vistas guardadas
   const [savedViews, setSavedViews] = useState<SavedColorView[]>([]);
   const [expandedViews, setExpandedViews] = useState<Set<string>>(new Set());
 
-  // Drag & drop linking
-  const [dragOverActId, setDragOverActId] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  // Link by selection
+  const [activeActId, setActiveActId] = useState<string | null>(null);
+  const [activeViewNode, setActiveViewNode] = useState<{ viewName: string; nodeValue: string; nodeColor: string; guids: string[]; dbIds: number[] } | null>(null);
 
   // Save selection to view library
   const [saveViewName, setSaveViewName] = useState('');
@@ -171,14 +171,20 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
   const resolveCurrentSelection = useCallback(async () => {
     const vr = viewerRef.current;
     if (!vr || !currentSelection.length) return;
-    const mapping = await vr.getExternalIdMapping();
-    const reverse: Record<number, string> = {};
-    Object.entries(mapping).forEach(([eid, dbId]) => { reverse[dbId] = eid; });
-    const eids = currentSelection.map(id => reverse[id]).filter(Boolean);
-    setCurrentExternalIds(eids);
+    try {
+      const eids = await vr.getExternalIds(currentSelection);
+      setCurrentExternalIds(eids);
+    } catch (e) { console.warn('Could not resolve external IDs', e); }
   }, [viewerRef, currentSelection]);
 
   useEffect(() => { resolveCurrentSelection(); }, [resolveCurrentSelection]);
+
+  // Sync deep selection mode with viewer handle
+  useEffect(() => {
+    if (viewerReady && viewerRef.current) {
+      viewerRef.current.setDeepSelection(deepSelection);
+    }
+  }, [viewerReady, viewerRef, deepSelection]);
 
   // Property-based selection
   const loadPropValues = useCallback(async (propName: string) => {
@@ -224,17 +230,22 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
 
   // Save selection set
   const saveSet = useCallback(async () => {
-    if (!newSetName.trim() || !currentExternalIds.length) return;
+    if (!newSetName.trim() || !currentSelection.length) return;
+    const vr = viewerRef.current;
+    if (!vr) return;
+    
     const color = COLORS[colorIdx.current % COLORS.length];
     colorIdx.current++;
+    
+    // Resolve full external IDs
+    const extIds = await vr.getExternalIds(currentSelection);
+    
     const newSet: SelectionSet = {
       id: `local_${Date.now()}`, name: newSetName.trim(),
-      externalIds: currentExternalIds, color, dbIds: [...currentSelection],
+      externalIds: extIds, color, dbIds: [...currentSelection],
     };
     setSets(prev => [...prev, newSet]);
     setNewSetName('');
-    viewerRef.current?.clearHighlights();
-    viewerRef.current?.select([]);
   }, [newSetName, currentExternalIds, currentSelection, viewerRef]);
 
   // Save current selection to view library
@@ -270,6 +281,12 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
   const linkSetToActivity = useCallback(async (setId: string, activityId: string) => {
     const set = sets.find(s => s.id === setId);
     if (!set) return;
+    
+    // Optimistic update
+    setSets(prev => prev.map(s => s.id === setId ? { ...s, activityId } : s));
+    setActiveActId(null);
+    setActiveSetId(null);
+    
     try {
       const res = await fetch('/api/program-links', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -278,10 +295,13 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
       if (res.ok) {
         const saved = await res.json();
         setSets(prev => prev.map(s => s.id === setId ? { ...s, id: saved.id, activityId } : s));
-        setLinkingSetId(null);
         loadLinks();
+      } else {
+        setSets(prev => prev.map(s => s.id === setId ? { ...s, activityId: undefined } : s));
       }
-    } catch {}
+    } catch {
+      setSets(prev => prev.map(s => s.id === setId ? { ...s, activityId: undefined } : s));
+    }
   }, [sets, projectId, loadLinks]);
 
   const unlinkSet = useCallback(async (setId: string) => {
@@ -292,63 +312,77 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
     } catch {}
   }, [loadLinks]);
 
-  // Handle drop of a set or view-node onto an activity row
-  const handleDropOnActivity = useCallback(async (e: React.DragEvent, actId: string) => {
-    e.preventDefault();
-    setDragOverActId(null);
-    setIsDragging(false);
+  // Handle explicit linking from View Node
+  const linkViewNodeToActivity = useCallback(async (payload: { viewName: string; nodeValue: string; nodeColor: string; guids: string[]; dbIds: number[] }, actId: string) => {
     try {
-      const raw = e.dataTransfer.getData('application/json');
-      if (!raw) return;
-      const payload = JSON.parse(raw) as
-        | { type: 'set'; id: string }
-        | { type: 'viewNode'; viewName: string; nodeValue: string; nodeColor: string; guids: string[] };
-
-      if (payload.type === 'set') {
-        await linkSetToActivity(payload.id, actId);
-      } else if (payload.type === 'viewNode') {
-        // Create set from view node then immediately link
-        const vr = viewerRef.current;
-        const newSet: SelectionSet = {
-          id: `local_${Date.now()}_${Math.random()}`,
-          name: `${payload.viewName} — ${payload.nodeValue}`,
-          externalIds: payload.guids,
-          color: payload.nodeColor,
-          dbIds: [],
-        };
-        if (vr) {
-          try { newSet.dbIds = await vr.resolveExternalIds(payload.guids); } catch {}
+      const vr = viewerRef.current;
+      const newSet: SelectionSet = {
+        id: `local_${Date.now()}_${Math.random()}`,
+        name: `${payload.viewName} — ${payload.nodeValue}`,
+        externalIds: payload.guids,
+        color: payload.nodeColor,
+        dbIds: payload.dbIds || [],
+        activityId: actId, // <--- Optimistic update
+      };
+      if (vr) {
+        if (!newSet.dbIds.length && payload.guids.length) {
+          try { 
+            if (!vr.isUniversalIndexReady()) await vr.buildUniversalIndex();
+            const raw = await vr.resolveByUniversal(payload.guids);
+            newSet.dbIds = raw.length ? vr.getLeafDbIds(raw) : raw;
+          } catch {}
         }
-        setSets(prev => [...prev, newSet]);
-        // Now persist the link
-        const res = await fetch('/api/program-links', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ project_id: projectId, activity_id: actId, set_name: newSet.name, external_ids: newSet.externalIds, color: newSet.color }),
-        });
-        if (res.ok) {
-          const saved = await res.json();
-          setSets(prev => prev.map(s => s.id === newSet.id ? { ...s, id: saved.id, activityId: actId } : s));
-          loadLinks();
+        
+        // Ensure we have true Forge externalIds (GUIDs) to save to the database
+        if (newSet.dbIds.length > 0) {
+          try {
+            const trueGuids = await vr.getExternalIds(newSet.dbIds);
+            if (trueGuids.length > 0) newSet.externalIds = trueGuids;
+          } catch (e) { console.warn('Could not derive externalIds from dbIds', e); }
+        }
+        
+        // Provide a dummy value if completely empty so the API doesn't throw a 400 error
+        if (!newSet.externalIds.length) {
+          newSet.externalIds = ['empty-set'];
         }
       }
-    } catch (err) { console.warn('drop error', err); }
-  }, [linkSetToActivity, viewerRef, projectId, loadLinks]);
+      setSets(prev => [...prev, newSet]);
+      setActiveActId(null);
+      setActiveViewNode(null);
+
+      // Now persist the link
+      const res = await fetch('/api/program-links', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, activity_id: actId, set_name: newSet.name, external_ids: newSet.externalIds, color: newSet.color }),
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        setSets(prev => prev.map(s => s.id === newSet.id ? { ...s, id: saved.id, activityId: actId } : s));
+        loadLinks();
+      }
+    } catch (err) { console.warn('link error', err); }
+  }, [viewerRef, projectId, loadLinks]);
 
   // Highlight set in viewer
   const highlightSet = useCallback((set: SelectionSet) => {
     const vr = viewerRef.current;
     if (!vr) return;
     vr.clearHighlights();
-    vr.showAll();
+    
     if (set.dbIds.length) {
+      vr.setGhosting(true);
+      vr.isolateDbIds(set.dbIds);
       const hex = set.color.replace('#', '');
       const r = parseInt(hex.slice(0, 2), 16) / 255;
       const g = parseInt(hex.slice(2, 4), 16) / 255;
       const b = parseInt(hex.slice(4, 6), 16) / 255;
       vr.highlight(set.dbIds, { r, g, b, a: 0.85 });
       vr.fitToView(set.dbIds);
+    } else {
+      vr.showAll();
     }
     setActiveSetId(set.id);
+    setActiveViewNode(null);
   }, [viewerRef]);
 
   // 4D Playback
@@ -534,6 +568,19 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
 
   const getLinkedAct = (actId?: string) => activities.find(a => a.id === actId);
 
+  const { totalHH, linkedHH, unlinkedHH, linkedPercent } = useMemo(() => {
+    let t = 0, l = 0;
+    for (const act of activities) {
+      if (!act.is_summary && !act.is_milestone) {
+        const h = act.hh || 0;
+        t += h;
+        if (sets.some(s => s.activityId === act.id)) l += h;
+      }
+    }
+    const pct = t > 0 ? Math.round((l / t) * 100) : 0;
+    return { totalHH: t, linkedHH: l, unlinkedHH: t - l, linkedPercent: pct };
+  }, [activities, sets]);
+
   return (
     <div className="flex h-full overflow-hidden bg-white">
       {/* ── COL 1: Librería de Vistas (NUEVO) ── */}
@@ -566,33 +613,54 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
                     </button>
                     {isExpanded && (
                       <div className="p-1 space-y-0.5 bg-white">
-                        {view.colorNodes.filter(n => n.guids && n.guids.length > 0).map((node, i) => (
-                          <div key={i}
-                            draggable
-                            onDragStart={e => {
-                              e.dataTransfer.effectAllowed = 'link';
-                              e.dataTransfer.setData('application/json', JSON.stringify({
-                                type: 'viewNode',
-                                viewName: view.name,
-                                nodeValue: node.value,
-                                nodeColor: node.color,
-                                guids: node.guids ?? [],
-                              }));
-                              setIsDragging(true);
-                            }}
-                            onDragEnd={() => { setIsDragging(false); setDragOverActId(null); }}
-                            className="flex items-center gap-2 px-2 py-1 hover:bg-blue-50 rounded group cursor-grab active:cursor-grabbing select-none">
-                            <GripHorizontal size={9} className="text-slate-200 shrink-0 group-hover:text-slate-400 transition" />
-                            <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: node.color }} />
-                            <span className="text-[9px] font-semibold text-slate-600 truncate flex-1" title={node.value}>{node.value}</span>
-                            <span className="text-[8px] text-slate-400 shrink-0 w-8 text-right">{node.guids?.length || 0}</span>
-                            <button
-                              onClick={e => { e.stopPropagation(); addColorNodeToSets(node, view.name); }}
-                              className="text-[10px] font-black text-blue-500 opacity-0 group-hover:opacity-100 px-1.5 hover:bg-blue-200 rounded transition"
-                              title="Agregar a Conjuntos"
-                            >+</button>
+                        {view.colorNodes.filter(n => n.guids && n.guids.length > 0).map((node, i) => {
+                          const isActive = activeViewNode?.viewName === view.name && activeViewNode?.nodeValue === node.value;
+                          return (
+                            <div key={i}
+                              onClick={() => { setActiveViewNode({ viewName: view.name, nodeValue: node.value, nodeColor: node.color, guids: node.guids ?? [], dbIds: node.dbIds ?? [] }); setActiveSetId(null); }}
+                              className={`flex items-center gap-2 px-2 py-1 rounded group cursor-pointer select-none transition ${isActive ? 'bg-blue-100 border-l-2 border-l-blue-500' : 'hover:bg-blue-50'}`}>
+                              <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: node.color }} />
+                              <span className="text-[9px] font-semibold text-slate-600 truncate flex-1" title={node.value}>{node.value}</span>
+                              <span className="text-[8px] text-slate-400 shrink-0 w-8 text-right">{node.guids?.length || node.dbIds?.length || 0}</span>
+                              <div className="flex items-center opacity-0 group-hover:opacity-100 transition gap-0.5">
+                                <button
+                                onClick={async e => {
+                                  e.stopPropagation();
+                                  const vr = viewerRef.current;
+                                  if (vr) {
+                                    vr.clearHighlights();
+                                    try {
+                                      let dbIds = node.dbIds ?? [];
+                                      if (!dbIds.length && node.guids?.length) {
+                                        if (!vr.isUniversalIndexReady()) await vr.buildUniversalIndex();
+                                        const raw = await vr.resolveByUniversal(node.guids);
+                                        dbIds = raw.length ? vr.getLeafDbIds(raw) : raw;
+                                      }
+                                      
+                                      if (dbIds.length) {
+                                        vr.setGhosting(true);
+                                        vr.isolateDbIds(dbIds);
+                                        const hex = node.color.replace('#', '');
+                                        const r = parseInt(hex.slice(0, 2), 16) / 255;
+                                        const g = parseInt(hex.slice(2, 4), 16) / 255;
+                                        const b = parseInt(hex.slice(4, 6), 16) / 255;
+                                        vr.highlight(dbIds, { r, g, b, a: 0.85 });
+                                        vr.fitToView(dbIds);
+                                      } else {
+                                        vr.showAll();
+                                      }
+                                    } catch {}
+                                  }
+                                }}
+                                className="p-1 hover:bg-blue-100 rounded text-blue-500"
+                                title="Ver en modelo"
+                              >
+                                <Search size={10} />
+                              </button>
+                            </div>
                           </div>
-                        ))}
+                        );
+                        })}
                       </div>
                     )}
                   </div>
@@ -609,6 +677,25 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
           <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1">
             <MousePointer2 size={10} /> Herramientas de Selección
           </p>
+        </div>
+        
+        {/* Deep Selection Toggle */}
+        <div className="px-3 py-2 border-b border-slate-100 bg-indigo-50/20">
+          <button 
+            onClick={() => setDeepSelection(!deepSelection)}
+            className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg transition-all border ${deepSelection ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'}`}
+          >
+            <div className="flex items-center gap-2">
+              <BoxSelect size={12} className={deepSelection ? 'text-indigo-500' : 'text-slate-400'} />
+              <div className="flex flex-col items-start">
+                <span className="text-[10px] font-bold">Selección Profunda</span>
+                <span className="text-[8px] opacity-70">Incluye pernos/ocultos</span>
+              </div>
+            </div>
+            <div className={`w-7 h-4 rounded-full relative transition-colors ${deepSelection ? 'bg-indigo-500' : 'bg-slate-300'}`}>
+              <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow-sm transition-transform ${deepSelection ? 'translate-x-3' : 'translate-x-0'}`} />
+            </div>
+          </button>
         </div>
         {/* Current selection info */}
         <div className="px-3 py-2 border-b border-slate-100 bg-blue-50/50">
@@ -718,14 +805,6 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
           </p>
           <span className="text-[9px] font-bold text-slate-400">{sets.length}</span>
         </div>
-        {/* Drag hint */}
-        {sets.length > 0 && !isDragging && (
-          <div className="px-3 py-1.5 border-b border-slate-100 bg-slate-50/60">
-            <p className="text-[8px] font-bold text-slate-400 flex items-center gap-1">
-              <GripHorizontal size={9} /> Arrastra un conjunto → actividad del programa
-            </p>
-          </div>
-        )}
 
         {/* 4D Controls */}
         {linkedSets.length > 0 && (
@@ -754,35 +833,27 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
             const linkedAct = getLinkedAct(set.activityId);
             return (
               <div key={set.id}
-                draggable
-                onDragStart={e => {
-                  e.dataTransfer.effectAllowed = 'link';
-                  e.dataTransfer.setData('application/json', JSON.stringify({ type: 'set', id: set.id }));
-                  setIsDragging(true);
-                }}
-                onDragEnd={() => { setIsDragging(false); setDragOverActId(null); }}
-                className={`px-3 py-2 border-b border-slate-100 hover:bg-slate-50 transition cursor-grab active:cursor-grabbing select-none ${activeSetId === set.id ? 'bg-blue-50 border-l-2 border-l-blue-400' : ''}`}
+                className={`px-3 py-2 border-b border-slate-100 hover:bg-slate-50 transition cursor-pointer select-none ${activeSetId === set.id ? 'bg-blue-50 border-l-2 border-l-blue-500' : ''}`}
                 onClick={() => highlightSet(set)}>
                 <div className="flex items-center gap-2">
-                  <GripHorizontal size={10} className="text-slate-300 shrink-0 group-hover:text-slate-500 transition" />
                   <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: set.color }} />
                   <span className="text-[10px] font-black text-slate-700 flex-1 truncate">{set.name}</span>
                   <span className="text-[8px] text-slate-400">{set.externalIds.length} elem</span>
-                  <button onClick={e => { e.stopPropagation(); unlinkSet(set.id); }} className="text-slate-300 hover:text-red-500 transition">
-                    <Trash2 size={10} />
-                  </button>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                    <button onClick={e => { e.stopPropagation(); highlightSet(set); }} className="text-slate-300 hover:text-blue-500 transition" title="Zoom">
+                      <Search size={10} />
+                    </button>
+                    <button onClick={e => { e.stopPropagation(); unlinkSet(set.id); }} className="text-slate-300 hover:text-red-500 transition" title="Eliminar">
+                      <Trash2 size={10} />
+                    </button>
+                  </div>
                 </div>
                 {linkedAct ? (
                   <div className="mt-1 flex items-center gap-1">
                     <Link2 size={8} className="text-emerald-500" />
                     <span className="text-[9px] text-emerald-600 font-bold truncate">{cleanDescription(linkedAct.description)}</span>
                   </div>
-                ) : (
-                  <button onClick={e => { e.stopPropagation(); setLinkingSetId(set.id); }}
-                    className="mt-1 text-[9px] font-bold text-blue-500 hover:text-blue-700 flex items-center gap-1">
-                    <Link2 size={8} /> Vincular a actividad →
-                  </button>
-                )}
+                ) : null}
               </div>
             );
           })}
@@ -791,34 +862,69 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
 
       {/* ── COL 4: Program Activities — Gantt-style ── */}
       <div className="flex-1 flex flex-col overflow-hidden bg-white relative">
-
-        {/* Drag-over hint banner */}
-        {isDragging && (
-          <div className="absolute top-0 left-0 right-0 z-20 pointer-events-none">
-            <div className="mx-2 mt-1 px-3 py-1.5 bg-blue-600 rounded-xl text-white text-[9px] font-black uppercase tracking-widest flex items-center gap-2 shadow-lg">
-              <Link2 size={10} />
-              Suelta sobre una actividad para vincular
+        
+        {/* KPI Banner */}
+        <div className="shrink-0 px-4 py-2 border-b border-slate-200 bg-slate-800 text-white flex items-center justify-between shadow-sm z-10">
+          <div className="flex items-center gap-4">
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Total HH Programa</p>
+              <p className="text-[14px] font-black leading-none mt-1">{totalHH.toLocaleString('es-CL')}</p>
             </div>
+            <div className="h-6 w-px bg-slate-600"></div>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-widest text-emerald-400">HH Enlazadas</p>
+              <p className="text-[14px] font-black leading-none mt-1 text-emerald-400">{linkedHH.toLocaleString('es-CL')} <span className="text-[10px] opacity-70">({linkedPercent}%)</span></p>
+            </div>
+            <div className="h-6 w-px bg-slate-600"></div>
+            <div>
+              <p className="text-[9px] font-black uppercase tracking-widest text-rose-400">HH Por Enlazar</p>
+              <p className="text-[14px] font-black leading-none mt-1 text-rose-400">{unlinkedHH.toLocaleString('es-CL')}</p>
+            </div>
+          </div>
+          
+          <div className="flex-1 max-w-[200px] ml-4">
+            <div className="w-full h-2 bg-slate-700 rounded-full overflow-hidden flex">
+              <div className="h-full bg-emerald-500 transition-all" style={{ width: `${linkedPercent}%` }} />
+              <div className="h-full bg-rose-500 transition-all" style={{ width: `${100 - linkedPercent}%` }} />
+            </div>
+          </div>
+        </div>
+
+        {/* Floating Action Bar for Linking */}
+        {(activeSetId || activeViewNode) && activeActId && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-4 py-2.5 rounded-2xl shadow-2xl flex items-center gap-4 z-50 pointer-events-auto border border-blue-400/50">
+            <div className="flex flex-col">
+              <span className="text-[9px] uppercase tracking-widest font-black text-blue-200">Enlazar</span>
+              <span className="text-[11px] font-bold max-w-[150px] truncate">
+                {activeSetId ? sets.find(s => s.id === activeSetId)?.name : activeViewNode?.nodeValue}
+              </span>
+            </div>
+            <div className="text-blue-300">→</div>
+            <div className="flex flex-col">
+              <span className="text-[9px] uppercase tracking-widest font-black text-blue-200">A Actividad</span>
+              <span className="text-[11px] font-bold max-w-[150px] truncate">
+                {cleanDescription(activities.find(a => a.id === activeActId)?.description || '')}
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                if (activeSetId && activeActId) linkSetToActivity(activeSetId, activeActId);
+                else if (activeViewNode && activeActId) linkViewNodeToActivity(activeViewNode, activeActId);
+              }}
+              className="ml-2 px-4 py-1.5 bg-white text-blue-600 font-black text-[10px] uppercase tracking-widest rounded-xl hover:scale-105 hover:bg-blue-50 transition shadow-lg flex items-center gap-1"
+            >
+              <Link2 size={12} /> Confirmar
+            </button>
           </div>
         )}
 
         {/* Header */}
-        <div className="shrink-0 px-3 py-2 border-b border-slate-100 bg-white flex items-center gap-2">
+        <div className="shrink-0 px-3 py-2 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
           <div className="flex-1">
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">
-              {linkingSetId ? '→ Selecciona actividad para vincular' : 'Actividades del Programa'}
+            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1">
+              <CalendarDays size={10} /> Listado de Actividades
             </p>
-            {!linkingSetId && (
-              <p className="text-[8px] text-slate-400 font-bold mt-0.5">
-                {activities.filter(a => !a.is_summary && !a.is_milestone).length} actividades
-              </p>
-            )}
           </div>
-          {linkingSetId && (
-            <button onClick={() => setLinkingSetId(null)} className="text-[9px] font-bold text-red-500 hover:text-red-700 flex items-center gap-1 shrink-0">
-              <X size={10} /> Cancelar
-            </button>
-          )}
         </div>
 
         {/* Search */}
@@ -880,22 +986,20 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
             const dc = getDiscColor(act.discipline);
             const is100 = act.progress === 100 && !act.is_summary;
             const isCrit = act.is_critical;
-            const isDragTarget = isDragging && canLink && dragOverActId === act.id;
+            const isSelected = activeActId === act.id;
 
             return (
               <div key={act.id}
-                onDragOver={e => { if (!canLink) return; e.preventDefault(); e.dataTransfer.dropEffect = 'link'; setDragOverActId(act.id); }}
-                onDragLeave={e => { if (dragOverActId === act.id) setDragOverActId(null); }}
-                onDrop={e => canLink && handleDropOnActivity(e, act.id)}
                 className={`flex items-center border-b transition-colors group
                   ${act.is_summary ? 'bg-slate-50 border-slate-200/80' : is100 ? 'bg-white border-slate-100' : 'bg-white border-slate-100 hover:bg-blue-50/20'}
-                  ${linkingSetId && canLink ? 'cursor-pointer hover:bg-blue-50' : ''}
+                  ${canLink ? 'cursor-pointer hover:bg-blue-50' : ''}
                   ${linked ? 'bg-emerald-50/20' : ''}
-                  ${isCrit && !act.is_summary ? 'bg-red-50/30' : ''}
-                  ${isDragTarget ? '!bg-blue-100 border-l-4 !border-l-blue-500 shadow-inner' : ''}
-                  ${isDragging && canLink && !isDragTarget ? 'cursor-copy' : ''}`}
+                  ${isSelected ? '!bg-blue-100 border-l-4 !border-l-blue-500 shadow-inner' : ''}
+                  ${isCrit && !act.is_summary ? 'bg-red-50/30' : ''}`}
                 style={{ paddingLeft: 8 + depth * 14, minHeight: act.is_summary ? 36 : 30 }}
-                onClick={() => linkingSetId && canLink && linkSetToActivity(linkingSetId, act.id)}
+                onClick={() => {
+                  if (canLink) setActiveActId(isSelected ? null : act.id);
+                }}
               >
                 {/* Collapse toggle */}
                 <div className="w-8 shrink-0 flex items-center justify-center">
@@ -963,16 +1067,6 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
                       <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: linked.color }} />
                       <span className="text-[7px] font-black text-emerald-600 leading-tight">{linked.name.length > 8 ? linked.name.substring(0,7)+'…' : linked.name}</span>
                     </div>
-                  ) : linkingSetId && canLink ? (
-                    <span className="text-[8px] font-black text-blue-500 px-1.5 py-0.5 bg-blue-100 rounded-lg">→</span>
-                  ) : canLink && !act.is_summary ? (
-                    <button
-                      onClick={e => { e.stopPropagation(); setLinkingSetId(sets[0]?.id ?? null); }}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-[7px] font-black text-slate-400 hover:text-blue-600 flex items-center gap-0.5"
-                      title="Vincular conjunto"
-                    >
-                      <Link2 size={9} />
-                    </button>
                   ) : null}
                 </div>
               </div>

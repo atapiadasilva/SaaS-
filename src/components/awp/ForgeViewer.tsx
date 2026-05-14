@@ -112,6 +112,8 @@ export interface ForgeViewerHandle {
   setBackgroundColor:      (r1: number, g1: number, b1: number, r2: number, g2: number, b2: number) => void;
   /** Activa/desactiva la selección geométrica (profunda) para el barrido */
   setDeepSelection:        (enabled: boolean) => void;
+  /** Activa/desactiva el modo multi-selección: cada clic AÑADE al conjunto actual (sin Ctrl) */
+  setMultiSelect:          (enabled: boolean) => void;
   restoreAll:              () => void;
   /**
    * Pre-carga un ModelIndex guardado en Supabase.
@@ -273,6 +275,12 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
     const universalBuildPromise = useRef<Promise<void> | null>(null);
     // Deep selection toggle
     const deepSelectionRef = useRef(false);
+    // Multi-select accumulation
+    const multiSelectRef        = useRef(false);
+    const accumulatedIdsRef     = useRef<Set<number>>(new Set());
+    const applyingAccumRef      = useRef(false);
+    // Ctrl key tracking for box-selection accumulation
+    const ctrlHeldRef           = useRef(false);
     // Property headers discovered by the background scan
     const propHeadersRef  = useRef<string[]>([]);
     // GUID index (same as propIndexCache['GUID'] but kept separately for compat)
@@ -1012,6 +1020,14 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         }
       },
 
+      setMultiSelect: (enabled) => {
+        multiSelectRef.current = enabled;
+        if (!enabled) {
+          // Al desactivar, limpiar el acumulado para evitar sorpresas
+          accumulatedIdsRef.current = new Set();
+        }
+      },
+
       setBackgroundColor: (r1, g1, b1, r2, g2, b2) => {
         const v = viewerRef.current;
         if (!v) return;
@@ -1168,9 +1184,44 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
           resizeObserver = new ResizeObserver(() => { viewer.resize(); });
           resizeObserver.observe(containerRef.current!);
 
+          // Ctrl key tracking — for box-selection accumulation
+          const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Control') ctrlHeldRef.current = true; };
+          const onKeyUp   = (e: KeyboardEvent) => { if (e.key === 'Control') ctrlHeldRef.current = false; };
+          window.addEventListener('keydown', onKeyDown);
+          window.addEventListener('keyup',   onKeyUp);
+
           // Selection event — use ref so latest callback is always called
           viewer.addEventListener(AV.SELECTION_CHANGED_EVENT, (e: any) => {
-            onSelectionChangeRef.current?.(e.dbIdArray ?? []);
+            if (applyingAccumRef.current) return; // evitar loop recursivo
+
+            const incoming: number[] = e.dbIdArray ?? [];
+
+            const shouldAccumulate = multiSelectRef.current || ctrlHeldRef.current;
+
+            if (shouldAccumulate && incoming.length > 0) {
+              const acc = new Set(accumulatedIdsRef.current);
+              for (const id of incoming) {
+                if (multiSelectRef.current) {
+                  // Modo Multi: toggle (quita si ya estaba, añade si no)
+                  if (acc.has(id)) acc.delete(id); else acc.add(id);
+                } else {
+                  // Ctrl: solo añadir (no toggle — el barrido siempre suma)
+                  acc.add(id);
+                }
+              }
+              accumulatedIdsRef.current = acc;
+
+              applyingAccumRef.current = true;
+              viewer.select([...acc]);
+              applyingAccumRef.current = false;
+
+              onSelectionChangeRef.current?.([...acc]);
+              return;
+            }
+
+            // Modo normal: resetear acumulado
+            accumulatedIdsRef.current = new Set(incoming);
+            onSelectionChangeRef.current?.(incoming);
           });
 
           // ── Box Selection Extension ──────────────────────────────────────
@@ -1214,7 +1265,16 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
                   (ids: number[]) => {
                     if (ids && ids.length > 0) {
                       console.log(`[BIM][DEEP] Selección geométrica encontró ${ids.length} elementos`);
-                      viewer.select(ids);
+                      if (ctrlHeldRef.current || multiSelectRef.current) {
+                        const merged = new Set([...(viewer.getSelection() || []), ...ids]);
+                        applyingAccumRef.current = true;
+                        viewer.select([...merged]);
+                        applyingAccumRef.current = false;
+                        accumulatedIdsRef.current = merged;
+                        onSelectionChangeRef.current?.([...merged]);
+                      } else {
+                        viewer.select(ids);
+                      }
                     }
                   }
                 );

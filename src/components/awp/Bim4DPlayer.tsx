@@ -121,45 +121,58 @@ export default function Bim4DPlayer({ activities, viewerRef, onClose }: Bim4DPla
       rafRef.current = null;
     }
 
+    // Navisworks logic: highlight what was built in the last week (or month)
+    const winDays = Math.max(7, horizon === 'monthly' ? 30 : horizon === 'weekly' ? 7 : 1);
+    const winStart = Math.max(0, day - winDays);
+
+    const activeIds: number[] = [];
+    const colorMap = new Map<string, number[]>();
+    const toShow: number[] = [];
+    const toHide: number[] = [];
+
+    // Incremental show/hide to keep non-sequence elements visible
     if (day > prevDay) {
-      // Pre-compute outside RAF (pure JS, no Forge calls)
-      const toShow: Array<{ ids: number[]; colorHex?: string; actId: string }> = [];
       for (const act of activities) {
         if (act.startDay <= prevDay || act.startDay > day) continue;
         const ids = dbIdCache.current.get(act.id) ?? [];
-        if (ids.length > 0) toShow.push({ ids, colorHex: act.colorHex, actId: act.id });
+        if (ids.length) toShow.push(...ids);
       }
-      if (toShow.length === 0) return;
-
-      // Defer Forge API calls to next animation frame — viewer finishes current rotation frame first
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        for (const { ids, colorHex, actId } of toShow) {
-          vr.show(ids);
-          if (colorHex && !coloredActIds.current.has(actId)) {
-            vr.highlight(ids, toRgba(colorHex));
-            coloredActIds.current.add(actId);
-          }
-        }
-      });
-
     } else {
-      // ── BACKWARD: hide activities that started after target day ───────────
-      const idsToHide: number[] = [];
       for (const act of activities) {
         if (act.startDay <= day || act.startDay > prevDay) continue;
         const ids = dbIdCache.current.get(act.id) ?? [];
-        idsToHide.push(...ids);
-        coloredActIds.current.delete(act.id);
+        if (ids.length) toHide.push(...ids);
       }
-      if (idsToHide.length === 0) return;
-
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        vr.hide(idsToHide);
-      });
     }
-  }, [activities, cacheReady, viewerRef]);
+
+    // Full color evaluation for started tasks (O(N) is very fast here)
+    for (const act of activities) {
+      if (act.startDay > day) continue; // Future = hidden (handled by toShow/toHide)
+      const ids = dbIdCache.current.get(act.id) ?? [];
+      if (!ids.length) continue;
+      
+      const actEndDay = act.startDay + act.duration - 1;
+      if (actEndDay >= winStart) {
+        activeIds.push(...ids); // Active = green
+      } else {
+        const hex = act.colorHex || '#94A3B8'; // Completed = gray or original colorHex
+        if (!colorMap.has(hex)) colorMap.set(hex, []);
+        colorMap.get(hex)!.push(...ids);
+      }
+    }
+
+    // Defer Forge API calls to next animation frame
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      if (toShow.length) vr.show(toShow);
+      if (toHide.length) vr.hide(toHide);
+      
+      const finalColorMap = new Map(colorMap);
+      if (activeIds.length) finalColorMap.set('#00d94d', activeIds);
+      
+      vr.applyThemingBatch(finalColorMap);
+    });
+  }, [activities, cacheReady, viewerRef, horizon]);
 
   // ── React to day change ───────────────────────────────────────────────────
   useEffect(() => {

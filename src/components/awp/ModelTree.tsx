@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ChevronRight, ChevronDown, MonitorPlay, Component, Paintbrush, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, MonitorPlay, Component, Paintbrush, X, Layers } from 'lucide-react';
 import type { ForgeViewerHandle } from './ForgeViewer';
 
 interface ModelTreeProps {
@@ -7,8 +7,10 @@ interface ModelTreeProps {
   onAssignBranch: (dbId: number, name: string) => void;
   onSelectNode: (dbId: number) => void;
   onAssignMultiple?: (items: { dbId: number; name: string }[]) => void;
+  onAssignEach?: (items: { dbId: number; name: string }[]) => void;
   onCheckedChange?: (branchDbIds: number[]) => void;
   highlightedDbId?: number | null;
+  expandPath?: number[];          // [raíz, ..., ancestros, elemento seleccionado]
   onRootsLoaded?: (rootDbIds: number[]) => void;
 }
 
@@ -26,6 +28,7 @@ function ModelTreeNodeItem({
   checked,
   onToggle,
   highlightedDbId,
+  forceExpandIds,
 }: {
   node: TreeNode;
   viewerRef: React.RefObject<ForgeViewerHandle | null>;
@@ -34,6 +37,7 @@ function ModelTreeNodeItem({
   checked: Map<number, string>;
   onToggle: (dbId: number, name: string) => void;
   highlightedDbId?: number | null;
+  forceExpandIds?: Set<number>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<TreeNode[]>([]);
@@ -42,9 +46,20 @@ function ModelTreeNodeItem({
   const isHighlighted = highlightedDbId === node.dbId;
   const rowRef = useRef<HTMLDivElement>(null);
 
+  // Auto-expand cuando el nodo está en el camino al elemento seleccionado
+  useEffect(() => {
+    if (!forceExpandIds?.has(node.dbId)) return;
+    if (node.childCount === 0) return;
+    if (children.length === 0) {
+      const kids = viewerRef.current?.getChildren?.(node.dbId) || [];
+      setChildren(kids);
+    }
+    setExpanded(true);
+  }, [forceExpandIds]);
+
   useEffect(() => {
     if (isHighlighted && rowRef.current) {
-      rowRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      rowRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [isHighlighted]);
 
@@ -116,6 +131,7 @@ function ModelTreeNodeItem({
               checked={checked}
               onToggle={onToggle}
               highlightedDbId={highlightedDbId}
+              forceExpandIds={forceExpandIds}
             />
           ))}
         </div>
@@ -124,10 +140,11 @@ function ModelTreeNodeItem({
   );
 }
 
-export default function ModelTree({ viewerRef, onAssignBranch, onSelectNode, onAssignMultiple, onCheckedChange, highlightedDbId, onRootsLoaded }: ModelTreeProps) {
+export default function ModelTree({ viewerRef, onAssignBranch, onSelectNode, onAssignMultiple, onAssignEach, onCheckedChange, highlightedDbId, expandPath, onRootsLoaded }: ModelTreeProps) {
   const [roots, setRoots] = useState<TreeNode[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [checked, setChecked] = useState<Map<number, string>>(new Map());
+  const forceExpandIds = expandPath && expandPath.length > 0 ? new Set(expandPath) : undefined;
 
   useEffect(() => {
     let interval = setInterval(() => {
@@ -171,6 +188,14 @@ export default function ModelTree({ viewerRef, onAssignBranch, onSelectNode, onA
     onCheckedChange?.([]);
   };
 
+  const handleAssignEach = () => {
+    if (!onAssignEach || checked.size === 0) return;
+    const items = Array.from(checked.entries()).map(([dbId, name]) => ({ dbId, name }));
+    onAssignEach(items);
+    setChecked(new Map());
+    onCheckedChange?.([]);
+  };
+
   if (!loaded) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-2 p-4 text-center">
@@ -208,18 +233,20 @@ export default function ModelTree({ viewerRef, onAssignBranch, onSelectNode, onA
             checked={checked}
             onToggle={handleToggle}
             highlightedDbId={highlightedDbId}
+            forceExpandIds={forceExpandIds}
           />
         ))}
       </div>
 
       {checked.size > 0 && (
-        <div className="shrink-0 p-2 border-t border-white/10 bg-amber-400/10">
+        <div className="shrink-0 p-2 border-t border-white/10 bg-amber-400/10 space-y-1">
           <div className="flex gap-1">
             <button
               onClick={handleAssignAll}
               className="flex-1 py-1.5 bg-amber-500 hover:bg-amber-400 text-white text-[9px] font-black rounded-lg transition flex items-center justify-center gap-1"
+              title="Crear un único grupo con todas las ramas seleccionadas"
             >
-              <Paintbrush size={10} /> Crear grupo combinado
+              <Paintbrush size={10} /> Grupo combinado
             </button>
             <button
               onClick={handleDeselectAll}
@@ -229,6 +256,15 @@ export default function ModelTree({ viewerRef, onAssignBranch, onSelectNode, onA
               <X size={11} />
             </button>
           </div>
+          {onAssignEach && checked.size > 1 && (
+            <button
+              onClick={handleAssignEach}
+              className="w-full py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-black rounded-lg transition flex items-center justify-center gap-1"
+              title="Crear un grupo separado por cada rama seleccionada"
+            >
+              <Layers size={10} /> Grupos separados ({checked.size})
+            </button>
+          )}
         </div>
       )}
     </div>

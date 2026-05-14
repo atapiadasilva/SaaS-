@@ -83,3 +83,44 @@ $$;
 -- 4. Habilitar el envío de magic links desde localhost (desarrollo)
 --    En Supabase Dashboard > Authentication > URL Configuration:
 --    Agregar http://localhost:3000/auth/callback en "Redirect URLs"
+
+-- ============================================================
+-- RPCs para module_config (Vistas 3D / BIM Linker)
+-- Ejecutar en Supabase Dashboard → SQL Editor
+-- ============================================================
+
+-- 5. merge_module_config: actualiza UN campo top-level de module_config
+--    Uso: RPC('merge_module_config', { p_project_id, p_key, p_value })
+CREATE OR REPLACE FUNCTION public.merge_module_config(
+  p_project_id UUID,
+  p_key        TEXT,
+  p_value      JSONB
+)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE public.projects
+  SET module_config = COALESCE(module_config, '{}') || jsonb_build_object(p_key, p_value)
+  WHERE id = p_project_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 6. set_bim_linker_key: actualiza UN campo dentro de module_config->'bim_linker'
+--    Atómico — una sola query, sin leer antes. Ideal para guardar savedViews rápido.
+--    Uso: RPC('set_bim_linker_key', { p_project_id, p_key, p_value })
+CREATE OR REPLACE FUNCTION public.set_bim_linker_key(
+  p_project_id UUID,
+  p_key        TEXT,
+  p_value      JSONB
+)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE public.projects
+  SET module_config = jsonb_set(
+    COALESCE(module_config, '{}'),
+    ARRAY['bim_linker', p_key],
+    COALESCE(p_value, 'null'::jsonb),
+    true   -- create_missing = true
+  )
+  WHERE id = p_project_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

@@ -4,7 +4,7 @@ import { use, useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase/client';
 import { setBimLinkerKey } from '@/lib/supabase/projectConfig';
-import { Loader2, MonitorPlay, Check, Layers, AlertCircle, MousePointer2, Paintbrush, EyeOff, Plus, Save, CheckCircle2, Copy, Trash2, X, Merge, ChevronUp, ChevronDown, Pencil, Clock, Camera, History, BoxSelect } from 'lucide-react';
+import { Loader2, MonitorPlay, Check, Layers, AlertCircle, MousePointer2, Paintbrush, EyeOff, Plus, Save, CheckCircle2, Copy, Trash2, X, Merge, ChevronUp, ChevronDown, Pencil, Clock, Camera, History, BoxSelect, RotateCcw, FolderPlus, MousePointerClick } from 'lucide-react';
 import type { BimConfig } from '@/components/modules/BimConfigModal';
 import type { ForgeViewerHandle } from '@/components/awp/ForgeViewer';
 import type { SavedColorView } from '@/components/awp/BimDataLinker';
@@ -31,6 +31,7 @@ export default function Vistas3DPage({
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
   const [deepSelection, setDeepSelection] = useState(false);
+  const [multiSelect, setMultiSelect] = useState(false);
 
   // Inline rename: nodes
   const [renamingNodeIdx, setRenamingNodeIdx] = useState<number | null>(null);
@@ -85,11 +86,35 @@ export default function Vistas3DPage({
 
   const viewerRef = useRef<ForgeViewerHandle>(null);
   const [treeOpen, setTreeOpen] = useState(false);
+  const [treeWidth, setTreeWidth] = useState(280);
+  const treeResizingRef = useRef(false);
+  const treeResizeStartX = useRef(0);
+  const treeResizeStartW = useRef(0);
+
+  const startTreeResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    treeResizingRef.current = true;
+    treeResizeStartX.current = e.clientX;
+    treeResizeStartW.current = treeWidth;
+    const onMove = (ev: MouseEvent) => {
+      if (!treeResizingRef.current) return;
+      const delta = ev.clientX - treeResizeStartX.current;
+      setTreeWidth(Math.max(200, Math.min(600, treeResizeStartW.current + delta)));
+    };
+    const onUp = () => {
+      treeResizingRef.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [treeWidth]);
 
   // Selection state
   const [selectionCount, setSelectionCount] = useState(0);
   // Bidirectional tree↔viewer sync
   const [highlightedTreeDbId, setHighlightedTreeDbId] = useState<number | null>(null);
+  const [treeExpandPath, setTreeExpandPath] = useState<number[]>([]);
   const treeRootDbIds = useRef<Set<number>>(new Set());
   // Inline add-category
   const [addingCategory, setAddingCategory] = useState(false);
@@ -186,8 +211,8 @@ export default function Vistas3DPage({
         return { ...v, colorNodes, versions };
       }));
       await setBimLinkerKey(project_id, 'savedViews', compressedViews);
-    } catch (e) {
-      console.error('[BIM] Error persistiendo vistas:', e);
+    } catch (e: any) {
+      console.error('[BIM] Error persistiendo vistas:', e?.message ?? e);
     }
   };
 
@@ -252,6 +277,107 @@ export default function Vistas3DPage({
     if (activeVersionId === versionId) handleSelectVersion(null);
   };
 
+  const handleRestoreVersion = (viewId: string, versionId: string) => {
+    if (!confirm('¿Restaurar esta versión como estado actual (Draft)? Los cambios no guardados se reemplazarán.')) return;
+    const view = savedViews.find(v => v.id === viewId);
+    if (!view) return;
+    const ver = view.versions?.find(v => v.id === versionId);
+    if (!ver) return;
+    const restoredNodes = JSON.parse(JSON.stringify(ver.colorNodes));
+    setSavedViews(prev => {
+      const updated = prev.map(v => v.id !== viewId ? v : { ...v, colorNodes: restoredNodes });
+      persistViews(updated);
+      return updated;
+    });
+    setActiveNodes(restoredNodes);
+    setActiveVersionId(null);
+    applyView({ ...view, colorNodes: restoredNodes }, restoredNodes);
+  };
+
+  const handleCreateNewView = () => {
+    const newView: SavedColorView = {
+      id: `view_${Date.now()}`,
+      name: `Vista ${savedViews.length + 1}`,
+      keyCol: '',
+      treeCol: '',
+      viewMode: 'all',
+      colorNodes: [],
+      createdAt: new Date().toISOString(),
+    };
+    setSavedViews(prev => {
+      const updated = [...prev, newView];
+      persistViews(updated);
+      return updated;
+    });
+    setActiveViewId(newView.id);
+    setActiveNodes([]);
+    setActiveViewMode('all');
+    setActiveVersionId(null);
+    setTimeout(() => {
+      setRenamingViewId(newView.id);
+      setRenamingViewValue(newView.name);
+    }, 80);
+  };
+
+  const handleAssignEach = async (items: { dbId: number; name: string }[]) => {
+    if (!activeViewId) {
+      alert('Selecciona o crea una Vista activa primero.');
+      return;
+    }
+    const vr = viewerRef.current;
+    if (!vr) return;
+    setApplying(true);
+    try {
+      let currentNodes = [...activeNodes];
+      const newNodes: SavedColorView['colorNodes'] = [];
+
+      for (const { dbId, name } of items) {
+        const leafIds = vr.getLeafDbIds([dbId]);
+        if (!leafIds.length) continue;
+        let guids: string[] = [];
+        if (name && name.length >= 3) {
+          guids = [name.trim()];
+        } else {
+          try { guids = await vr.getExternalIds(leafIds); } catch { guids = []; }
+        }
+        const leafSet = new Set(leafIds);
+        const guidSet = new Set(guids);
+        currentNodes = currentNodes.map(n => cleanNodeFrom(n, leafSet, guidSet));
+        const color = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+        newNodes.push({ value: name, color, visible: true, guids, dbIds: leafIds });
+      }
+
+      const finalNodes = [...currentNodes, ...newNodes];
+      const updatedViews = savedViews.map(v =>
+        v.id !== activeViewId ? v : { ...v, colorNodes: finalNodes }
+      );
+      setSavedViews(updatedViews);
+      persistViews(updatedViews);
+      setActiveNodes(finalNodes);
+      const currentView = updatedViews.find(v => v.id === activeViewId);
+      if (currentView) applyView(currentView, finalNodes);
+    } catch (e) {
+      console.error('Error asignando ramas separadas', e);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  // Limpia un nodo eliminando dbIds y guids que pertenecen a otro conjunto.
+  // Si todos los dbIds son removidos, también limpia los guids para prevenir re-resolución stale.
+  const cleanNodeFrom = (
+    node: SavedColorView['colorNodes'][0],
+    dbSet: Set<number>,
+    gSet: Set<string>,
+  ): SavedColorView['colorNodes'][0] => {
+    const prevDbCount = (node.dbIds || []).length;
+    const cleanedDbIds = (node.dbIds || []).filter(id => !dbSet.has(id));
+    const cleanedGuids = (node.guids || []).filter(g => !gSet.has(g));
+    // Si el nodo tenía dbIds y ahora quedó vacío, limpiar guids residuales también
+    const guids = (prevDbCount > 0 && cleanedDbIds.length === 0) ? [] : cleanedGuids;
+    return { ...node, dbIds: cleanedDbIds, guids };
+  };
+
   const sanitizeNodes = (nodes: SavedColorView['colorNodes']): SavedColorView['colorNodes'] => {
     const seenDbIds = new Set<number>();
     const seenGuids = new Set<string>();
@@ -290,6 +416,11 @@ export default function Vistas3DPage({
 
       const vr = viewerRef.current;
       if (!vr) return;
+
+      // Guard: si ningún nodo tiene elementos asignados, no tocar el visor para no perder colores
+      const hasAnyElements = nodes.some(n => (n.dbIds?.length ?? 0) > 0 || (n.guids?.length ?? 0) > 0);
+      if (!hasAnyElements) return;
+
       setApplying(true);
       try {
         const visible = nodes.filter(n => n.visible);
@@ -382,9 +513,10 @@ export default function Vistas3DPage({
         else if (mode === 'all' && hiddenDbIds.length) {
           vr.hide(hiddenDbIds);
         }
-        
-        // RE-APLICAR COLORES al final para asegurar que ganen a los cambios de modo
-        setTimeout(() => vr.applyThemingBatch(colorMap), 100);
+
+        // Re-aplicar colores SINCRÓNICAMENTE después del cambio de modo
+        // (no usar setTimeout — puede re-pintar con colorMap stale de una llamada anterior)
+        if (colorMap.size > 0) vr.applyThemingBatch(colorMap);
       } catch (e) { console.warn('[BIM] Error aplicando vista:', e); }
       finally { setApplying(false); }
     };
@@ -571,7 +703,10 @@ export default function Vistas3DPage({
       const gSet  = new Set(selectedGuids);
       const nextViews = savedViews.map(v => {
         if (v.id !== viewId) return v;
-        return { ...v, colorNodes: v.colorNodes.map((node, i) => {
+        // Usar activeNodes como fuente de verdad para la vista activa
+        // (puede tener cambios de color, categorías nuevas, etc. aún no guardados)
+        const baseNodes = (activeViewId === viewId) ? activeNodes : v.colorNodes;
+        return { ...v, colorNodes: baseNodes.map((node, i) => {
           if (i === nodeIndex) {
             return {
               ...node,
@@ -579,11 +714,16 @@ export default function Vistas3DPage({
               guids: Array.from(new Set([...(node.guids||[]), ...selectedGuids]))
             };
           }
-          // Limpiar de todos los demás grupos
+          // Limpiar de todos los demás grupos por dbId (authoritative)
+          // y también por guid; si tras limpiar dbIds queda vacío, limpiar guids también
+          const cleanedDbIds = (node.dbIds||[]).filter(id => !dbSet.has(id));
+          const cleanedGuids = (node.guids||[]).filter(g => !gSet.has(g));
           return {
             ...node,
-            dbIds: (node.dbIds||[]).filter(id => !dbSet.has(id)),
-            guids: (node.guids||[]).filter(g => !gSet.has(g))
+            dbIds: cleanedDbIds,
+            // Si el nodo quedó sin ningún dbId conocido, borrar guids residuales
+            // para evitar que una re-resolución futura vuelva a asignar el elemento
+            guids: cleanedDbIds.length === 0 && (node.dbIds||[]).length > 0 ? [] : cleanedGuids,
           };
         })};
       });
@@ -713,12 +853,20 @@ export default function Vistas3DPage({
               }}
               className="bg-slate-100 text-[11px] font-black text-slate-900 py-1.5 px-3 rounded-lg border-none outline-none focus:ring-2 focus:ring-blue-500/20 transition-all min-w-[200px]"
             >
-              <option value="">Seleccionar vista...</option>
+              <option value="">{savedViews.length === 0 ? '— Sin vistas —' : 'Seleccionar vista...'}</option>
               {savedViews.map(v => (
                 <option key={v.id} value={v.id}>{v.name}</option>
               ))}
             </select>
-            
+
+            <button
+              onClick={handleCreateNewView}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-black uppercase tracking-wide transition shadow-sm active:scale-95"
+              title="Crear nueva vista vacía"
+            >
+              <FolderPlus size={13} /> Nueva
+            </button>
+
             <div className="flex items-center gap-1">
               <button onClick={() => activeViewId && handleDuplicateView(activeViewId)} disabled={!activeViewId}
                 className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-blue-600 transition disabled:opacity-30" title="Duplicar">
@@ -762,7 +910,7 @@ export default function Vistas3DPage({
           <>
             {/* ── Left Sidebar (Model Tree) ── */}
             {viewerReady && treeOpen && (
-              <div className="w-[280px] bg-[#0a1628] border-r border-white/5 flex flex-col shadow-2xl relative z-10 shrink-0">
+              <div style={{ width: treeWidth }} className="bg-[#0a1628] border-r border-white/5 flex flex-col shadow-2xl relative z-10 shrink-0">
                 <div className="p-3 border-b border-white/5 shrink-0 flex items-center justify-between">
                   <h3 className="text-[11px] font-black text-white uppercase tracking-widest flex items-center gap-2">
                     <Layers size={13} className="text-blue-400" /> Árbol del Modelo
@@ -774,6 +922,7 @@ export default function Vistas3DPage({
                 <ModelTree
                   viewerRef={viewerRef}
                   highlightedDbId={highlightedTreeDbId}
+                  expandPath={treeExpandPath}
                   onRootsLoaded={(ids) => { treeRootDbIds.current = new Set(ids); }}
                   onSelectNode={(dbId) => {
                     const vr = viewerRef.current;
@@ -809,31 +958,22 @@ export default function Vistas3DPage({
                       const color = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
                       const newNode = { value: name, color, visible: true, guids, dbIds: leafIds };
                       
-                      setSavedViews(prev => {
-                        const updated = prev.map(v => {
-                          if (v.id !== activeViewId) return v;
-                          // Restar de existentes
-                          const cleanedNodes = v.colorNodes.map(n => ({
-                            ...n,
-                            dbIds: (n.dbIds || []).filter(id => !leafIds.includes(id)),
-                            guids: (n.guids || []).filter(g => !guids.includes(g))
-                          }));
-                          return { ...v, colorNodes: [...cleanedNodes, newNode] };
-                        });
-                        persistViews(updated);
-                        return updated;
+                      const leafSet = new Set(leafIds);
+                      const guidSet = new Set(guids);
+                      const finalActiveNodes = [
+                        ...activeNodes.map(n => cleanNodeFrom(n, leafSet, guidSet)),
+                        newNode,
+                      ];
+                      const updatedViews = savedViews.map(v => {
+                        if (v.id !== activeViewId) return v;
+                        const cleanedNodes = v.colorNodes.map(n => cleanNodeFrom(n, leafSet, guidSet));
+                        return { ...v, colorNodes: [...cleanedNodes, newNode] };
                       });
-                      setActiveNodes(prev => {
-                        const cleaned = prev.map(n => ({
-                          ...n,
-                          dbIds: (n.dbIds || []).filter(id => !leafIds.includes(id))
-                        }));
-                        const final = [...cleaned, newNode];
-                        // Disparar la actualización del visor inmediatamente
-                        const currentView = savedViews.find(v => v.id === activeViewId);
-                        if (currentView) applyView(currentView, final);
-                        return final;
-                      });
+                      setSavedViews(updatedViews);
+                      persistViews(updatedViews);
+                      setActiveNodes(finalActiveNodes);
+                      const currentView = updatedViews.find(v => v.id === activeViewId);
+                      if (currentView) applyView(currentView, finalActiveNodes);
                     } catch (e) {
                       console.error(e);
                     } finally {
@@ -915,6 +1055,14 @@ export default function Vistas3DPage({
                       setApplying(false);
                     }
                   }}
+                  onAssignEach={handleAssignEach}
+                />
+
+                {/* Resize handle */}
+                <div
+                  onMouseDown={startTreeResize}
+                  className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize z-20 hover:bg-blue-500/30 active:bg-blue-500/50 transition-colors"
+                  title="Arrastrar para redimensionar"
                 />
               </div>
             )}
@@ -939,25 +1087,28 @@ export default function Vistas3DPage({
                   setSelectionCount(dbIds.length);
                   if (!dbIds.length) {
                     setHighlightedTreeDbId(null);
+                    setTreeExpandPath([]);
                     return;
                   }
                   const vr = viewerRef.current;
                   if (!vr) return;
-                  const roots = treeRootDbIds.current;
-                  if (!roots.size) return;
-                  // Walk UP the instance tree from selected dbId until we hit a tree root
-                  let cur: number | null = dbIds[0];
+
+                  // En multi-select el array llega acumulado; navegar al último elemento
+                  const target = dbIds[dbIds.length - 1];
+
+                  // Construir camino completo: elemento seleccionado → raíz
+                  const path: number[] = [];
+                  let cur: number | null = target;
                   const visited = new Set<number>();
                   while (cur !== null && !visited.has(cur)) {
-                    if (roots.has(cur)) {
-                      setHighlightedTreeDbId(cur);
-                      setTreeOpen(true);
-                      return;
-                    }
+                    path.unshift(cur); // prepend → orden raíz-primero
                     visited.add(cur);
                     cur = vr.getParentDbId(cur);
                   }
-                  setHighlightedTreeDbId(null);
+
+                  setHighlightedTreeDbId(target);
+                  setTreeExpandPath(path);
+                  setTreeOpen(true);
                 }}
               />
             </div>
@@ -1037,6 +1188,18 @@ export default function Vistas3DPage({
                           <BoxSelect size={11} />
                           <span className="text-[8px] font-black uppercase">Profunda</span>
                         </button>
+                        <button
+                          onClick={() => {
+                            const next = !multiSelect;
+                            setMultiSelect(next);
+                            viewerRef.current?.setMultiSelect(next);
+                          }}
+                          className={`flex items-center gap-1 px-2 py-1 rounded-lg border transition-all shrink-0 ${multiSelect ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200 text-slate-500 hover:border-emerald-400 hover:text-emerald-600'}`}
+                          title="Multi-selección — cada clic suma al conjunto (sin mantener Ctrl)"
+                        >
+                          <MousePointerClick size={11} />
+                          <span className="text-[8px] font-black uppercase">Multi</span>
+                        </button>
                         <select
                           value={activeViewMode}
                           onChange={e => {
@@ -1096,7 +1259,14 @@ export default function Vistas3DPage({
                                   </p>
                                 </div>
                                 <div className="flex items-center gap-1">
-                                  <button onClick={(e) => { e.stopPropagation(); handleDeleteVersion(activeViewId!, ver.id); }} 
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); handleRestoreVersion(activeViewId!, ver.id); }}
+                                    className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-emerald-600 transition"
+                                    title="Restaurar como estado actual (Draft)"
+                                  >
+                                    <RotateCcw size={12} />
+                                  </button>
+                                  <button onClick={(e) => { e.stopPropagation(); handleDeleteVersion(activeViewId!, ver.id); }}
                                     className="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-red-500 transition">
                                     <Trash2 size={12} />
                                   </button>
@@ -1119,6 +1289,31 @@ export default function Vistas3DPage({
                           {selectionCount} elem. seleccionados
                         </span>
                         <span className="text-[9px] text-amber-500">↓ Pintar en grupo</span>
+                      </div>
+                    )}
+
+                    {/* Empty state — no nodes yet */}
+                    {activeNodes.length === 0 && !addingCategory && (
+                      <div className="mx-2 mt-3 p-3 bg-slate-50 border border-dashed border-slate-300 rounded-xl text-center">
+                        <Layers size={20} className="text-slate-300 mx-auto mb-2" />
+                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-wide mb-1">Sin grupos de color</p>
+                        <p className="text-[9px] text-slate-400 leading-relaxed">
+                          Abre el <span className="font-black text-blue-500">Árbol</span> (botón arriba-izquierda del visor), selecciona ramas y asígnalas — o añade una categoría manual.
+                        </p>
+                        <div className="flex gap-1 mt-2">
+                          <button
+                            onClick={() => setTreeOpen(true)}
+                            className="flex-1 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-[9px] font-black rounded-lg transition flex items-center justify-center gap-1"
+                          >
+                            <Layers size={10} /> Abrir Árbol
+                          </button>
+                          <button
+                            onClick={() => setAddingCategory(true)}
+                            className="flex-1 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-[9px] font-black rounded-lg transition flex items-center justify-center gap-1"
+                          >
+                            <Plus size={10} /> Manual
+                          </button>
+                        </div>
                       </div>
                     )}
 

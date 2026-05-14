@@ -843,7 +843,8 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
     if (!vr || !vr.isUniversalIndexReady()) return;
     const t0 = performance.now();
 
-    const winDays  = horizonRef.current === 'weekly' ? 7 : horizonRef.current === 'monthly' ? 30 : 1;
+    // Navisworks logic: highlight what was built in the last week (or month)
+    const winDays = Math.max(7, horizonRef.current === 'monthly' ? 30 : horizonRef.current === 'weekly' ? 7 : 1);
     const winStart = Math.max(0, targetDay - winDays);
 
     const allTags: any[] = [];
@@ -950,6 +951,7 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
       const elapsed = now - lastFrameRef.current;
       const stepTimeMs = stepSecondsRef.current * 1000;
       const stepDays = horizonRef.current === 'weekly' ? 7 : horizonRef.current === 'monthly' ? 30 : 1;
+      const highlightWindow = Math.max(7, horizonRef.current === 'monthly' ? 30 : horizonRef.current === 'weekly' ? 7 : 1);
 
       if (elapsed >= stepTimeMs) {
         lastFrameRef.current = now - (elapsed % stepTimeMs);
@@ -961,7 +963,7 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
         setCurrentDay(t);
 
         // NAVISWORKS 3 estados: futuro=original · activo=verde · completado=gris
-        const winStart      = Math.max(0, t - stepDays);
+        const winStart      = Math.max(0, t - highlightWindow);
         const completedIds: number[] = [];
         const activeIds:    number[] = [];
         for (const tg of playTagsRef.current) {
@@ -1012,7 +1014,8 @@ export default function SortableSequenceList({ projectId, viewerRef, viewerReady
 
         if (t >= totalDays) {
           setIsPlaying(false); playRef.current = false; rafIdRef.current = null;
-          vr.clearHighlights(); vr.showAll();
+          // NOTA: NO limpiamos los highlights aquí para que el usuario pueda ver el último periodo iluminado.
+          // El usuario puede limpiar manualmente con el botón Stop (handleStop).
           console.info(`[4D][PLAY] Reproducción terminada`);
           return;
         }

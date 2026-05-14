@@ -20,7 +20,7 @@ import {
   Calendar, Plus, Trash2, Layers,
   Palette, RotateCcw,
   Eye, EyeOff, Sparkles,
-  Play, BookmarkPlus, Bookmark, FileText, Settings2,
+  Play, BookmarkPlus, Bookmark, FileText, Settings2, BoxSelect,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { setModuleConfigKey } from '@/lib/supabase/projectConfig';
@@ -40,6 +40,17 @@ export interface ColorNode {
   tagNames?: string[];
 }
 
+export interface ViewVersion {
+  id: string;
+  name: string; // ej. "Semana 1", "Avance Mayo"
+  createdAt: string;
+  colorNodes: Array<{
+    value: string; color: string; visible: boolean;
+    guids?: string[];
+    dbIds?: number[];
+  }>;
+}
+
 export interface SavedColorView {
   id: string; name: string; keyCol: string; treeCol: string;
   viewMode: ViewMode;
@@ -49,6 +60,7 @@ export interface SavedColorView {
     dbIds?: number[];
   }>;
   createdAt: string;
+  versions?: ViewVersion[];
 }
 
 type ConfigNode = { value: string; color: string; visible: boolean; guids: string[]; parent?: string; tagNames?: string[] };
@@ -247,6 +259,7 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
   const [saveError,  setSaveError]  = useState<string | null>(null);
   const [indexReady, setIndexReady] = useState(false);
   const [indexProgress, setIndexProgress] = useState<number | null>(null);
+  const [deepSelection, setDeepSelection] = useState(false);
 
   const [pendingTables,   setPendingTables]   = useState<DetectedTable[]>([]);
   const [showTablePicker, setShowTablePicker] = useState(false);
@@ -264,6 +277,12 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
     const vr = viewerRef.current;
     if (vr?.isUniversalIndexReady()) setIndexReady(true);
   }, [viewerRef]);
+
+  useEffect(() => {
+    if (viewerRef.current) {
+      viewerRef.current.setDeepSelection(deepSelection);
+    }
+  }, [viewerRef, deepSelection]);
 
   useEffect(() => {
     if (!supabaseProjectId) return;
@@ -445,21 +464,28 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
       }
       setIndexReady(true);
       setIndexProgress(null);
-      vr.clearHighlights();
-      const visible    = nodes.filter(n => n.visible);
+
+      const visible = nodes.filter(n => n.visible);
+      const colorMap = new Map<string, number[]>();
       const allDbIds: number[] = [];
-      let matched = 0;
+
       for (const node of visible) {
-        const rgba  = hexToRgba(node.color);
-        const dbIds = await vr.resolveByUniversal(node.guids);
-        if (dbIds.length > 0) {
-          vr.highlight(dbIds, rgba);
-          matched += dbIds.length;
-          allDbIds.push(...dbIds);
+        if (!node.guids.length) continue;
+        const rawDbIds = vr.resolveByUniversalSync(node.guids);
+        if (rawDbIds.length > 0) {
+          // Expand to leaf nodes so applyThemingBatch (recursive=false) colors geometry
+          const leafIds = vr.getLeafDbIds(rawDbIds);
+          const existing = colorMap.get(node.color) ?? [];
+          colorMap.set(node.color, [...existing, ...leafIds]);
+          allDbIds.push(...rawDbIds);
         }
       }
+
+      // Single GPU invalidation for all colors combined
+      vr.applyThemingBatch(colorMap);
+
       const total = visible.reduce((s, n) => s + n.guids.length, 0);
-      setResult({ matched, total });
+      setResult({ matched: allDbIds.length, total });
       resolvedDbIdsRef.current = allDbIds;
       applyMode(vr, mode, allDbIds);
       onDataLinked?.(rows, columns, keyCol);
@@ -490,15 +516,17 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
   const activateView = useCallback(async (view: SavedColorView, overrideMode?: ViewMode) => {
     const mode = overrideMode ?? view.viewMode;
     setActiveViewId(view.id); setKeyCol(view.keyCol); setTreeCol(view.treeCol); setViewMode(mode);
-    const nodes: ColorNode[] = view.colorNodes.map(saved => ({
-      ...saved,
-      guids: rows.filter(r => String(r[view.treeCol] ?? '').trim() === saved.value)
-                 .map(r => String(r[view.keyCol] ?? '').trim()).filter(Boolean),
-    }));
+    const nodes: ColorNode[] = view.colorNodes.map(saved => {
+      // Re-derive guids from live rows when available; fall back to saved guids
+      const derived = rows.length
+        ? rows.filter(r => String(r[view.treeCol] ?? '').trim() === saved.value)
+              .map(r => String(r[view.keyCol] ?? '').trim()).filter(Boolean)
+        : [];
+      return { ...saved, guids: derived.length > 0 ? derived : (saved.guids ?? []) };
+    });
     setColorNodes(nodes); setTreeBuilt(true);
     await applyColors(nodes, mode);
-    persist(savedViews, nodes);
-  }, [rows, applyColors, savedViews, persist]);
+  }, [rows, applyColors]);
 
   const deleteView = (id: string) => {
     const next = savedViews.filter(v => v.id !== id);
@@ -606,8 +634,22 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
                       </button>
                     </div>
                     {isActive && (
-                      <div className="px-3 pb-2">
+                      <div className="px-3 pb-2 space-y-2">
                         <ViewModeSlider mode={viewMode} onChange={mode => { setViewMode(mode); const vr = viewerRef.current; if (vr && resolvedDbIdsRef.current.length) applyMode(vr, mode, resolvedDbIdsRef.current); }} />
+                        
+                        {/* Deep Selection Toggle */}
+                        <button 
+                          onClick={() => setDeepSelection(!deepSelection)}
+                          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl border transition-all ${deepSelection ? 'bg-indigo-50 border-indigo-200 text-indigo-700 shadow-sm' : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300'}`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Layers size={11} className={deepSelection ? 'text-indigo-500' : 'text-slate-300'} />
+                            <span className="text-[9px] font-black uppercase tracking-tight">Selección Profunda</span>
+                          </div>
+                          <div className={`w-6 h-3.5 rounded-full relative transition-colors ${deepSelection ? 'bg-indigo-500' : 'bg-slate-200'}`}>
+                            <div className={`absolute top-0.5 left-0.5 w-2.5 h-2.5 bg-white rounded-full transition-transform ${deepSelection ? 'translate-x-2.5' : 'translate-x-0'}`} />
+                          </div>
+                        </button>
                       </div>
                     )}
                   </div>
