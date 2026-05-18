@@ -115,6 +115,8 @@ export interface ForgeViewerHandle {
   /** Activa/desactiva el modo multi-selección: cada clic AÑADE al conjunto actual (sin Ctrl) */
   setMultiSelect:          (enabled: boolean) => void;
   restoreAll:              () => void;
+  /** Itera todos los fragmentos del modelo y fija opacidad=1 en materiales semitransparentes */
+  removeAllTransparency:   () => void;
   /**
    * Pre-carga un ModelIndex guardado en Supabase.
    * Evita re-escanear el modelo si el URN coincide.
@@ -476,10 +478,11 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         tree.enumNodeChildren(dbId, (cid: number) => {
           let count = 0;
           tree.enumNodeChildren(cid, () => { count++; }, false);
+          const rawName = tree.getNodeName(cid);
           children.push({
             dbId: cid,
-            name: tree.getNodeName(cid) || `Nodo ${cid}`,
-            childCount: count
+            name: typeof rawName === 'string' ? rawName || `Nodo ${cid}` : `Nodo ${cid}`,
+            childCount: typeof count === 'number' ? count : 0,
           });
         }, false);
         return children;
@@ -507,7 +510,8 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         const tree = modelRef.current.getInstanceTree?.();
         if (!tree) return null;
 
-        const name     = tree.getNodeName(dbId) ?? '';
+        const rawN = tree.getNodeName(dbId);
+        const name = typeof rawN === 'string' ? rawN : String(rawN ?? '');
         const parentId = tree.getNodeParentId(dbId);
 
         // Direct children
@@ -519,7 +523,8 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         let cur: number = parentId;
         const rootId = tree.getRootId();
         while (cur != null && cur !== dbId && cur !== undefined) {
-          ancestors.unshift({ dbId: cur, name: tree.getNodeName(cur) ?? String(cur) });
+          const ancName = tree.getNodeName(cur);
+          ancestors.unshift({ dbId: cur, name: typeof ancName === 'string' ? ancName || String(cur) : String(cur) });
           if (cur === rootId) break;
           const p = tree.getNodeParentId(cur);
           if (p == null || p === cur) break;
@@ -1039,6 +1044,24 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         if (!v) return;
         v.showAll();
         v.clearThemingColors(modelRef.current);
+      },
+
+      removeAllTransparency: () => {
+        const v = viewerRef.current;
+        const m = modelRef.current;
+        if (!v || !m) return;
+        const fragList = m.getFragmentList();
+        if (!fragList) return;
+        const count = fragList.getCount();
+        for (let i = 0; i < count; i++) {
+          const mat = fragList.getMaterial(i);
+          if (mat && (mat.opacity < 1 || mat.transparent)) {
+            mat.opacity = 1;
+            mat.transparent = false;
+            mat.needsUpdate = true;
+          }
+        }
+        v.impl.invalidate(true, true, true);
       },
 
       // ── Cache helpers ─────────────────────────────────────────────────────

@@ -451,6 +451,86 @@ function parseP6Xml(text: string, fileName: string): { activities: Activity[]; m
   };
 }
 
+// ─── DHTMLX MPP parser ────────────────────────────────────────────────────────
+// Sends the .mpp file to the free DHTMLX cloud export service and maps
+// the JSON response to our Activity format.
+
+function parseDhtmlxDate(s: string): string | undefined {
+  if (!s) return undefined;
+  // DHTMLX returns "DD-MM-YYYY HH:MM"
+  const m = s.match(/^(\d{2})-(\d{2})-(\d{4})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  // Fallback: try ISO
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.toISOString().substring(0, 10);
+  return undefined;
+}
+
+async function importMppViaDhtmlx(file: File): Promise<{ activities: Activity[]; meta: XerMeta }> {
+  const fd = new FormData();
+  fd.append('file', file);
+
+  const res = await fetch('https://export.dhtmlx.com/gantt/project', {
+    method: 'POST',
+    body: fd,
+  });
+  if (!res.ok) throw new Error(`DHTMLX service error: HTTP ${res.status}`);
+
+  const result = await res.json();
+  const tasks: any[] = result?.data?.data ?? [];
+  if (!tasks.length) throw new Error('No tasks returned by DHTMLX service');
+
+  // Build id→outline_number lookup for parent resolution
+  const idToOutline = new Map<string, string>();
+  tasks.forEach((t: any) => {
+    const outline = t.outline_number ?? t.wbs ?? String(t.id);
+    idToOutline.set(String(t.id), outline);
+  });
+
+  const activities: Activity[] = tasks.map((t: any, i: number) => {
+    const outline = t.outline_number ?? t.wbs ?? String(i + 1);
+    const parentId = t.parent ? String(t.parent) : null;
+    const parentOutline = parentId && parentId !== '0' ? idToOutline.get(parentId) : undefined;
+
+    return {
+      id: `mpp-${t.id}`,
+      wbs_code: outline,
+      description: t.text ?? t.name ?? `Tarea ${i + 1}`,
+      hh: 0,
+      start_date: parseDhtmlxDate(t.start_date),
+      end_date: parseDhtmlxDate(t.end_date),
+      progress: Math.round((t.progress ?? 0) * 100),
+      is_summary: t.type === 'project',
+      is_milestone: t.type === 'milestone',
+      is_critical: !!(t.critical),
+      parent_wbs: parentOutline,
+      sort_order: i,
+      program_source: file.name,
+    };
+  });
+
+  const detail = activities.filter(a => !a.is_summary && !a.is_milestone);
+  const dates = activities.flatMap(a => [a.start_date, a.end_date]).filter(Boolean).sort() as string[];
+  const rsrcNames: string[] = (result.resources ?? []).map((r: any) => r.text ?? r.name ?? '').filter(Boolean);
+
+  const meta: XerMeta = {
+    projName: result.config?.project_name ?? file.name.replace(/\.mpp$/i, ''),
+    planStart: dates[0] ?? '',
+    planEnd: dates[dates.length - 1] ?? '',
+    fileName: file.name,
+    totalTasks: activities.length,
+    detailTasks: detail.length,
+    milestones: activities.filter(a => a.is_milestone).length,
+    criticalCount: activities.filter(a => a.is_critical).length,
+    hhPlan: 0,
+    hhAssigned: 0,
+    discBreakdown: [],
+    rsrcNames,
+  };
+
+  return { activities, meta };
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ImportStep = 'idle' | 'excel-map' | 'xer-confirm' | 'saving' | 'mpp-guide' | 'mpp-parsing';
@@ -595,46 +675,55 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
       setMppFileName(file.name);
       setStep('mpp-parsing');
       try {
-        const fd = new FormData();
-        fd.append('file', file);
-        const res = await fetch('/api/parse-mpp', { method: 'POST', body: fd });
-        const result = await res.json();
+        // ── Estrategia 1: DHTMLX cloud service (gratuito, sin API key) ──
+        // Convierte el .mpp en el servidor de DHTMLX y devuelve JSON completo
+        // con todas las tareas, jerarquía, dependencias y recursos.
+        const { activities: dhtmlxActs, meta: dhtmlxMeta } = await importMppViaDhtmlx(file);
+        setMapped(dhtmlxActs);
+        setXerMeta(dhtmlxMeta);
+        setImportSource(`MS Project MPP · ${dhtmlxMeta.detailTasks} actividades · ${dhtmlxMeta.milestones} hitos`);
+        setStep('xer-confirm');
+        return;
+      } catch (dhtmlxErr) {
+        // ── Estrategia 2 (fallback): parser propio del servidor ──
+        try {
+          const fd = new FormData();
+          fd.append('file', file);
+          const res = await fetch('/api/parse-mpp', { method: 'POST', body: fd });
+          const result = await res.json();
 
-        // Caso 1: El servidor encontró XML embebido dentro del MPP
-        if (result.success && result.format === 'xml' && result.xmlContent) {
-          const xmlResult = parseMspXml(result.xmlContent, file.name);
-          if (xmlResult.activities.length > 0) {
-            setMapped(xmlResult.activities);
-            setXerMeta(xmlResult.meta);
-            setImportSource(`MS Project MPP (XML) · ${xmlResult.meta.detailTasks} actividades`);
+          if (result.success && result.format === 'xml' && result.xmlContent) {
+            const xmlResult = parseMspXml(result.xmlContent, file.name);
+            if (xmlResult.activities.length > 0) {
+              setMapped(xmlResult.activities);
+              setXerMeta(xmlResult.meta);
+              setImportSource(`MS Project MPP (XML) · ${xmlResult.meta.detailTasks} actividades`);
+              setStep('xer-confirm');
+              return;
+            }
+          }
+
+          if (result.success && result.format === 'tasks' && result.activities?.length) {
+            setMapped(result.activities);
+            setXerMeta({
+              projName: result.meta?.projectName ?? '',
+              planStart: '', planEnd: '',
+              fileName: file.name,
+              totalTasks: result.activities.length,
+              detailTasks: result.activities.filter((a: any) => !a.is_summary && !a.is_milestone).length,
+              milestones: result.activities.filter((a: any) => a.is_milestone).length,
+              criticalCount: 0, hhPlan: 0, hhAssigned: 0,
+              discBreakdown: [], rsrcNames: [],
+            });
+            setImportSource(`MS Project MPP · ${result.activities.length} actividades`);
             setStep('xer-confirm');
             return;
           }
-        }
 
-        // Caso 2: El servidor extrajo actividades directamente del binario
-        if (result.success && result.format === 'tasks' && result.activities?.length) {
-          setMapped(result.activities);
-          setXerMeta({
-            projName: result.meta?.projectName ?? '',
-            planStart: '', planEnd: '',
-            fileName: file.name,
-            totalTasks: result.activities.length,
-            detailTasks: result.activities.filter((a: any) => !a.is_summary && !a.is_milestone).length,
-            milestones: result.activities.filter((a: any) => a.is_milestone).length,
-            criticalCount: 0, hhPlan: 0, hhAssigned: 0,
-            discBreakdown: [], rsrcNames: [],
-          });
-          setImportSource(`MS Project MPP · ${result.activities.length} actividades`);
-          setStep('xer-confirm');
-          return;
+          setStep('mpp-guide');
+        } catch {
+          setStep('mpp-guide');
         }
-
-        // Caso 3: No se pudo parsear — mostrar guía
-        setStep('mpp-guide');
-        return;
-      } catch {
-        setStep('mpp-guide');
         return;
       }
     }
@@ -1140,10 +1229,11 @@ export default function ProgramaPage({ params }: { params: Promise<{ org_slug: s
             <div className="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center">
               <Loader2 size={28} className="animate-spin text-blue-600" />
             </div>
-            <p className="text-sm font-black text-slate-700 uppercase tracking-tight">Analizando archivo MPP</p>
+            <p className="text-sm font-black text-slate-700 uppercase tracking-tight">Importando archivo MPP</p>
             <p className="text-[11px] text-slate-400 font-bold text-center">
-              Intentando leer <span className="text-blue-600">{mppFileName}</span> del lado del servidor...
+              Enviando <span className="text-blue-600">{mppFileName}</span> al servicio de conversión…
             </p>
+            <p className="text-[10px] text-slate-300 font-bold text-center">Extrae tareas, jerarquía WBS, fechas y recursos</p>
             <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
               <div className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full animate-pulse" style={{ width: '70%' }} />
             </div>

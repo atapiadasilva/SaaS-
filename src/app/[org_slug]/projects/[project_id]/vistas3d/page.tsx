@@ -4,13 +4,19 @@ import { use, useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase/client';
 import { setBimLinkerKey } from '@/lib/supabase/projectConfig';
-import { Loader2, MonitorPlay, Check, Layers, AlertCircle, MousePointer2, Paintbrush, EyeOff, Plus, Save, CheckCircle2, Copy, Trash2, X, Merge, ChevronUp, ChevronDown, Pencil, Clock, Camera, History, BoxSelect, RotateCcw, FolderPlus, MousePointerClick } from 'lucide-react';
+import { Loader2, MonitorPlay, Check, Layers, AlertCircle, MousePointer2, Paintbrush, EyeOff, Plus, Save, CheckCircle2, Copy, Trash2, X, Merge, ChevronUp, ChevronDown, Pencil, Clock, Camera, History, BoxSelect, RotateCcw, FolderPlus, MousePointerClick, Table2, RefreshCw } from 'lucide-react';
 import type { BimConfig } from '@/components/modules/BimConfigModal';
 import type { ForgeViewerHandle } from '@/components/awp/ForgeViewer';
 import type { SavedColorView } from '@/components/awp/BimDataLinker';
 import ModelTree from '@/components/awp/ModelTree';
 
 const ForgeViewer = dynamic(() => import('@/components/awp/ForgeViewer'), { ssr: false });
+
+type BimColumn   = { key: string; category: string; attributeName: string; displayName: string };
+type CustomCol   = { key: string; label: string };
+type TableRow    = { dbId: number; elementName: string; groupValue: string; groupColor: string; bimProps: Record<string, string> };
+type DiscoveredProp     = { attributeName: string; displayName: string };
+type DiscoveredCategory = { category: string; props: DiscoveredProp[] };
 
 export default function Vistas3DPage({
   params,
@@ -150,6 +156,9 @@ export default function Vistas3DPage({
             })));
             setSavedViews(loadedViews);
           }
+          if (linker.table_bim_cols) setBimColumns(linker.table_bim_cols as BimColumn[]);
+          if (linker.table_custom_cols) setCustomColumns(linker.table_custom_cols as CustomCol[]);
+          if (linker.table_custom_vals) setCustomValues(linker.table_custom_vals as Record<string, Record<string, string>>);
         }
         if (bim) {
           setConfig(bim);
@@ -823,6 +832,176 @@ export default function Vistas3DPage({
     if (selected.length > 0) { vr.hide(selected); vr.select([]); }
   };
 
+  // ─── Tabla de propiedades del modelo ──────────────────────────────────────
+  const [tableOpen, setTableOpen] = useState(false);
+  const [tableHeight, setTableHeight] = useState(260);
+  const tableResizingRef = useRef(false);
+  const tableResizeStartY = useRef(0);
+  const tableResizeStartH = useRef(0);
+  const [bimColumns, setBimColumns] = useState<BimColumn[]>([]);
+  const [customColumns, setCustomColumns] = useState<CustomCol[]>([]);
+  const [customValues, setCustomValues] = useState<Record<string, Record<string, string>>>({});
+  const [tableRows, setTableRows] = useState<TableRow[]>([]);
+  const [tableLoading, setTableLoading] = useState(false);
+  const [tableProgress, setTableProgress] = useState(0);
+  const [propPickerOpen, setPropPickerOpen] = useState(false);
+  const [pickerCategory, setPickerCategory] = useState<string | null>(null);
+  const [discoveredProps, setDiscoveredProps] = useState<DiscoveredCategory[]>([]);
+  const [discoveringProps, setDiscoveringProps] = useState(false);
+  const [editingCell, setEditingCell] = useState<{ dbId: number; colKey: string; value: string } | null>(null);
+  const [addingCustomCol, setAddingCustomCol] = useState(false);
+  const [newCustomColName, setNewCustomColName] = useState('');
+
+  // ─── Tabla: resize handle ─────────────────────────────────────────────────
+  const startTableResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    tableResizingRef.current = true;
+    tableResizeStartY.current = e.clientY;
+    tableResizeStartH.current = tableHeight;
+    const onMove = (ev: MouseEvent) => {
+      if (!tableResizingRef.current) return;
+      const delta = tableResizeStartY.current - ev.clientY;
+      setTableHeight(Math.max(120, Math.min(600, tableResizeStartH.current + delta)));
+    };
+    const onUp = () => {
+      tableResizingRef.current = false;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [tableHeight]);
+
+  // ─── Tabla: descubrir propiedades disponibles muestreando el modelo ─────────
+  const discoverProperties = useCallback(async () => {
+    const vr = viewerRef.current;
+    if (!vr) return;
+    const sampleIds = activeNodes
+      .map(n => n.dbIds?.find(id => id > 0))
+      .filter((id): id is number => id !== undefined);
+    if (!sampleIds.length) return;
+    setDiscoveringProps(true);
+    try {
+      const catMap = new Map<string, DiscoveredProp[]>();
+      await Promise.all(sampleIds.map(async (dbId) => {
+        try {
+          const result = await vr.getProperties(dbId);
+          for (const prop of result.properties) {
+            if (!catMap.has(prop.category)) catMap.set(prop.category, []);
+            const arr = catMap.get(prop.category)!;
+            if (!arr.some(p => p.attributeName === prop.attributeName)) {
+              arr.push({ attributeName: prop.attributeName, displayName: prop.displayName });
+            }
+          }
+        } catch {}
+      }));
+      const sorted = Array.from(catMap.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([category, props]) => ({
+          category,
+          props: props.sort((a, b) => a.displayName.localeCompare(b.displayName)),
+        }));
+      setDiscoveredProps(sorted);
+    } catch (e) {
+      console.error('[tabla] discoverProperties error', e);
+    } finally {
+      setDiscoveringProps(false);
+    }
+  }, [activeNodes]);
+
+  // ─── Tabla: cargar filas (una por elemento) ───────────────────────────────
+  const loadTableRows = useCallback(async (bimCols?: BimColumn[]) => {
+    const vr = viewerRef.current;
+    const cols = bimCols ?? bimColumns;
+    if (!vr) return;
+    setTableLoading(true);
+    setTableProgress(0);
+    try {
+      const rows: TableRow[] = [];
+      const allNodes = activeNodes.filter(n => (n.dbIds?.length ?? 0) > 0 || (n.guids?.length ?? 0) > 0);
+      let done = 0;
+      const total = allNodes.reduce((s, n) => s + (n.dbIds?.length ?? n.guids?.length ?? 0), 0);
+      for (const node of allNodes) {
+        let dbIds: number[] = node.dbIds ?? [];
+        if (!dbIds.length && (node.guids?.length ?? 0) > 0) {
+          try { dbIds = await vr.resolveExternalIds(node.guids!); } catch {}
+        }
+        for (const dbId of dbIds) {
+          const bimProps: Record<string, string> = {};
+          let elementName = String(dbId);
+          try {
+            const props = await vr.getProperties(dbId);
+            elementName = props.name || String(dbId);
+            for (const col of cols) {
+              const p = props.properties.find(x =>
+                x.category === col.category &&
+                (x.attributeName === col.attributeName || x.displayName === col.displayName)
+              );
+              bimProps[col.key] = p != null ? String(p.displayValue) : '—';
+            }
+          } catch {}
+          rows.push({ dbId, elementName, groupValue: node.value, groupColor: node.color, bimProps });
+          done++;
+          if (total > 0) setTableProgress(Math.round((done / total) * 100));
+        }
+      }
+      setTableRows(rows);
+    } finally {
+      setTableLoading(false);
+      setTableProgress(0);
+    }
+  }, [activeNodes, bimColumns]);
+
+  // ─── Tabla: agregar columna BIM ────────────────────────────────────────────
+  const addBimColumn = async (category: string, prop: DiscoveredProp) => {
+    const key = `bim__${category}__${prop.attributeName}`;
+    if (bimColumns.some(c => c.key === key)) return;
+    const newCol: BimColumn = { key, category, attributeName: prop.attributeName, displayName: prop.displayName };
+    const nextCols = [...bimColumns, newCol];
+    setBimColumns(nextCols);
+    setPropPickerOpen(false);
+    setPickerCategory(null);
+    await setBimLinkerKey(project_id, 'table_bim_cols', nextCols);
+    await loadTableRows(nextCols);
+  };
+
+  // ─── Tabla: agregar columna personalizada ─────────────────────────────────
+  const addCustomColumn = async () => {
+    const label = newCustomColName.trim();
+    if (!label) return;
+    const key = `custom__${Date.now()}`;
+    const nextCols = [...customColumns, { key, label }];
+    setCustomColumns(nextCols);
+    setNewCustomColName('');
+    setAddingCustomCol(false);
+    await setBimLinkerKey(project_id, 'table_custom_cols', nextCols);
+  };
+
+  // ─── Tabla: editar celda personalizada ────────────────────────────────────
+  const commitCellEdit = async () => {
+    if (!editingCell) return;
+    const { dbId, colKey, value } = editingCell;
+    const strId = String(dbId);
+    const nextVals = { ...customValues, [strId]: { ...(customValues[strId] ?? {}), [colKey]: value } };
+    setCustomValues(nextVals);
+    setEditingCell(null);
+    await setBimLinkerKey(project_id, 'table_custom_vals', nextVals);
+  };
+
+  // ─── Tabla: eliminar columna ──────────────────────────────────────────────
+  const removeBimColumn = async (key: string) => {
+    const next = bimColumns.filter(c => c.key !== key);
+    setBimColumns(next);
+    setTableRows(prev => prev.map(r => { const b = { ...r.bimProps }; delete b[key]; return { ...r, bimProps: b }; }));
+    await setBimLinkerKey(project_id, 'table_bim_cols', next);
+  };
+
+  const removeCustomColumn = async (key: string) => {
+    const next = customColumns.filter(c => c.key !== key);
+    setCustomColumns(next);
+    await setBimLinkerKey(project_id, 'table_custom_cols', next);
+  };
+
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
@@ -1068,49 +1247,305 @@ export default function Vistas3DPage({
             )}
 
             {/* ── Center Viewer ── */}
-            <div className="flex-1 relative">
-              {/* Toggle Tree Button */}
-              {viewerReady && !treeOpen && (
-                <button
-                  onClick={() => setTreeOpen(true)}
-                  className="absolute top-4 left-4 z-20 bg-[#0a1628]/90 backdrop-blur-md border border-white/10 text-white px-3 py-2 rounded shadow-xl flex items-center gap-2 hover:bg-white/10 transition group"
-                >
-                  <Layers size={14} className="text-blue-400 group-hover:scale-110 transition-transform" />
-                  <span className="text-[10px] font-black uppercase tracking-widest">Árbol</span>
-                </button>
+            <div className="flex-1 flex flex-col relative">
+              {/* Viewer area */}
+              <div className="flex-1 relative">
+                {/* Toggle Tree Button */}
+                {viewerReady && !treeOpen && (
+                  <button
+                    onClick={() => setTreeOpen(true)}
+                    className="absolute top-4 left-4 z-20 bg-[#0a1628]/90 backdrop-blur-md border border-white/10 text-white px-3 py-2 rounded shadow-xl flex items-center gap-2 hover:bg-white/10 transition group"
+                  >
+                    <Layers size={14} className="text-blue-400 group-hover:scale-110 transition-transform" />
+                    <span className="text-[10px] font-black uppercase tracking-widest">Árbol</span>
+                  </button>
+                )}
+                {/* Toggle Table Button */}
+                {viewerReady && !tableOpen && (
+                  <button
+                    onClick={() => setTableOpen(true)}
+                    className="absolute bottom-4 left-4 z-20 bg-[#0a1628]/90 backdrop-blur-md border border-white/10 text-white px-3 py-2 rounded shadow-xl flex items-center gap-2 hover:bg-white/10 transition group"
+                  >
+                    <Table2 size={14} className="text-blue-400 group-hover:scale-110 transition-transform" />
+                    <span className="text-[10px] font-black uppercase tracking-widest">Tabla</span>
+                  </button>
+                )}
+                <ForgeViewer
+                  ref={viewerRef}
+                  urn={config.urn}
+                  onReady={() => setViewerReady(true)}
+                  onSelectionChange={(dbIds) => {
+                    setSelectionCount(dbIds.length);
+                    if (!dbIds.length) {
+                      setHighlightedTreeDbId(null);
+                      setTreeExpandPath([]);
+                      return;
+                    }
+                    const vr = viewerRef.current;
+                    if (!vr) return;
+
+                    // En multi-select el array llega acumulado; navegar al último elemento
+                    const target = dbIds[dbIds.length - 1];
+
+                    // Construir camino completo: elemento seleccionado → raíz
+                    const path: number[] = [];
+                    let cur: number | null = target;
+                    const visited = new Set<number>();
+                    while (cur !== null && !visited.has(cur)) {
+                      path.unshift(cur); // prepend → orden raíz-primero
+                      visited.add(cur);
+                      cur = vr.getParentDbId(cur);
+                    }
+
+                    setHighlightedTreeDbId(target);
+                    setTreeExpandPath(path);
+                    setTreeOpen(true);
+                  }}
+                />
+              </div>
+
+              {/* ── Tabla de Propiedades ── */}
+              {tableOpen && viewerReady && (
+                <div style={{ height: tableHeight }} className="shrink-0 bg-white border-t-2 border-slate-200 flex flex-col select-none relative">
+                  {/* Drag handle para redimensionar */}
+                  <div
+                    onMouseDown={startTableResize}
+                    className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize hover:bg-blue-400/30 active:bg-blue-400/50 transition-colors z-10"
+                  />
+
+                  {/* Header */}
+                  <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-slate-200 bg-slate-50 mt-1">
+                    <div className="flex items-center gap-3">
+                      <Table2 size={13} className="text-blue-600" />
+                      <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">Tabla de elementos</span>
+                      {tableRows.length > 0 && (
+                        <span className="text-[9px] text-slate-400 font-bold">{tableRows.length} elementos</span>
+                      )}
+                      {tableLoading && tableProgress > 0 && (
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-24 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                            <div className="h-full bg-blue-500 transition-all" style={{ width: `${tableProgress}%` }} />
+                          </div>
+                          <span className="text-[9px] text-slate-400">{tableProgress}%</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {/* Calcular / Refresh */}
+                      <button
+                        onClick={() => loadTableRows()}
+                        disabled={tableLoading || !activeNodes.length}
+                        className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[9px] font-black uppercase tracking-wide transition disabled:opacity-40"
+                      >
+                        {tableLoading ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                        {tableRows.length ? 'Actualizar' : 'Cargar datos'}
+                      </button>
+
+                      {/* Menú agregar columna */}
+                      <div className="relative">
+                        <button
+                          onClick={async () => {
+                            if (!discoveredProps.length) await discoverProperties();
+                            setPropPickerOpen(v => !v);
+                            setPickerCategory(null);
+                            setAddingCustomCol(false);
+                          }}
+                          disabled={discoveringProps}
+                          className="flex items-center gap-1.5 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[9px] font-black uppercase tracking-wide transition disabled:opacity-40"
+                        >
+                          {discoveringProps ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
+                          Columna
+                        </button>
+
+                        {/* Picker de propiedades del modelo */}
+                        {propPickerOpen && (
+                          <div className="absolute right-0 bottom-full mb-1 z-50 bg-white border border-slate-200 rounded-xl shadow-2xl w-[400px] flex overflow-hidden" style={{ height: 380 }}>
+                            {/* Categorías */}
+                            <div className="w-[160px] border-r border-slate-100 flex flex-col shrink-0">
+                              <div className="px-3 py-2 text-[8px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 shrink-0">
+                                Propiedad del modelo
+                              </div>
+                              <div className="overflow-y-auto flex-1">
+                                {discoveredProps.length === 0 && (
+                                  <div className="px-3 py-4 text-[9px] text-slate-400 text-center">Sin datos.<br/>Selecciona una vista primero.</div>
+                                )}
+                                {discoveredProps.map(cat => (
+                                  <button
+                                    key={cat.category}
+                                    onClick={() => setPickerCategory(cat.category)}
+                                    className={`w-full text-left px-3 py-2 text-[9px] font-bold transition truncate ${pickerCategory === cat.category ? 'bg-blue-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
+                                  >
+                                    {cat.category}
+                                  </button>
+                                ))}
+                              </div>
+                              {/* Separador + opción columna personalizada */}
+                              <div className="shrink-0 border-t border-slate-100">
+                                <button
+                                  onClick={() => { setAddingCustomCol(true); setPropPickerOpen(false); }}
+                                  className="w-full text-left px-3 py-2.5 text-[9px] font-black text-emerald-700 hover:bg-emerald-50 flex items-center gap-1.5 transition"
+                                >
+                                  <Plus size={10} /> Columna personalizada
+                                </button>
+                              </div>
+                            </div>
+                            {/* Propiedades */}
+                            <div className="flex-1 flex flex-col overflow-hidden">
+                              <div className="px-3 py-2 text-[8px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 shrink-0">Propiedad</div>
+                              <div className="flex-1 overflow-y-auto">
+                                {!pickerCategory && (
+                                  <div className="px-3 py-4 text-[9px] text-slate-400 text-center">← Selecciona una categoría</div>
+                                )}
+                                {pickerCategory && (discoveredProps.find(c => c.category === pickerCategory)?.props ?? []).map(prop => {
+                                  const already = bimColumns.some(c => c.key === `bim__${pickerCategory}__${prop.attributeName}`);
+                                  return (
+                                    <button
+                                      key={prop.attributeName}
+                                      onClick={() => !already && addBimColumn(pickerCategory!, prop)}
+                                      disabled={already}
+                                      className={`w-full text-left px-3 py-2 text-[9px] transition truncate ${already ? 'text-slate-300 cursor-default' : 'text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-bold'}`}
+                                    >
+                                      {prop.displayName}
+                                      {already && <span className="ml-1 text-[8px] text-slate-300">(añadida)</span>}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                            <button onClick={() => { setPropPickerOpen(false); setPickerCategory(null); }} className="absolute top-1.5 right-1.5 p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition">
+                              <X size={11} />
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Input para columna personalizada */}
+                        {addingCustomCol && (
+                          <div className="absolute right-0 bottom-full mb-1 z-50 bg-white border border-slate-200 rounded-xl shadow-2xl p-3 w-[260px]">
+                            <p className="text-[9px] font-black text-slate-600 uppercase tracking-wider mb-2">Nueva columna personalizada</p>
+                            <input
+                              autoFocus
+                              value={newCustomColName}
+                              onChange={e => setNewCustomColName(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') addCustomColumn(); if (e.key === 'Escape') { setAddingCustomCol(false); setNewCustomColName(''); }}}
+                              placeholder="Nombre de la columna…"
+                              className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-400/30 mb-2"
+                            />
+                            <div className="flex gap-1.5">
+                              <button onClick={addCustomColumn} disabled={!newCustomColName.trim()} className="flex-1 py-1.5 bg-emerald-600 text-white rounded-lg text-[9px] font-black hover:bg-emerald-700 transition disabled:opacity-30">Crear</button>
+                              <button onClick={() => { setAddingCustomCol(false); setNewCustomColName(''); }} className="py-1.5 px-3 bg-slate-100 text-slate-600 rounded-lg text-[9px] font-black hover:bg-slate-200 transition">Cancelar</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <button onClick={() => setTableOpen(false)} className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition">
+                        <X size={13} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Grid / Tabla */}
+                  <div className="flex-1 overflow-auto" onClick={() => editingCell && commitCellEdit()}>
+                    {(bimColumns.length === 0 && customColumns.length === 0) ? (
+                      <div className="flex flex-col items-center justify-center h-full gap-2 text-slate-400">
+                        <Table2 size={24} className="opacity-20" />
+                        <p className="text-[10px] font-bold">Agrega columnas con el botón <strong>+ Columna</strong></p>
+                        <p className="text-[9px] text-slate-300">Elige propiedades del modelo o crea columnas personalizadas</p>
+                      </div>
+                    ) : (
+                      <table className="w-full text-[10px] border-collapse">
+                        <thead className="sticky top-0 z-10">
+                          <tr className="bg-slate-100">
+                            <th className="text-left px-3 py-2 text-[9px] font-black text-slate-500 uppercase tracking-wider border-b border-r border-slate-200 w-[120px] shrink-0">Grupo</th>
+                            <th className="text-left px-3 py-2 text-[9px] font-black text-slate-500 uppercase tracking-wider border-b border-r border-slate-200 min-w-[160px]">Elemento</th>
+                            {bimColumns.map(col => (
+                              <th key={col.key} className="text-left px-3 py-2 text-[9px] font-black text-slate-500 uppercase tracking-wider border-b border-r border-slate-100 min-w-[110px]">
+                                <div className="flex items-center justify-between gap-1">
+                                  <div className="min-w-0">
+                                    <div className="text-[7px] text-slate-400 font-bold normal-case truncate">{col.category}</div>
+                                    <div className="truncate">{col.displayName}</div>
+                                  </div>
+                                  <button onClick={() => removeBimColumn(col.key)} className="shrink-0 p-0.5 text-slate-300 hover:text-red-400 transition rounded opacity-0 group-hover:opacity-100">
+                                    <X size={9} />
+                                  </button>
+                                </div>
+                              </th>
+                            ))}
+                            {customColumns.map(col => (
+                              <th key={col.key} className="text-left px-3 py-2 text-[9px] font-black text-emerald-600 uppercase tracking-wider border-b border-r border-emerald-100 min-w-[140px] bg-emerald-50/40">
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="truncate">{col.label}</span>
+                                  <button onClick={() => removeCustomColumn(col.key)} className="shrink-0 p-0.5 text-slate-300 hover:text-red-400 transition rounded">
+                                    <X size={9} />
+                                  </button>
+                                </div>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tableRows.length === 0 && !tableLoading && (
+                            <tr>
+                              <td colSpan={2 + bimColumns.length + customColumns.length} className="px-4 py-6 text-center text-[10px] text-slate-400">
+                                Haz clic en <strong>Cargar datos</strong> para ver los elementos de los grupos
+                              </td>
+                            </tr>
+                          )}
+                          {tableRows.map((row, i) => (
+                            <tr key={row.dbId} className={`group ${i % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'} hover:bg-blue-50/30 transition-colors`}>
+                              {/* Grupo */}
+                              <td className="px-3 py-1 border-b border-r border-slate-100">
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-2 h-2 rounded-sm shrink-0" style={{ backgroundColor: row.groupColor }} />
+                                  <span className="text-[9px] font-bold text-slate-600 truncate max-w-[90px]" title={row.groupValue}>{row.groupValue}</span>
+                                </div>
+                              </td>
+                              {/* Nombre del elemento */}
+                              <td className="px-3 py-1 border-b border-r border-slate-100 text-slate-700 font-medium truncate max-w-[200px]" title={row.elementName}>
+                                {row.elementName}
+                              </td>
+                              {/* Propiedades BIM (solo lectura) */}
+                              {bimColumns.map(col => (
+                                <td key={col.key} className="px-3 py-1 border-b border-r border-slate-100 text-slate-600 font-mono text-[9px]">
+                                  {tableLoading ? <span className="text-slate-200 animate-pulse">…</span> : (row.bimProps[col.key] ?? <span className="text-slate-200">—</span>)}
+                                </td>
+                              ))}
+                              {/* Columnas personalizadas (editables) */}
+                              {customColumns.map(col => {
+                                const stored = customValues[String(row.dbId)]?.[col.key] ?? '';
+                                const isEditing = editingCell?.dbId === row.dbId && editingCell?.colKey === col.key;
+                                return (
+                                  <td
+                                    key={col.key}
+                                    className="px-2 py-0.5 border-b border-r border-emerald-100 bg-emerald-50/20"
+                                    onClick={e => { e.stopPropagation(); if (!isEditing) { if (editingCell) commitCellEdit(); setEditingCell({ dbId: row.dbId, colKey: col.key, value: stored }); }}}
+                                  >
+                                    {isEditing ? (
+                                      <input
+                                        autoFocus
+                                        value={editingCell.value}
+                                        onChange={e => setEditingCell(prev => prev ? { ...prev, value: e.target.value } : null)}
+                                        onBlur={commitCellEdit}
+                                        onKeyDown={e => { if (e.key === 'Enter') commitCellEdit(); if (e.key === 'Escape') setEditingCell(null); }}
+                                        className="w-full px-1 py-0.5 text-[10px] border border-blue-400 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+                                        onClick={e => e.stopPropagation()}
+                                      />
+                                    ) : (
+                                      <span className={`text-[10px] block min-h-[16px] cursor-text rounded px-1 hover:bg-emerald-100 transition ${stored ? 'text-slate-700' : 'text-slate-300'}`}>
+                                        {stored || <span className="italic text-[9px]">clic para editar</span>}
+                                      </span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
               )}
-              <ForgeViewer
-                ref={viewerRef}
-                urn={config.urn}
-                onReady={() => setViewerReady(true)}
-                onSelectionChange={(dbIds) => {
-                  setSelectionCount(dbIds.length);
-                  if (!dbIds.length) {
-                    setHighlightedTreeDbId(null);
-                    setTreeExpandPath([]);
-                    return;
-                  }
-                  const vr = viewerRef.current;
-                  if (!vr) return;
-
-                  // En multi-select el array llega acumulado; navegar al último elemento
-                  const target = dbIds[dbIds.length - 1];
-
-                  // Construir camino completo: elemento seleccionado → raíz
-                  const path: number[] = [];
-                  let cur: number | null = target;
-                  const visited = new Set<number>();
-                  while (cur !== null && !visited.has(cur)) {
-                    path.unshift(cur); // prepend → orden raíz-primero
-                    visited.add(cur);
-                    cur = vr.getParentDbId(cur);
-                  }
-
-                  setHighlightedTreeDbId(target);
-                  setTreeExpandPath(path);
-                  setTreeOpen(true);
-                }}
-              />
             </div>
 
             {/* ── Right Sidebar (Category Details) ── */}
