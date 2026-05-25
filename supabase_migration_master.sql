@@ -345,6 +345,45 @@ ALTER TABLE public.edges             ADD COLUMN IF NOT EXISTS project_id     UUI
 -- ============================================================
 -- HELPER FUNCTIONS
 -- ============================================================
+
+-- Atomically sets a top-level key in projects.module_config
+CREATE OR REPLACE FUNCTION public.merge_module_config(
+  p_project_id UUID,
+  p_key        TEXT,
+  p_value      JSONB
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.projects
+  SET module_config = jsonb_set(
+    COALESCE(module_config, '{}'::jsonb),
+    ARRAY[p_key],
+    COALESCE(p_value, 'null'::jsonb),
+    true
+  )
+  WHERE id = p_project_id;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.merge_module_config(UUID, TEXT, JSONB) TO authenticated;
+
+-- Atomically sets a nested key inside projects.module_config->'bim_linker'
+CREATE OR REPLACE FUNCTION public.set_bim_linker_key(
+  p_project_id UUID,
+  p_key        TEXT,
+  p_value      JSONB
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.projects
+  SET module_config = jsonb_set(
+    COALESCE(module_config, '{}'::jsonb),
+    ARRAY['bim_linker', p_key],
+    COALESCE(p_value, 'null'::jsonb),
+    true
+  )
+  WHERE id = p_project_id;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.set_bim_linker_key(UUID, TEXT, JSONB) TO authenticated;
+
 CREATE OR REPLACE FUNCTION public.user_organizations()
 RETURNS SETOF UUID LANGUAGE sql SECURITY DEFINER AS $$
     SELECT organization_id FROM public.organization_members WHERE user_id = auth.uid();

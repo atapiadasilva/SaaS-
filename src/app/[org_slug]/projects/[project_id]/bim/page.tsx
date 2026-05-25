@@ -10,7 +10,7 @@ import {
   Box, Maximize2, RotateCcw, Settings2, Loader2, AlertCircle,
   Download, X, Search, Copy, Check, ChevronRight,
   ChevronDown, Folder, FileBox, Home, Eye, EyeOff,
-  CheckCircle2,
+  CheckCircle2, PanelRightClose, PanelRightOpen,
 } from 'lucide-react';
 
 const ForgeViewer      = dynamic(() => import('@/components/awp/ForgeViewer'),         { ssr: false });
@@ -357,6 +357,7 @@ export default function BimPage({
   const [indexState,     setIndexState]     = useState<'idle' | 'scanning' | 'saving' | 'ready'>('idle');
   const [indexProgress,  setIndexProgress]  = useState(0);
   const [active4DSequence, setActive4DSequence] = useState<SequenceActivity[] | null>(null);
+  const [linkerVisible,    setLinkerVisible]    = useState(true);
 
   const viewerRef       = useRef<ForgeViewerHandle>(null);
   const ignoringSelect  = useRef(false);
@@ -521,6 +522,15 @@ export default function BimPage({
               </button>
             </>
           )}
+          <button
+            onClick={() => setLinkerVisible(v => !v)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-xl text-[10px] font-black text-white/80 transition border border-white/10"
+            title={linkerVisible ? 'Ocultar panel lateral' : 'Mostrar panel lateral'}
+          >
+            {linkerVisible
+              ? <PanelRightClose size={11} />
+              : <PanelRightOpen  size={11} />}
+          </button>
           <button onClick={() => setConfigOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-xl text-[10px] font-black text-white/80 transition border border-white/10">
             <Settings2 size={11} />
@@ -612,12 +622,14 @@ export default function BimPage({
         )}
         </div>{/* end center viewer */}
 
-        {/* Right: Data linker sidebar — always visible */}
-        <BimDataLinker
-          supabaseProjectId={project_id}
-          viewerRef={viewerRef}
-          onClose={() => {}}
-        />
+        {/* Right: Data linker sidebar — toggleable */}
+        {linkerVisible && (
+          <BimDataLinker
+            supabaseProjectId={project_id}
+            viewerRef={viewerRef}
+            onClose={() => {}}
+          />
+        )}
       </div>
 
       {configOpen && (

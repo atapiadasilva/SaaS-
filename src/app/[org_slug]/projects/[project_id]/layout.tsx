@@ -7,7 +7,7 @@ import { ProjectMemberMenu } from "@/components/layout/ProjectMemberMenu";
 import { previewOrgRole, previewProjectRole } from "@/lib/rolePreview";
 import { getPreviewRole } from "@/lib/rolePreviewServer";
 
-const KNOWN_MODULE_KEYS = ['awp', 'programa', 'cwp', '4d', 'bim', 'vistas3d', 'tidp', '90dias', 'documents', 'team', 'roles', 'model'];
+const KNOWN_MODULE_KEYS = ['awp', 'programa', 'cwp', '4d', 'bim', 'vistas3d', 'tidp', '90dias', 'documents', 'team', 'roles', 'model', 'disciplinas'];
 
 // Módulos que requieren ser admin del proyecto para aparecer en la nav
 const ADMIN_ONLY_MODULES = ['team', 'roles'];
@@ -71,7 +71,7 @@ export default async function ProjectLayout({
   // Módulos activos del proyecto
   const activeModules = (project.active_modules as Record<string, boolean>) || {};
   const activeModuleKeys = KNOWN_MODULE_KEYS.filter(k => {
-    if (!activeModules[k] && !(k === 'vistas3d' && activeModules['bim']) && !(k === '4d' && activeModules['bim'])) return false;
+    if (!activeModules[k] && !(k === 'vistas3d' && activeModules['bim']) && !(k === '4d' && activeModules['bim']) && !(k === 'disciplinas' && activeModules['bim'])) return false;
     // Team y Roles solo visibles para admins del proyecto
     if (ADMIN_ONLY_MODULES.includes(k) && !canAdminProject) return false;
     return true;

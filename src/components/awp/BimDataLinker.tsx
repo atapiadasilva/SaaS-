@@ -54,10 +54,13 @@ export interface ViewVersion {
 export interface SavedColorView {
   id: string; name: string; keyCol: string; treeCol: string;
   viewMode: ViewMode;
+  viewType?: 'standard' | 'cwa' | 'cwp';
+  globalDisciplines?: Array<{ name: string; color: string }>;
   colorNodes: Array<{
     value: string; color: string; visible: boolean;
     guids?: string[];
     dbIds?: number[];
+    parent?: string;
   }>;
   createdAt: string;
   versions?: ViewVersion[];
@@ -503,9 +506,19 @@ export default function BimDataLinker({ supabaseProjectId, viewerRef, onClose, o
 
   const saveCurrentView = () => {
     if (!viewName.trim() || !colorNodes.length) return;
+    const vr = viewerRef.current;
     const view: SavedColorView = {
       id: `${Date.now()}`, name: viewName.trim(), keyCol, treeCol, viewMode,
-      colorNodes: colorNodes.map(({ value, color, visible, guids }) => ({ value, color, visible, guids: guids || [] })),
+      colorNodes: colorNodes.map(({ value, color, visible, guids }) => {
+        // Resolve and cache dbIds so Vistas3D can apply colors without re-building the CSV index
+        let dbIds: number[] | undefined;
+        if (guids?.length && vr) {
+          const raw = vr.resolveByUniversalSync(guids);
+          const leaves = raw.length ? vr.getLeafDbIds(raw) : [];
+          if (leaves.length) dbIds = leaves;
+        }
+        return { value, color, visible, guids: guids || [], ...(dbIds ? { dbIds } : {}) };
+      }),
       createdAt: new Date().toISOString(),
     };
     const next = [...savedViews.filter(v => v.name !== view.name), view];

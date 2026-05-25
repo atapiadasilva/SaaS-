@@ -68,7 +68,6 @@ export interface ForgeViewerHandle {
   navigateTo:              (dbId: number) => void;
   getRootId:               () => number | null;
   getChildren:             (dbId: number) => { dbId: number; name: string; childCount: number }[];
-  getLeafDbIds:            (dbIds: number[]) => number[];
   getNodeName:             (dbId: number) => string | null;
   getChildCount:           (dbId: number) => number;
   getNodeInfo:             (dbId: number) => NodeInfo | null;
@@ -126,6 +125,27 @@ export interface ForgeViewerHandle {
   getPropertyHeaders:      () => string[];
   /** True si el GUID index ya está listo (cacheado o recién construido) */
   isGuidIndexReady:        () => boolean;
+  /**
+   * Descubre TODAS las categorías y propiedades del modelo usando getBulkProperties
+   * con muestra estratificada (máx 800 elementos distribuidos por todo el árbol).
+   */
+  discoverPropertyCategories: () => Promise<{ category: string; props: { attributeName: string; displayName: string }[] }[]>;
+  /**
+   * Carga propiedades de múltiples elementos en una sola llamada batch (getBulkProperties).
+   * @param dbIds Lista de dbIds a consultar
+   * @param propNames Array de displayNames/attributeNames a extraer. Si está vacío, extrae todos.
+   * @returns Array de { dbId, name, props: Record<propName, string> }
+   */
+  loadBulkElementProps: (
+    dbIds: number[],
+    propNames: string[]
+  ) => Promise<{ dbId: number; name: string; props: Record<string, string> }[]>;
+  /**
+   * Construye el árbol de propiedades completo del modelo: Categoría → Propiedad → Valor → dbIds[].
+   * Usa getBulkProperties con todos los elementos del árbol de instancias (sin muestreo).
+   * @returns Estructura jerárquica lista para renderizar el árbol de selección.
+   */
+  buildPropTreeData: () => Promise<{ category: string; props: { attributeName: string; displayName: string; values: { value: string; dbIds: number[]; count: number }[] }[] }[]>;
 }
 
 interface ForgeViewerProps {
@@ -422,7 +442,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         );
 
         // UNA SOLA invalidation para todos los cambios
-        v.impl?.invalidate(false, false, true);
+        v.impl?.invalidate(true, true, true);
       },
 
       hide: (dbIds) => {
@@ -436,8 +456,14 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
       },
 
       showAll: () => {
-        if (!viewerRef.current) return;
-        viewerRef.current.showAll();
+        const v = viewerRef.current;
+        if (!v) return;
+        // Autodesk viewer's showAll() clears section planes. We need to save and restore them.
+        const cutPlanes = v.getCutPlanes ? v.getCutPlanes() : [];
+        v.showAll();
+        if (cutPlanes && cutPlanes.length > 0 && v.setCutPlanes) {
+          v.setCutPlanes(cutPlanes);
+        }
       },
 
       select: (dbIds) => {
@@ -486,6 +512,14 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
           });
         }, false);
         return children;
+      },
+
+      getNodeName: (dbId: number): string | null => {
+        if (!modelRef.current) return null;
+        const tree = modelRef.current.getInstanceTree?.();
+        if (!tree) return null;
+        const raw = tree.getNodeName(dbId);
+        return typeof raw === 'string' ? raw || null : null;
       },
 
       getChildCount: (dbId: number): number => {
@@ -587,7 +621,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         try {
           const mapping = await new Promise<Record<string, number>>((res, rej) => {
             const timeout = setTimeout(() => rej(new Error('Mapping timeout')), 10000);
-            modelRef.current!.getExternalIdMapping((m) => { clearTimeout(timeout); res(m); }, (err) => { clearTimeout(timeout); rej(err); });
+            modelRef.current!.getExternalIdMapping((m: Record<string, number>) => { clearTimeout(timeout); res(m); }, (err: any) => { clearTimeout(timeout); rej(err); });
           });
           const set = new Set(externalIds);
           const result: number[] = [];
@@ -1074,11 +1108,207 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         console.log('[BIM] Índice pre-cargado (loadCachedIndex)');
       },
 
+      loadBulkElementProps: (dbIds: number[], propNames: string[]) =>
+        // waitForTree garantiza que el instance tree esté listo antes de hacer traversal
+        waitForTree().then(() => new Promise<{ dbId: number; name: string; props: Record<string, string> }[]>((resolve, reject) => {
+          if (!modelRef.current) { reject(new Error('Modelo no cargado')); return; }
+          const model = modelRef.current as any;
+          const tree = model.getInstanceTree?.();
+          if (!tree) { reject(new Error('Instance tree no disponible')); return; }
+
+          // Paso 1: construir mapa completo child→parent recorriendo el árbol desde la raíz.
+          // getNodeParentId no existe en el SDK — la única forma confiable es traversal desde raíz.
+          const parentMap = new Map<number, number>();
+          const buildParents = (pid: number) => {
+            tree.enumNodeChildren(pid, (cid: number) => {
+              parentMap.set(cid, pid);
+              buildParents(cid);
+            }, false);
+          };
+          buildParents(tree.getRootId());
+
+          // Paso 2: para cada leaf dbId, subir hasta 4 niveles y añadir ancestros al fetch
+          const toFetch = new Set<number>(dbIds);
+          for (const dbId of dbIds) {
+            let pid = parentMap.get(dbId) ?? 0;
+            for (let lvl = 0; pid > 0 && lvl < 4; lvl++) {
+              toFetch.add(pid);
+              pid = parentMap.get(pid) ?? 0;
+            }
+          }
+
+          // Paso 3: un solo getBulkProperties para todos los dbIds + ancestros
+          const filter = propNames.length > 0 ? propNames : null;
+          model.getBulkProperties(
+            Array.from(toFetch),
+            filter,
+            (results: any[]) => {
+              // Índice dbId → {name, props}
+              const byId = new Map<number, { name: string; props: Record<string, string> }>();
+              for (const r of results) {
+                const props: Record<string, string> = {};
+                for (const p of (r.properties ?? [])) {
+                  const val = p.displayValue != null ? String(p.displayValue) : '';
+                  const dn: string = p.displayName || '';
+                  const an: string = p.attributeName || '';
+                  if (dn) { props[dn] = val; props[dn.toUpperCase()] = val; }
+                  if (an && an !== dn) { props[an] = val; props[an.toUpperCase()] = val; }
+                }
+                byId.set(r.dbId, { name: r.name ?? String(r.dbId), props });
+              }
+
+              // Paso 4: fusionar props de ancestros — padre solo rellena lo que el hijo no tiene
+              const out: { dbId: number; name: string; props: Record<string, string> }[] = [];
+              for (const dbId of dbIds) {
+                const own = byId.get(dbId);
+                const merged: Record<string, string> = { ...(own?.props ?? {}) };
+                let pid = parentMap.get(dbId) ?? 0;
+                for (let lvl = 0; pid > 0 && lvl < 4; lvl++) {
+                  const pd = byId.get(pid);
+                  if (pd) {
+                    for (const [k, v] of Object.entries(pd.props)) {
+                      if (v && !merged[k]) merged[k] = v;
+                    }
+                  }
+                  pid = parentMap.get(pid) ?? 0;
+                }
+                out.push({ dbId, name: own?.name ?? String(dbId), props: merged });
+              }
+              resolve(out);
+            },
+            (err: any) => reject(new Error(String(err)))
+          );
+        })),
+
+      discoverPropertyCategories: () => waitForTree().then(() => new Promise((resolve, reject) => {
+        if (!viewerRef.current || !modelRef.current) { reject(new Error('Modelo no cargado')); return; }
+        const tree = modelRef.current.getInstanceTree?.();
+        if (!tree) { reject(new Error('Instance tree no disponible')); return; }
+
+        // Todos los dbIds del modelo
+        const allDbIds: number[] = [];
+        tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
+
+        // Muestra estratificada: hasta 800 elementos distribuidos uniformemente
+        const MAX_SAMPLE = 800;
+        let sample: number[];
+        if (allDbIds.length <= MAX_SAMPLE) {
+          sample = allDbIds;
+        } else {
+          const step = Math.max(1, Math.floor(allDbIds.length / MAX_SAMPLE));
+          sample = allDbIds.filter((_, i) => i % step === 0).slice(0, MAX_SAMPLE);
+        }
+
+        const catMap = new Map<string, Map<string, string>>(); // category → Map<attributeName, displayName>
+
+        (viewerRef.current.model as any).getBulkProperties(
+          sample,
+          null,   // null = todas las propiedades sin filtro
+          (results: any[]) => {
+            for (const r of results) {
+              for (const p of (r.properties ?? [])) {
+                // Usar la categoría real del modelo; si es internal (starts with '__') o vacía, agrupar en 'Other'
+                const rawCat: string = (p.category ?? '');
+                const cat = rawCat.startsWith('__') ? 'Other' : (rawCat || 'Other');
+                if (!catMap.has(cat)) catMap.set(cat, new Map());
+                catMap.get(cat)!.set(p.attributeName ?? p.displayName, p.displayName || p.attributeName);
+              }
+            }
+            const result = Array.from(catMap.entries())
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([category, propsMap]) => ({
+                category,
+                props: Array.from(propsMap.entries())
+                  .map(([attributeName, displayName]) => ({ attributeName, displayName }))
+                  .sort((a, b) => a.displayName.localeCompare(b.displayName)),
+              }));
+            resolve(result);
+          },
+          (err: any) => reject(new Error(String(err)))
+        );
+      })),
+
       getPropertyHeaders: () => propHeadersRef.current,
 
       isGuidIndexReady: () => {
         return propIndexCache.current.has('GUID') || guidIndexRef2.current != null;
       },
+
+      buildPropTreeData: () => waitForTree().then(() => new Promise((resolve, reject) => {
+        if (!viewerRef.current || !modelRef.current) { reject(new Error('Modelo no cargado')); return; }
+        const model = modelRef.current as any;
+        const tree = model.getInstanceTree?.();
+        if (!tree) { reject(new Error('Instance tree no disponible')); return; }
+
+        // Obtener TODOS los dbIds del modelo
+        const allDbIds: number[] = [];
+        tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
+
+        const treeMap = new Map<string, Map<string, Map<string, number[]>>>();
+        const chunkSize = 5000;
+        let currentIndex = 0;
+
+        const processNextChunk = () => {
+          if (!viewerRef.current || !viewerRef.current.model) { reject(new Error('Visor cerrado')); return; }
+          
+          if (currentIndex >= allDbIds.length) {
+            // Todos los chunks procesados, armar resultado
+            const result = Array.from(treeMap.entries())
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([category, catMap]) => ({
+                category,
+                props: Array.from(catMap.entries())
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([attributeName, propMap]) => ({
+                    attributeName,
+                    displayName: attributeName,
+                    values: Array.from(propMap.entries())
+                      .sort(([a], [b]) => a.localeCompare(b))
+                      .map(([value, dbIds]) => ({ value, dbIds, count: dbIds.length })),
+                  }))
+                  .filter(p => p.values.length > 0),
+              }))
+              .filter(c => c.props.length > 0);
+
+            resolve(result);
+            return;
+          }
+
+          const chunk = allDbIds.slice(currentIndex, currentIndex + chunkSize);
+          
+          (viewerRef.current.model as any).getBulkProperties(
+            chunk,
+            null,
+            (results: any[]) => {
+              for (const r of results) {
+                for (const p of (r.properties ?? [])) {
+                  const rawCat: string = p.category ?? '';
+                  if (rawCat.startsWith('__')) continue;
+                  const cat = rawCat || 'Otras';
+                  const attrName: string = p.attributeName ?? p.displayName ?? '';
+                  if (!attrName) continue;
+                  const val = String(p.displayValue ?? '').trim();
+                  if (!val || val === 'None' || val === 'undefined' || val === '') continue;
+
+                  if (!treeMap.has(cat)) treeMap.set(cat, new Map());
+                  const catMap = treeMap.get(cat)!;
+                  if (!catMap.has(attrName)) catMap.set(attrName, new Map());
+                  const propMap = catMap.get(attrName)!;
+                  if (!propMap.has(val)) propMap.set(val, []);
+                  propMap.get(val)!.push(r.dbId);
+                }
+              }
+              
+              currentIndex += chunkSize;
+              // Yield to prevent UI freeze and worker timeout
+              setTimeout(processNextChunk, 10);
+            },
+            (err: any) => reject(new Error(String(err)))
+          );
+        };
+
+        processNextChunk();
+      })),
     }), []);
 
 
@@ -1206,6 +1436,10 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
           // Keep canvas dimensions in sync whenever the container resizes
           resizeObserver = new ResizeObserver(() => { viewer.resize(); });
           resizeObserver.observe(containerRef.current!);
+
+          // Re-sync canvas offset on mouseenter — fixes click offset when browser window is moved
+          const onMouseEnter = () => { viewer.resize(); };
+          containerRef.current!.addEventListener('mouseenter', onMouseEnter);
 
           // Ctrl key tracking — for box-selection accumulation
           const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Control') ctrlHeldRef.current = true; };

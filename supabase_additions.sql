@@ -105,7 +105,8 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- 6. set_bim_linker_key: actualiza UN campo dentro de module_config->'bim_linker'
---    Atómico — una sola query, sin leer antes. Ideal para guardar savedViews rápido.
+--    Atómico — una sola query, sin leer antes. Usa || para manejar la ruta
+--    intermedia 'bim_linker' aunque no exista todavía (jsonb_set no lo hace).
 --    Uso: RPC('set_bim_linker_key', { p_project_id, p_key, p_value })
 CREATE OR REPLACE FUNCTION public.set_bim_linker_key(
   p_project_id UUID,
@@ -115,12 +116,13 @@ CREATE OR REPLACE FUNCTION public.set_bim_linker_key(
 RETURNS VOID AS $$
 BEGIN
   UPDATE public.projects
-  SET module_config = jsonb_set(
-    COALESCE(module_config, '{}'),
-    ARRAY['bim_linker', p_key],
-    COALESCE(p_value, 'null'::jsonb),
-    true   -- create_missing = true
-  )
+  SET module_config =
+    COALESCE(module_config, '{}') ||
+    jsonb_build_object(
+      'bim_linker',
+      COALESCE(module_config -> 'bim_linker', '{}') ||
+      jsonb_build_object(p_key, COALESCE(p_value, 'null'::jsonb))
+    )
   WHERE id = p_project_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

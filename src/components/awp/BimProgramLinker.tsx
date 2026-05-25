@@ -57,7 +57,7 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
   const [selProp, setSelProp] = useState('');
   const [propValues, setPropValues] = useState<{ value: string; count: number }[]>([]);
   const [playing, setPlaying] = useState(false);
-  const [playDay, setPlayDay] = useState(0);
+  const [current4DDate, setCurrent4DDate] = useState<string | null>(null);
   const playRef = useRef(false);
   const colorIdx = useRef(0);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -391,29 +391,91 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
     if (!linkedSets.length) return;
     const vr = viewerRef.current;
     if (!vr) return;
-    playRef.current = true; setPlaying(true);
-    // Sort by activity start_date
-    const sorted = [...linkedSets].sort((a, b) => {
-      const actA = activities.find(x => x.id === a.activityId);
-      const actB = activities.find(x => x.id === b.activityId);
-      return (actA?.start_date ?? '').localeCompare(actB?.start_date ?? '');
-    });
-    vr.showAll(); vr.clearHighlights();
-    let step = 0;
+
+    // Obtener actividades con fechas válidas
+    const acts = linkedSets.map(s => {
+      const act = activities.find(a => a.id === s.activityId);
+      return {
+        set: s,
+        act: act,
+        start: act?.start_date ? new Date(`${act.start_date}T00:00:00`).getTime() : 0,
+        end: act?.end_date ? new Date(`${act.end_date}T00:00:00`).getTime() : 0
+      };
+    }).filter(x => x.start > 0 && x.end > 0);
+
+    if (!acts.length) {
+      alert('Las actividades vinculadas no tienen fechas definidas.');
+      return;
+    }
+
+    const minDate = Math.min(...acts.map(a => a.start));
+    const maxDate = Math.max(...acts.map(a => a.end));
+    const totalDays = Math.ceil((maxDate - minDate) / (1000 * 60 * 60 * 24));
+
+    if (totalDays <= 0) return;
+
+    playRef.current = true; 
+    setPlaying(true);
+    
+    // Ocultar todos los elementos vinculados inicialmente
+    vr.showAll();
+    vr.clearHighlights();
+    const allLinkedIds = acts.flatMap(a => a.set.dbIds);
+    vr.hide(allLinkedIds);
+
+    // Ajustar pasos: si es muy largo, saltar de a varios días, máximo 150 pasos
+    const numSteps = Math.min(150, Math.max(30, totalDays));
+    const msPerStep = (maxDate - minDate) / numSteps;
+    let currentStep = 0;
+
     const timer = setInterval(() => {
-      if (!playRef.current || step >= sorted.length) { clearInterval(timer); setPlaying(false); playRef.current = false; vr.showAll(); return; }
-      const s = sorted[step];
-      const hex = s.color.replace('#', '');
-      const r = parseInt(hex.slice(0, 2), 16) / 255;
-      const g = parseInt(hex.slice(2, 4), 16) / 255;
-      const b = parseInt(hex.slice(4, 6), 16) / 255;
-      vr.highlight(s.dbIds, { r, g, b, a: 0.85 });
-      setPlayDay(step + 1);
-      step++;
-    }, 1500);
+      if (!playRef.current || currentStep > numSteps) { 
+        clearInterval(timer); 
+        setPlaying(false); 
+        playRef.current = false; 
+        vr.showAll(); 
+        vr.clearHighlights(); 
+        setCurrent4DDate(null);
+        return; 
+      }
+      
+      const now = minDate + (currentStep * msPerStep);
+      const dateStr = new Date(now).toISOString().split('T')[0];
+      setCurrent4DDate(dateStr);
+
+      const toShow = new Set<number>();
+      const toHighlight = new Map<string, number[]>(); // hexColor -> dbIds
+
+      for (const item of acts) {
+        if (now >= item.start && now <= item.end) {
+          // En construcción (highlight con su color)
+          item.set.dbIds.forEach(id => toShow.add(id));
+          if (!toHighlight.has(item.set.color)) toHighlight.set(item.set.color, []);
+          toHighlight.get(item.set.color)!.push(...item.set.dbIds);
+        } else if (now > item.end) {
+          // Terminado (se muestra pero sin color de highlight, o con un highlight gris/por defecto)
+          item.set.dbIds.forEach(id => toShow.add(id));
+          // Opcional: highlight gris para los terminados, o dejar su color natural
+        }
+      }
+
+      vr.show(Array.from(toShow));
+      vr.clearHighlights();
+      
+      for (const [color, ids] of toHighlight.entries()) {
+        const hex = color.replace('#', '');
+        const r = parseInt(hex.slice(0, 2), 16) / 255;
+        const g = parseInt(hex.slice(2, 4), 16) / 255;
+        const b = parseInt(hex.slice(4, 6), 16) / 255;
+        vr.highlight(ids, { r, g, b, a: 0.85 });
+      }
+
+      currentStep++;
+    }, 400); // 400ms per frame
+
   }, [linkedSets, activities, viewerRef]);
 
-  const stop4D = useCallback(() => { playRef.current = false; setPlaying(false); viewerRef.current?.showAll(); viewerRef.current?.clearHighlights(); }, [viewerRef]);
+  const stop4D = useCallback(() => { playRef.current = false; setPlaying(false); setCurrent4DDate(null); viewerRef.current?.showAll(); viewerRef.current?.clearHighlights(); }, [viewerRef]);
 
   // Vistas guardadas logic
   const toggleViewCollapse = (viewId: string) => {
@@ -818,7 +880,7 @@ export default function BimProgramLinker({ projectId, viewerRef, viewerReady }: 
                 <Square size={10} /> Detener
               </button>
             )}
-            {playing && <span className="text-[9px] font-bold text-indigo-600">Paso {playDay}/{linkedSets.length}</span>}
+            {playing && current4DDate && <span className="text-[11px] font-black text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded">{current4DDate}</span>}
             <span className="ml-auto text-[9px] text-indigo-400 font-bold">{linkedSets.length} vinculados</span>
           </div>
         )}
