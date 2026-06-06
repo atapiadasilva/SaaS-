@@ -1149,10 +1149,17 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
                 const props: Record<string, string> = {};
                 for (const p of (r.properties ?? [])) {
                   const val = p.displayValue != null ? String(p.displayValue) : '';
-                  const dn: string = p.displayName || '';
-                  const an: string = p.attributeName || '';
-                  if (dn) { props[dn] = val; props[dn.toUpperCase()] = val; }
-                  if (an && an !== dn) { props[an] = val; props[an.toUpperCase()] = val; }
+                  const dn: string  = p.displayName    || '';
+                  const an: string  = p.attributeName  || '';
+                  const dc: string  = p.displayCategory || '';
+
+                  // Category-qualified keys — siempre únicos aunque displayName se repita
+                  if (dc && dn) { props[`${dc}::${dn}`] = val; }
+                  if (dc && an && an !== dn) { props[`${dc}::${an}`] = val; }
+
+                  // Flat keys — primera ocurrencia gana (evita que "Sólido" tape "V.1. 20/65")
+                  if (dn && !(dn in props)) { props[dn] = val; props[dn.toUpperCase()] = val; }
+                  if (an && an !== dn && !(an in props)) { props[an] = val; props[an.toUpperCase()] = val; }
                 }
                 byId.set(r.dbId, { name: r.name ?? String(r.dbId), props });
               }
@@ -1249,7 +1256,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         let currentIndex = 0;
 
         const processNextChunk = () => {
-          if (!viewerRef.current || !viewerRef.current.model) { reject(new Error('Visor cerrado')); return; }
+          if (!viewerRef.current || !viewerRef.current.model) { resolve([]); return; }
           
           if (currentIndex >= allDbIds.length) {
             // Todos los chunks procesados, armar resultado

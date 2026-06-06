@@ -2,33 +2,18 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Database, CalendarDays, Layers, Box, FileText, Users, ShieldCheck, MonitorPlay, GitBranch, Target, Cpu, Construction, Table2, Zap, ClipboardList, Eye } from 'lucide-react';
+import { Zap, ClipboardList, Eye } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// Catálogo local de módulos — los iconos no pueden pasar de Server a Client Component
-const MODULE_NAV: Record<string, { label: string; icon: React.ElementType; path: string }> = {
-  awp:       { label: 'Datos AWP',     icon: Database,        path: 'cwp'       },
-  programa:  { label: 'Programa',      icon: CalendarDays,    path: 'programa'  },
-  cwp:       { label: 'CWP Explorer',  icon: Layers,          path: 'cwp'       },
-  '4d':      { label: 'Secuenciador 4D', icon: LayoutDashboard, path: '4d'       },
-  bim:       { label: 'Visor BIM',     icon: Box,             path: 'bim'       },
-  vistas3d:  { label: 'Vistas 3D',     icon: MonitorPlay,     path: 'vistas3d'  },
-  tidp:      { label: 'TIDP',           icon: GitBranch,       path: 'tidp'      },
-  '90dias':  { label: 'Plan 90 Días',  icon: Target,          path: '90dias'    },
-  documents: { label: 'Documentos',    icon: FileText,        path: 'documents' },
-  team:      { label: 'Equipo',        icon: Users,           path: 'team'      },
-  roles:     { label: 'Roles',         icon: ShieldCheck,     path: 'roles'     },
-  model:        { label: 'Datos Modelo',   icon: Cpu,          path: 'model'        },
-  disciplinas:  { label: 'Por Disciplina', icon: Construction, path: 'disciplinas'  },
-  cubicacion:   { label: 'Cubicación',     icon: Table2,       path: 'cubicacion'   },
-  costanera:    { label: 'AWP Costanera',  icon: Zap,          path: 'costanera'    },
-  lps:          { label: 'LPS + AWP',      icon: ClipboardList, path: 'lps'         },
-  vistas:       { label: 'Vistas AWP',     icon: Eye,           path: 'vistas'      },
-};
+const MODULE_NAV = {
+  costanera: { label: 'AWP Costanera', icon: Zap,          path: 'costanera' },
+  lps:       { label: 'LPS + AWP',     icon: ClipboardList, path: 'lps'      },
+  vistas:    { label: 'Vistas AWP',    icon: Eye,           path: 'vistas'   },
+} as const;
 
 interface Props {
-  orgSlug: string;
-  projectId: string;
+  orgSlug:          string;
+  projectId:        string;
   activeModuleKeys: string[];
 }
 
@@ -36,32 +21,25 @@ export function ProjectNavBar({ orgSlug, projectId, activeModuleKeys }: Props) {
   const pathname = usePathname();
   const base = `/${orgSlug}/projects/${projectId}`;
 
-  const linkCls = (href: string) =>
-    cn(
-      'flex items-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-black uppercase tracking-wide transition whitespace-nowrap shrink-0',
-      pathname === href || pathname.startsWith(href + '/')
-        ? 'bg-primary/10 text-primary'
-        : 'text-slate-500 hover:bg-muted'
-    );
-
   return (
-    <nav className="flex items-center gap-1 flex-1 justify-center overflow-x-auto">
-      <Link href={base} className={linkCls(base)}>
-        <LayoutDashboard className="w-3.5 h-3.5" />
-        Resumen
-      </Link>
-
-      {activeModuleKeys.length > 0 && (
-        <div className="w-px h-5 bg-border mx-1 shrink-0" />
-      )}
-
+    <nav className="flex items-center gap-1">
       {activeModuleKeys.map(key => {
-        const mod = MODULE_NAV[key];
+        const mod = MODULE_NAV[key as keyof typeof MODULE_NAV];
         if (!mod) return null;
         const Icon = mod.icon;
         const href = `${base}/${mod.path}`;
+        const isActive = pathname === href || pathname.startsWith(href + '/');
         return (
-          <Link key={key} href={href} className={linkCls(href)}>
+          <Link
+            key={key}
+            href={href}
+            className={cn(
+              'flex items-center gap-1.5 px-4 py-2 rounded-lg text-[11px] font-black uppercase tracking-wide transition whitespace-nowrap',
+              isActive
+                ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                : 'text-slate-500 hover:text-white hover:bg-white/5 border border-transparent'
+            )}
+          >
             <Icon className="w-3.5 h-3.5" />
             {mod.label}
           </Link>
