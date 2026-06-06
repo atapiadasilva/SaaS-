@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Database, CalendarDays, Layers, Box, FileText, Users, ShieldCheck, MonitorPlay, GitBranch, Target, Cpu, Construction } from 'lucide-react';
+import { LayoutDashboard, Database, CalendarDays, Layers, Box, FileText, Users, ShieldCheck, MonitorPlay, GitBranch, Target, Cpu, Construction, Table2, Zap, ClipboardList, Eye } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // Catálogo local de módulos — los iconos no pueden pasar de Server a Client Component
@@ -20,6 +20,10 @@ const MODULE_NAV: Record<string, { label: string; icon: React.ElementType; path:
   roles:     { label: 'Roles',         icon: ShieldCheck,     path: 'roles'     },
   model:        { label: 'Datos Modelo',   icon: Cpu,          path: 'model'        },
   disciplinas:  { label: 'Por Disciplina', icon: Construction, path: 'disciplinas'  },
+  cubicacion:   { label: 'Cubicación',     icon: Table2,       path: 'cubicacion'   },
+  costanera:    { label: 'AWP Costanera',  icon: Zap,          path: 'costanera'    },
+  lps:          { label: 'LPS + AWP',      icon: ClipboardList, path: 'lps'         },
+  vistas:       { label: 'Vistas AWP',     icon: Eye,           path: 'vistas'      },
 };
 
 interface Props {
