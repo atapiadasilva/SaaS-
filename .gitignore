@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# claude code (internal state, no es parte del proyecto)
+.claude/worktrees/
+.nextdevlogsnext-development.log

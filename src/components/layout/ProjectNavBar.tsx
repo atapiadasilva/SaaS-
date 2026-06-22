@@ -2,13 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Zap, ClipboardList, Eye } from 'lucide-react';
+import { Zap, ClipboardList, Eye, Pickaxe } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const MODULE_NAV = {
-  costanera: { label: 'AWP Costanera', icon: Zap,          path: 'costanera' },
+  awp:       { label: 'Dashboard AWP', icon: Zap,          path: 'awp' },
   lps:       { label: 'LPS + AWP',     icon: ClipboardList, path: 'lps'      },
   vistas:    { label: 'Vistas AWP',    icon: Eye,           path: 'vistas'   },
+  mineria:   { label: 'AWP Minería',   icon: Pickaxe,       path: 'mineria'  },
 } as const;
 
 interface Props {

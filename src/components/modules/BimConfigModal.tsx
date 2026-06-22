@@ -172,7 +172,7 @@ function ACCBrowser({
         <div>
           <p className="text-sm font-black text-slate-800">Conectar con Autodesk</p>
           <p className="text-[11px] text-slate-400 font-medium mt-1 max-w-xs">
-            Para explorar tus modelos en ACC, inicia sesión con tu cuenta de Autodesk.
+            Tu sesión de Autodesk para explorar carpetas de ACC expiró. Esto no afecta el modelo ya vinculado al proyecto — solo es necesario si quieres elegir otro archivo.
           </p>
         </div>
         <a
@@ -368,6 +368,9 @@ export default function BimConfigModal({
   onClose,
 }: BimConfigModalProps) {
   const [mode, setMode] = useState<'browse' | 'manual'>('browse');
+  // Si ya hay un modelo activo, no entres directo al explorador de ACC (eso fuerza un login de Autodesk
+  // aunque el modelo ya esté vinculado y funcionando). Solo se abre si el usuario pide explícitamente cambiarlo.
+  const [wantsToChange, setWantsToChange] = useState(!current?.urn);
   const [pending, setPending] = useState<Pick<BimConfig, 'urn' | 'modelName' | 'projectId' | 'hubId'> | null>(null);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -505,35 +508,46 @@ export default function BimConfigModal({
         </div>
 
         {/* ── Mode tabs ────────────────────────────────────────────────── */}
-        <div className="px-7 shrink-0">
-          <div className="flex bg-slate-100 rounded-2xl p-1 mb-4 gap-1">
-            <button
-              onClick={() => setMode('browse')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all ${
-                mode === 'browse' ? 'bg-white text-[#0C1E4F] shadow-sm' : 'text-slate-400 hover:text-slate-600'
-              }`}
-            >
-              <FolderOpen size={13} /> Explorar ACC
-            </button>
-            <button
-              onClick={() => setMode('manual')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all ${
-                mode === 'manual' ? 'bg-white text-[#0C1E4F] shadow-sm' : 'text-slate-400 hover:text-slate-600'
-              }`}
-            >
-              <Info size={13} /> URN Manual
-            </button>
+        {wantsToChange && (
+          <div className="px-7 shrink-0">
+            <div className="flex bg-slate-100 rounded-2xl p-1 mb-4 gap-1">
+              <button
+                onClick={() => setMode('browse')}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all ${
+                  mode === 'browse' ? 'bg-white text-[#0C1E4F] shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <FolderOpen size={13} /> Explorar ACC
+              </button>
+              <button
+                onClick={() => setMode('manual')}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all ${
+                  mode === 'manual' ? 'bg-white text-[#0C1E4F] shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <Info size={13} /> URN Manual
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* ── Body (scrollable) ─────────────────────────────────────── */}
         <div className="px-7 pb-4 overflow-y-auto flex-1">
 
-          {mode === 'browse' && (
+          {!wantsToChange && (
+            <button
+              onClick={() => setWantsToChange(true)}
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl border-2 border-dashed border-slate-200 text-[11px] font-black text-slate-500 hover:border-[#0C1E4F]/30 hover:text-[#0C1E4F] transition-all uppercase tracking-wide"
+            >
+              <RefreshCw size={13} /> Cambiar modelo vinculado
+            </button>
+          )}
+
+          {wantsToChange && mode === 'browse' && (
             <ACCBrowser projectId={projectId} onSelect={handleSelectFromACC} />
           )}
 
-          {mode === 'manual' && (
+          {wantsToChange && mode === 'manual' && (
             <div className="space-y-4">
               <div className="space-y-2">
                 <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Nombre del Modelo</label>

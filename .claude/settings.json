@@ -2,6 +2,9 @@
   "permissions": {
     "additionalDirectories": [
       "C:\\Users\\atapiad\\.claude\\projects\\c--Users-atapiad--antigravity-SaaS---Data\\memory"
+    ],
+    "allow": [
+      "Bash(git commit -m ' *)"
     ]
   }
 }

@@ -19,7 +19,7 @@ export default function OrganizacionesPage() {
         .single();
 
       if (orgs?.slug && orgs?.projects?.[0]?.id) {
-        window.location.href = `/${orgs.slug}/projects/${orgs.projects[0].id}/costanera`;
+        window.location.href = `/${orgs.slug}/projects/${orgs.projects[0].id}/awp`;
       } else {
         // Fallback: ir al login si no hay proyecto
         window.location.href = '/auth/login';

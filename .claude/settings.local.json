@@ -7,11 +7,18 @@
       "Bash(exit 0)",
       "Bash(cmd /c \"taskkill /PID 33108 /F\")",
       "Bash(python -c \"import subprocess; subprocess.run\\(['taskkill', '/PID', '33108', '/F'], shell=True\\)\")",
-      "Bash(powershell -Command \"Stop-Process -Id 33108 -Force\")"
+      "Bash(powershell -Command \"Stop-Process -Id 33108 -Force\")",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:github.com)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\atapiad\\.antigravity\\SaaS - Data\\src\\app\\api\\autodesk\\oss\\models\\[urn]",
+      "c:\\Users\\atapiad\\.antigravity\\SaaS - Data\\src\\app\\[org_slug]\\projects\\[project_id]"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "supabase"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

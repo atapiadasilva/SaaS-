@@ -2,8 +2,10 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { ProjectNavBar } from "@/components/layout/ProjectNavBar";
 
-// Los 3 módulos de la plataforma — siempre visibles, sin activación en DB
-const ACTIVE_MODULES = ['costanera', 'lps', 'vistas'];
+// Los 3 módulos AWP (edificación) — siempre visibles, sin activación en DB
+const ACTIVE_MODULES = ['awp', 'lps', 'vistas'];
+// Proyectos con data en mining_cwa usan el módulo de minería en vez de los de edificación
+const MINING_MODULES = ['mineria'];
 
 export default async function ProjectLayout({
   children,
@@ -28,8 +30,15 @@ export default async function ProjectLayout({
     redirect("/organizaciones");
   }
 
+  const { count: miningCwaCount } = await (supabase as any)
+    .from("mining_cwa")
+    .select("cwa_id", { count: "exact", head: true })
+    .eq("project_id", project_id);
+
+  const activeModules = (miningCwaCount ?? 0) > 0 ? MINING_MODULES : ACTIVE_MODULES;
+
   return (
-    <div className="min-h-screen bg-[#060d1f] flex flex-col">
+    <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
       <header className="bg-[#0a1628] border-b border-white/5 sticky top-0 z-10 px-6 py-3 flex items-center gap-4">
         {/* Logo */}
         <div className="flex items-center gap-2 shrink-0">
@@ -47,7 +56,7 @@ export default async function ProjectLayout({
           <ProjectNavBar
             orgSlug={org_slug}
             projectId={project_id}
-            activeModuleKeys={ACTIVE_MODULES}
+            activeModuleKeys={activeModules}
           />
         </div>
 
@@ -59,7 +68,7 @@ export default async function ProjectLayout({
         </div>
       </header>
 
-      <div className="p-6 flex-1">
+      <div className="p-6 flex-1 overflow-auto">
         {children}
       </div>
     </div>

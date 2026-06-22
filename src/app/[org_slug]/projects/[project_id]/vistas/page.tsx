@@ -110,7 +110,7 @@ export default function VistasPage({ params }: { params: Promise<{ org_slug: str
 
   // ── Load AWP data.json ────────────────────────────────────────────────────────
   useEffect(() => {
-    fetch('/costanera/data.json').then(r => r.json()).then(d => { awpDataRef.current = d; });
+    fetch(`/costanera/data.json`).then(r => r.json()).then(d => { awpDataRef.current = d; }).catch(() => console.warn('No data.json'));
   }, []);
 
   // ── Handle viewer ready ───────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import {
   Calendar, Target, Clock, AlertTriangle, CheckCircle2,
@@ -54,12 +55,15 @@ const SCREENS: { id: Screen; label: string; sub: string; icon: React.ElementType
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function LpsPage() {
+  const params = useParams<{ project_id: string }>();
+  const project_id = params?.project_id ?? '';
+
   const [data, setData]       = useState<Data | null>(null);
   const [screen, setScreen]   = useState<Screen>('maestra');
   const REF_DATE = '2026-01-26';
 
   useEffect(() => {
-    fetch('/costanera/data.json').then(r => r.json()).then(setData);
+    fetch(`/costanera/data.json`).then(r => r.json()).then(setData).catch(() => console.warn('No data.json'));
   }, []);
 
   const lookaheadCWPs = useMemo(() => {

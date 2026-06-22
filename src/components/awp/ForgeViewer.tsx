@@ -93,8 +93,21 @@ export interface ForgeViewerHandle {
    * @returns Número de elementos que hicieron match
    */
   applyPropertyColorMap:   (propName: string, map: Array<{ value: string; r: number; g: number; b: number; a: number }>) => Promise<number>;
-  /** Resuelve dbIds a partir de un valor de propiedad */
+  /** Resuelve dbIds a partir de un valor de propiedad (1 dbId por valor — usar con propiedades únicas como GUID) */
   resolveByProperty:       (propName: string, values: string[]) => Promise<number[]>;
+  /**
+   * Construye (y cachea) un índice propValue → dbId[] para UNA propiedad del modelo.
+   * Úsalo cuando muchos elementos comparten el mismo valor (ej: CWP, CWA, disciplina).
+   */
+  buildPropertyMultiIndex: (propName: string) => Promise<Record<string, number[]>>;
+  /** Resuelve TODOS los dbIds cuyo valor de propiedad está en `values` (deduplicado) */
+  resolveManyByProperty:   (propName: string, values: string[]) => Promise<number[]>;
+  /**
+   * Igual que applyPropertyColorMap pero pinta TODOS los elementos que comparten cada valor
+   * (no solo uno). Úsalo para "colorear por CWA/CV/CWP" donde un valor agrupa miles de elementos.
+   * @returns Número de elementos pintados (suma de matches, no de valores)
+   */
+  applyPropertyColorMapMulti: (propName: string, map: Array<{ value: string; r: number; g: number; b: number; a: number }>) => Promise<number>;
   /** Construye índice universal: TODAS las propiedades de TODOS los elementos en un solo mapa */
   buildUniversalIndex:     (onProgress?: (pct: number) => void) => Promise<void>;
   /** Aplica colores buscando el value en CUALQUIER propiedad del modelo */
@@ -107,6 +120,10 @@ export interface ForgeViewerHandle {
   isUniversalIndexReady:   () => boolean;
   isolateDbIds:            (dbIds: number[]) => void;
   setGhosting:             (enabled: boolean) => void;
+  /** Pinta dbIds ya resueltos con un color fijo (sin pasar por ningún índice de propiedades) */
+  colorDbIds:              (dbIds: number[], r: number, g: number, b: number, a: number) => void;
+  /** Aísla dbIds; si ghosted=true los no-aislados quedan transparentes (fantasma), si no, ocultos del todo */
+  showOnly:                (dbIds: number[], ghosted: boolean) => void;
   /** Cambia el color de fondo del visor (gradiente r1,g1,b1 -> r2,g2,b2) */
   setBackgroundColor:      (r1: number, g1: number, b1: number, r2: number, g2: number, b2: number) => void;
   /** Activa/desactiva la selección geométrica (profunda) para el barrido */
@@ -292,6 +309,8 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
     const modelRef        = useRef<any>(null);
     // Cache by property name — avoids re-scanning for already indexed properties
     const propIndexCache  = useRef<Map<string, Record<string, number>>>(new Map());
+    // Same idea, but propValue → dbId[] (for properties shared by many elements, e.g. CWP)
+    const propMultiIndexCache = useRef<Map<string, Record<string, number[]>>>(new Map());
     // Universal index: ANY property value → dbId[]
     const universalIndex  = useRef<Record<string, number[]> | null>(null);
     const universalBuildPromise = useRef<Promise<void> | null>(null);
@@ -353,6 +372,83 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         
         treeReadyWaiters.current.push(() => { clearInterval(poller); resolve(); });
       });
+
+    /**
+     * Construye (y cachea) un índice propValue → dbId[] para UNA propiedad, en LOTES de dbIds.
+     * getBulkProperties con decenas de miles de dbIds en una sola llamada puede fallar o truncarse
+     * silenciosamente en el SDK de Forge — por eso se pide en chunks de 2000, igual que el índice universal.
+     */
+    const buildPropIndexChunked = (propName: string): Promise<Record<string, number[]>> => {
+      const cached = propMultiIndexCache.current.get(propName);
+      if (cached) return Promise.resolve(cached);
+      return waitForTree().then(() => new Promise<Record<string, number[]>>((resolve, reject) => {
+        const v = viewerRef.current;
+        const m = modelRef.current;
+        if (!v || !m) { reject(new Error('Modelo no cargado')); return; }
+        const tree = m.getInstanceTree?.();
+        if (!tree) { reject(new Error('Instance tree no disponible')); return; }
+
+        const allDbIds: number[] = [];
+        tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
+
+        const CHUNK_SIZE = 2000;
+        const index: Record<string, number[]> = {};
+        const processChunk = (startIndex: number) => {
+          // Releer en vivo en cada chunk (no la captura de arriba): si el visor/modelo se recarga o
+          // se desmonta mientras esto sigue en curso (varios setTimeout encadenados), v.model puede
+          // quedar undefined y romper con un TypeError no controlado en vez de simplemente abortar.
+          const vNow = viewerRef.current;
+          const mNow = modelRef.current;
+          if (!vNow?.model || !mNow) { reject(new Error('El visor se cerró o recargó antes de terminar')); return; }
+          if (startIndex >= allDbIds.length) {
+            propMultiIndexCache.current.set(propName, index);
+            resolve(index);
+            return;
+          }
+          const chunk = allDbIds.slice(startIndex, startIndex + CHUNK_SIZE);
+          vNow.model.getBulkProperties(
+            chunk, { propFilter: [propName] },
+            (results: any[]) => {
+              for (const r of results) {
+                const prop = (r.properties ?? []).find((p: any) =>
+                  p.displayName === propName || p.attributeName === propName
+                );
+                if (prop?.displayValue == null || prop.displayValue === '') continue;
+                const key = String(prop.displayValue).trim();
+                if (!key) continue;
+                (index[key] ??= []).push(r.dbId);
+              }
+              setTimeout(() => processChunk(startIndex + CHUNK_SIZE), 10);
+            },
+            (err: any) => reject(new Error(String(err)))
+          );
+        };
+        processChunk(0);
+      }));
+    };
+
+    /**
+     * Expande dbIds de nodos de ensamblaje/grupo a sus dbIds HOJA (los que realmente tienen geometría).
+     * setThemingColor no siempre repinta hacia abajo todos los fragmentos de un nodo padre — si el dbId
+     * resuelto por propiedad es un ensamblaje, sus hijos visuales quedaban con el color nativo del CAD
+     * (eso se veía como "confeti" de varios colores dentro de un mismo grupo que debía ser un solo color).
+     */
+    const expandToLeafDbIds = (dbIds: number[]): number[] => {
+      const tree = modelRef.current?.getInstanceTree?.();
+      if (!tree) return dbIds;
+      const leaves: number[] = [];
+      const seen = new Set<number>();
+      const collect = (id: number) => {
+        let hasChild = false;
+        tree.enumNodeChildren(id, (childId: number) => {
+          hasChild = true;
+          collect(childId);
+        }, false);
+        if (!hasChild && !seen.has(id)) { seen.add(id); leaves.push(id); }
+      };
+      for (const id of dbIds) collect(id);
+      return leaves;
+    };
 
     // Expose imperative API
     useImperativeHandle(ref, () => ({
@@ -829,6 +925,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         if (cached) {
           index = cached;
         } else {
+          await waitForTree();
           const tree = modelRef.current.getInstanceTree?.();
           if (!tree) return [];
           const allDbIds: number[] = [];
@@ -854,6 +951,42 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         const set = new Set(values.map(v => String(v).trim()));
         return Object.entries(index).filter(([k]) => set.has(k)).map(([, dbId]) => dbId);
       },
+
+      buildPropertyMultiIndex: (propName: string) => buildPropIndexChunked(propName),
+
+      resolveManyByProperty: async (propName, values) => {
+        const idx = await buildPropIndexChunked(propName);
+        const set = new Set(values.map(v => String(v).trim()));
+        const result: number[] = [];
+        const seen = new Set<number>();
+        for (const key of set) {
+          for (const dbId of (idx[key] ?? [])) {
+            if (!seen.has(dbId)) { seen.add(dbId); result.push(dbId); }
+          }
+        }
+        return result;
+      },
+
+      applyPropertyColorMapMulti: async (propName, map) => {
+        const v = viewerRef.current;
+        if (!v || !modelRef.current) return 0;
+        const idx = await buildPropIndexChunked(propName);
+
+        const t0 = performance.now();
+        let matched = 0;
+        for (const entry of map) {
+          const dbIds = idx[String(entry.value).trim()] ?? [];
+          const color = new (window as any).THREE.Vector4(entry.r, entry.g, entry.b, entry.a);
+          for (const dbId of dbIds) {
+            v.setThemingColor(dbId, color, modelRef.current, false);
+            matched++;
+          }
+        }
+        v.impl?.invalidate(false, false, true);
+        console.debug(`[BIM] applyPropertyColorMapMulti: ${matched} elementos pintados — ${(performance.now()-t0).toFixed(1)}ms`);
+        return matched;
+      },
+
       // ── Universal index ───────────────────────────────────────────────────────
       // Concentra TODAS las propiedades de todos los elementos en un solo mapa.
       // value (normalizado) → dbId
@@ -887,6 +1020,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
             const CHUNK_SIZE = 2000;
 
             const processChunk = async (startIndex: number) => {
+              if (!viewerRef.current?.model) { reject(new Error('El visor se cerró o recargó antes de terminar')); return; }
               if (onProgress) onProgress(Math.min(99, Math.round((startIndex / allDbIds.length) * 100)));
               if (startIndex >= allDbIds.length) {
                 // Convert Sets to arrays for final index
@@ -956,6 +1090,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
             const CHUNK_SIZE = 1000;
 
             const processChunk = async (startIndex: number) => {
+              if (!viewerRef.current?.model) { rej(new Error('El visor se cerró o recargó antes de terminar')); return; }
               if (startIndex >= allDbIds.length) {
                 universalIndex.current = idx;
                 try { await set(`universal-idx-${urn}`, idx); } catch (e) {}
@@ -963,7 +1098,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
                 return;
               }
               const chunk = allDbIds.slice(startIndex, startIndex + CHUNK_SIZE);
-              v.model.getBulkProperties(
+              viewerRef.current.model.getBulkProperties(
                 chunk,
                 null,
                 (results: any[]) => {
@@ -1045,6 +1180,14 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         v.prefs.set('ghosting', enabled);
       },
 
+      colorDbIds: (dbIds, r, g, b, a) => {
+        const v = viewerRef.current;
+        if (!v || !modelRef.current || !dbIds.length) return;
+        const color = new (window as any).THREE.Vector4(r, g, b, a);
+        for (const dbId of expandToLeafDbIds(dbIds)) v.setThemingColor(dbId, color, modelRef.current, false);
+        v.impl?.invalidate(false, false, true);
+      },
+
       setDeepSelection: (enabled) => {
         deepSelectionRef.current = enabled;
         console.log(`[BIM] Selección profunda: ${enabled ? 'ON' : 'OFF'}`);
@@ -1075,9 +1218,23 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
 
       restoreAll: () => {
         const v = viewerRef.current;
+        const m = modelRef.current;
         if (!v) return;
         v.showAll();
         v.clearThemingColors(modelRef.current);
+        const fragList = m?.getFragmentList?.();
+        if (fragList) {
+          const count = fragList.getCount();
+          for (let i = 0; i < count; i++) {
+            const mat = fragList.getMaterial(i);
+            if (mat && (mat.opacity < 1 || mat.transparent)) {
+              mat.opacity = 1;
+              mat.transparent = false;
+              mat.needsUpdate = true;
+            }
+          }
+          v.impl.invalidate(true, true, true);
+        }
       },
 
       removeAllTransparency: () => {
@@ -1095,6 +1252,19 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
             mat.needsUpdate = true;
           }
         }
+        v.impl.invalidate(true, true, true);
+      },
+
+      // Mismo patrón ya probado en SortableSequenceList/BimProgramLinker para 4D: resetear ghosting,
+      // aislar, y solo DESPUÉS activar ghosting si corresponde — el orden importa para que el viewer
+      // re-renderice los no-aislados como fantasma en vez de ocultarlos del todo.
+      showOnly: (dbIds, ghosted) => {
+        const v = viewerRef.current;
+        const m = modelRef.current;
+        if (!v || !m) return;
+        v.prefs.set('ghosting', false);
+        v.isolate(dbIds, m);
+        if (ghosted) v.prefs.set('ghosting', true);
         v.impl.invalidate(true, true, true);
       },
 
