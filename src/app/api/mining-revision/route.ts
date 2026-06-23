@@ -8,6 +8,15 @@ const CATALOG_NAME_COL: Record<Nivel, string> = { cwa: 'cwa_nombre', cv: 'cv_nom
 const NULL_COL: Record<Nivel, string | null> = { cwa: 'cwa_id', cv: 'cv_id', cwp: null };
 const SIN_CODIGO: Record<Nivel, string | null> = { cwa: 'SIN-CWA', cv: 'SIN-CV', cwp: null };
 
+// "{padre}.SIN-CV" / "{padre}.SIN-CWP" son placeholders que crea el PATCH de reasignación cuando se
+// asigna solo el nivel superior (ver fieldsForNivel en /api/mining-elementos) — les da un nombre
+// legible en vez de mostrar el código crudo en el checklist.
+function nombreParaPlaceholder(codigo: string): string | null {
+  if (codigo.endsWith('.SIN-CWP')) return 'Por asignar (sin CWP todavía)';
+  if (codigo.endsWith('.SIN-CV')) return 'Por asignar (sin CV todavía)';
+  return null;
+}
+
 // GET /api/mining-revision?project_id=&nivel=cwa|cv|cwp
 // Checklist de revisión: cada código del nivel (CWA/CV/CWP) con su conteo de elementos en el modelo
 // y su estado de revisión (pendiente / revisado / con_problema), persistido en mining_revision_estado.
@@ -27,7 +36,7 @@ export async function GET(req: NextRequest) {
   const nullCol = NULL_COL[nivel];
   const [bucketsRes, catalogRes, estadoRes, sinAsignarRes] = await Promise.all([
     sb.rpc('mining_elementos_nivel_buckets', { p_project_id: projectId, p_nivel: nivel }),
-    sb.from(CATALOG_TABLE[nivel]).select(`${CATALOG_ID_COL[nivel]}, ${CATALOG_NAME_COL[nivel]}`).eq('project_id', projectId),
+    sb.from(CATALOG_TABLE[nivel]).select(`${CATALOG_ID_COL[nivel]}, ${CATALOG_NAME_COL[nivel]}, es_oficial`).eq('project_id', projectId),
     sb.from('mining_revision_estado').select('codigo, estado, notas, revisado_en').eq('project_id', projectId).eq('nivel', nivel),
     nullCol
       ? sb.from('mining_elementos').select('sp3d_moniker', { count: 'exact', head: true }).eq('project_id', projectId).is(nullCol, null)
@@ -38,7 +47,11 @@ export async function GET(req: NextRequest) {
   if (firstError) return NextResponse.json({ error: firstError.error.message }, { status: 500 });
 
   const nombrePorCodigo = new Map<string, string>();
-  for (const row of catalogRes.data ?? []) nombrePorCodigo.set(row[CATALOG_ID_COL[nivel]], row[CATALOG_NAME_COL[nivel]]);
+  const oficialPorCodigo = new Map<string, boolean>();
+  for (const row of catalogRes.data ?? []) {
+    nombrePorCodigo.set(row[CATALOG_ID_COL[nivel]], row[CATALOG_NAME_COL[nivel]]);
+    oficialPorCodigo.set(row[CATALOG_ID_COL[nivel]], row.es_oficial ?? true);
+  }
 
   const estadoPorCodigo = new Map<string, { estado: string; notas: string | null; revisado_en: string | null }>();
   for (const row of estadoRes.data ?? []) estadoPorCodigo.set(row.codigo, row);
@@ -49,9 +62,10 @@ export async function GET(req: NextRequest) {
     const est = estadoPorCodigo.get(b.codigo);
     return {
       codigo: b.codigo,
-      nombre: nombrePorCodigo.get(b.codigo) ?? null,
+      nombre: nombrePorCodigo.get(b.codigo) ?? nombreParaPlaceholder(b.codigo),
       nElementos: Number(b.n),
       enCatalogo: nombrePorCodigo.has(b.codigo),
+      esOficial: oficialPorCodigo.get(b.codigo) ?? false,
       estado: est?.estado ?? 'pendiente',
       notas: est?.notas ?? null,
       revisadoEn: est?.revisado_en ?? null,
@@ -63,7 +77,7 @@ export async function GET(req: NextRequest) {
     if (codigosVistos.has(codigo)) continue;
     const est = estadoPorCodigo.get(codigo);
     items.push({
-      codigo, nombre, nElementos: 0, enCatalogo: true,
+      codigo, nombre, nElementos: 0, enCatalogo: true, esOficial: oficialPorCodigo.get(codigo) ?? false,
       estado: est?.estado ?? 'pendiente', notas: est?.notas ?? null, revisadoEn: est?.revisado_en ?? null,
     });
   }
@@ -75,7 +89,7 @@ export async function GET(req: NextRequest) {
   if (sinCodigo && sinCount > 0) {
     const est = estadoPorCodigo.get(sinCodigo);
     items.push({
-      codigo: sinCodigo, nombre: `Sin ${nivel.toUpperCase()} asignado (revisar / clasificar)`, nElementos: sinCount, enCatalogo: false,
+      codigo: sinCodigo, nombre: `Sin ${nivel.toUpperCase()} asignado (revisar / clasificar)`, nElementos: sinCount, enCatalogo: false, esOficial: false,
       estado: est?.estado ?? 'pendiente', notas: est?.notas ?? null, revisadoEn: est?.revisado_en ?? null,
     });
   }

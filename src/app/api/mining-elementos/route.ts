@@ -18,11 +18,17 @@ type Nivel = 'cwa' | 'cv' | 'cwp';
 
 // 'SIN-CWA'/'SIN-CV' son pseudo-códigos de UI para los elementos sin clasificar (cwa_id/cv_id en
 // NULL en la BD) — si se "reasignan" hacia allá, el valor real a guardar es NULL, no el string literal.
+//
+// Al asignar SOLO un CWA (sin CV) o SOLO un CV (sin CWP), el nivel inferior NO se deja en NULL —
+// se le pone un placeholder "{padre}.SIN-CV" / "{padre}.SIN-CWP" para que el elemento siga
+// apareciendo, agrupado bajo su padre real, como "por asignar" en el checklist/árbol de ese nivel
+// (en vez de caer en un balde global SIN-CV/SIN-CWP sin relación con el CWA/CV que sí se le asignó).
 function fieldsForNivel(nivel: Nivel, trimmed: string): Record<string, string | null> {
   if (trimmed === 'SIN-CWA' || trimmed === 'SIN-CV') return { cwa_id: null, cv_id: null, cwp_id: null };
   if (nivel === 'cwp') return { cwp_id: trimmed, ...deriveCwaCv(trimmed) };
-  if (nivel === 'cv') return { cv_id: trimmed, cwa_id: trimmed.slice(0, 4), cwp_id: null };
-  return { cwa_id: trimmed, cv_id: null, cwp_id: null }; // 'cwa'
+  if (nivel === 'cv') return { cv_id: trimmed, cwa_id: trimmed.slice(0, 4), cwp_id: `${trimmed}.SIN-CWP` };
+  const cv = `${trimmed}.SIN-CV`;
+  return { cwa_id: trimmed, cv_id: cv, cwp_id: `${cv}.SIN-CWP` }; // 'cwa'
 }
 
 // Filtros de igualdad simple param/match-key → columna real. Mantener en sync con FILTER_FIELDS
@@ -36,6 +42,24 @@ const SIMPLE_EQ_FIELDS: Record<string, string> = {
   vinculoNivel: 'vinculo_nivel', categoriaEnlace: 'categoria_enlace', codigoBmp: 'codigo_bmp',
 };
 
+// Columnas de TEXTO sobre las que busca el buscador libre — independiente de cuáles columnas estén
+// prendidas/apagadas en la tabla (eso es solo presentación). Cubre todas las columnas de texto que
+// existen en mining_elementos, no solo las 4 originales, para que buscar "Demoliciones" (disciplina),
+// un código CWA/CV/CWP, un sitio, etc. funcione aunque esa columna esté oculta en el picker de columnas.
+const SEARCH_COLUMNS = [
+  'sp3d_moniker', 'name', 'descripcion', 'tipo_elemento', 'disciplina', 'sector', 'especialidad_cod',
+  'especialidad_nombre', 'categoria_constructiva', 'sitio', 'area_unidad', 'sistema_servicio', 'obra_tipo',
+  'alcance', 'estado', 'item_o_adicional', 'validado', 'motivo_no_valido', 'disciplina_modelo',
+  'disciplina_arbol', 'obra_target', 'cwp_fuente', 'vinculo_nivel', 'categoria_enlace', 'codigo_bmp',
+  'bmp_nombre', 'material', 'tag_equipo', 'tag_unificado', 'iwp_id', 'ewp_id', 'comwp_id', 'wbs',
+  'pwp_elemento', 'obra_raw', 'cwp_arbol', 'vinculo_fuente', 'especificacion', 'pipeline_linea', 'spool',
+  'pid', 'isometrico', 'cwp_id', 'cwa_id', 'cv_id',
+];
+
+function searchOrClause(s: string): string {
+  return SEARCH_COLUMNS.map(col => `${col}.ilike.%${s}%`).join(',');
+}
+
 function applyMatchFilter(query: any, monikers: string[] | undefined, match: any) {
   if (Array.isArray(monikers) && monikers.length) return query.in('sp3d_moniker', monikers);
   if (!match) return query;
@@ -46,7 +70,7 @@ function applyMatchFilter(query: any, monikers: string[] | undefined, match: any
   }
   if (match.search) {
     const s = String(match.search).replace(/[%,]/g, '');
-    query = query.or(`sp3d_moniker.ilike.%${s}%,name.ilike.%${s}%,descripcion.ilike.%${s}%,tipo_elemento.ilike.%${s}%`);
+    query = query.or(searchOrClause(s));
   }
   return query;
 }
@@ -69,7 +93,7 @@ function applyFilters(query: any, params: URLSearchParams) {
   const search = params.get('search')?.trim();
   if (search) {
     const s = search.replace(/[%,]/g, '');
-    query = query.or(`sp3d_moniker.ilike.%${s}%,name.ilike.%${s}%,descripcion.ilike.%${s}%,tipo_elemento.ilike.%${s}%`);
+    query = query.or(searchOrClause(s));
   }
   return query;
 }
@@ -120,34 +144,46 @@ export async function PATCH(req: NextRequest) {
   if (!(Array.isArray(monikers) && monikers.length) && !match) {
     return NextResponse.json({ error: 'Provide monikers[] or match{}' }, { status: 400 });
   }
-
-  const sb = supabase as any;
-  const trimmed = newValueRaw.trim();
-  const fields = fieldsForNivel(nivel, trimmed);
-
-  let beforeQuery = sb.from('mining_elementos').select('sp3d_moniker, cwa_id, cv_id, cwp_id').eq('project_id', project_id);
-  beforeQuery = applyMatchFilter(beforeQuery, monikers, match);
-  const { data: before, error: beforeErr } = await beforeQuery;
-  if (beforeErr) return NextResponse.json({ error: beforeErr.message }, { status: 500 });
-  if (!before?.length) return NextResponse.json({ updated: 0 });
-
-  let updateQuery = sb.from('mining_elementos').update(fields).eq('project_id', project_id);
-  updateQuery = applyMatchFilter(updateQuery, monikers, match);
-  const { data: updated, error } = await updateQuery.select('sp3d_moniker');
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  const campos = (['cwa_id', 'cv_id', 'cwp_id'] as const).filter(c => c in fields);
-  const logRows = before.flatMap((row: any) => campos
-    .filter(campo => row[campo] !== fields[campo])
-    .map(campo => ({
-      project_id, sp3d_moniker: row.sp3d_moniker, campo,
-      valor_anterior: row[campo], valor_nuevo: fields[campo],
-      origen: origen ?? `revision_${nivel}`, usuario_id: user.id,
-    })));
-  if (logRows.length) {
-    const { error: logErr } = await sb.from('mining_cambios_log').insert(logRows);
-    if (logErr) console.error('[mining-elementos] error guardando log de cambios:', logErr.message);
+  // Supabase/PostgREST codifica `.in('sp3d_moniker', [...])` en el query string de su propia URL interna
+  // — una lista de varios cientos de monikers la hace demasiado larga y la request falla a nivel de
+  // transporte (sin {error} estructurado). El cliente ya manda chunks acotados por largo codificado
+  // (ver chunkMonikersForUrl en el frontend), pero igual lo topamos acá por si alguien manda un batch crudo.
+  if (Array.isArray(monikers) && monikers.length > 300) {
+    return NextResponse.json({ error: `Demasiados monikers en un solo PATCH (${monikers.length}) — el cliente debe enviarlos en lotes más chicos.` }, { status: 400 });
   }
 
-  return NextResponse.json({ updated: updated?.length ?? 0 });
+  try {
+    const sb = supabase as any;
+    const trimmed = newValueRaw.trim();
+    const fields = fieldsForNivel(nivel, trimmed);
+
+    let beforeQuery = sb.from('mining_elementos').select('sp3d_moniker, cwa_id, cv_id, cwp_id').eq('project_id', project_id);
+    beforeQuery = applyMatchFilter(beforeQuery, monikers, match);
+    const { data: before, error: beforeErr } = await beforeQuery;
+    if (beforeErr) return NextResponse.json({ error: beforeErr.message }, { status: 500 });
+    if (!before?.length) return NextResponse.json({ updated: 0 });
+
+    let updateQuery = sb.from('mining_elementos').update(fields).eq('project_id', project_id);
+    updateQuery = applyMatchFilter(updateQuery, monikers, match);
+    const { data: updated, error } = await updateQuery.select('sp3d_moniker');
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    const campos = (['cwa_id', 'cv_id', 'cwp_id'] as const).filter(c => c in fields);
+    const logRows = before.flatMap((row: any) => campos
+      .filter(campo => row[campo] !== fields[campo])
+      .map(campo => ({
+        project_id, sp3d_moniker: row.sp3d_moniker, campo,
+        valor_anterior: row[campo], valor_nuevo: fields[campo],
+        origen: origen ?? `revision_${nivel}`, usuario_id: user.id,
+      })));
+    if (logRows.length) {
+      const { error: logErr } = await sb.from('mining_cambios_log').insert(logRows);
+      if (logErr) console.error('[mining-elementos] error guardando log de cambios:', logErr.message);
+    }
+
+    return NextResponse.json({ updated: updated?.length ?? 0 });
+  } catch (e: any) {
+    console.error('[mining-elementos] PATCH inesperado:', e);
+    return NextResponse.json({ error: e?.message ?? 'Error inesperado en el servidor' }, { status: 500 });
+  }
 }
