@@ -9,7 +9,7 @@ import type { ForgeViewerHandle } from '@/components/awp/ForgeViewer';
 import BimConfigModal, { type BimConfig } from '@/components/modules/BimConfigModal';
 import {
   Search, Box, Settings, Loader2, FileText, Calendar, Package, ListTree, X, ListChecks,
-  CheckSquare, Square, ChevronDown, ChevronRight, Crosshair, Columns3,
+  CheckSquare, Square, ChevronDown, ChevronRight, Crosshair, Columns3, Layers,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -83,9 +83,6 @@ export default function MineriaPage() {
 
   // Propiedad nativa en el modelo (SmartPlant3D → Navisworks → Forge) que trae el código CWP por elemento
   const CWP_PROP = 'CWP';
-  // Clave real de enlace al modelo: la pestaña/categoría "DATA_EIMISA" escrita por el plugin
-  // DataTools trae la propiedad SP3D_MONIKER (no la genérica "SP3d Moniker" de SmartPlant).
-  const MONIKER_PROP = 'SP3D_MONIKER';
   const [pendingMonikers, setPendingMonikers] = useState<string[] | null>(null);
 
   const onResizeStart = useCallback((e: React.MouseEvent) => {
@@ -197,7 +194,7 @@ export default function MineriaPage() {
     (async () => {
       setViewerStatus(`Aislando ${monikers.length} elemento(s) del itemizado…`);
       try {
-        const dbIds = await viewerRef.current!.resolveManyByProperty(MONIKER_PROP, monikers);
+        const dbIds = await viewerRef.current!.resolveMonikers(monikers);
         setMatchCount(dbIds.length);
         if (dbIds.length) { viewerRef.current!.isolate(dbIds); viewerRef.current!.fitToView(dbIds); }
       } finally {
@@ -240,6 +237,12 @@ export default function MineriaPage() {
           className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
         >
           <ListChecks className="w-3.5 h-3.5" /> Editor de Elementos
+        </Link>
+        <Link
+          href={`/${org_slug}/projects/${project_id}/mineria/sistemas`}
+          className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
+        >
+          <Layers className="w-3.5 h-3.5" /> Sistemas
         </Link>
         <button
           onClick={() => setShowPicker(true)}

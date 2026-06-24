@@ -14,7 +14,7 @@ function deriveCwaCv(cwpId: string): { cwa_id: string | null; cv_id: string | nu
   return { cwa_id: cv.slice(0, 4), cv_id: cv };
 }
 
-type Nivel = 'cwa' | 'cv' | 'cwp';
+type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
 
 // 'SIN-CWA'/'SIN-CV' son pseudo-códigos de UI para los elementos sin clasificar (cwa_id/cv_id en
 // NULL en la BD) — si se "reasignan" hacia allá, el valor real a guardar es NULL, no el string literal.
@@ -23,7 +23,11 @@ type Nivel = 'cwa' | 'cv' | 'cwp';
 // se le pone un placeholder "{padre}.SIN-CV" / "{padre}.SIN-CWP" para que el elemento siga
 // apareciendo, agrupado bajo su padre real, como "por asignar" en el checklist/árbol de ese nivel
 // (en vez de caer en un balde global SIN-CV/SIN-CWP sin relación con el CWA/CV que sí se le asignó).
+//
+// SWP (System Work Package) es una clasificación INDEPENDIENTE y EN PARALELO a CWA/CV/CWP — un
+// elemento puede tener ambas a la vez, así que no deriva ni limpia los campos cwa/cv/cwp.
 function fieldsForNivel(nivel: Nivel, trimmed: string): Record<string, string | null> {
+  if (nivel === 'swp') return { swp_id: trimmed === 'SIN-SWP' ? null : trimmed };
   if (trimmed === 'SIN-CWA' || trimmed === 'SIN-CV') return { cwa_id: null, cv_id: null, cwp_id: null };
   if (nivel === 'cwp') return { cwp_id: trimmed, ...deriveCwaCv(trimmed) };
   if (nivel === 'cv') return { cv_id: trimmed, cwa_id: trimmed.slice(0, 4), cwp_id: `${trimmed}.SIN-CWP` };
@@ -137,7 +141,7 @@ export async function PATCH(req: NextRequest) {
 
   const body = await req.json();
   const { project_id, monikers, match, origen } = body ?? {};
-  const nivel: Nivel = ['cwa', 'cv', 'cwp'].includes(body?.nivel) ? body.nivel : 'cwp';
+  const nivel: Nivel = ['cwa', 'cv', 'cwp', 'swp'].includes(body?.nivel) ? body.nivel : 'cwp';
   const newValueRaw = body?.newValue ?? body?.newCwpId;
   if (!project_id) return NextResponse.json({ error: 'Missing project_id' }, { status: 400 });
   if (typeof newValueRaw !== 'string' || !newValueRaw.trim()) return NextResponse.json({ error: 'Missing newValue/newCwpId' }, { status: 400 });
@@ -157,31 +161,60 @@ export async function PATCH(req: NextRequest) {
     const trimmed = newValueRaw.trim();
     const fields = fieldsForNivel(nivel, trimmed);
 
-    let beforeQuery = sb.from('mining_elementos').select('sp3d_moniker, cwa_id, cv_id, cwp_id').eq('project_id', project_id);
+    let beforeQuery = sb.from('mining_elementos').select('sp3d_moniker, cwa_id, cv_id, cwp_id, swp_id').eq('project_id', project_id);
     beforeQuery = applyMatchFilter(beforeQuery, monikers, match);
     const { data: before, error: beforeErr } = await beforeQuery;
     if (beforeErr) return NextResponse.json({ error: beforeErr.message }, { status: 500 });
-    if (!before?.length) return NextResponse.json({ updated: 0 });
 
-    let updateQuery = sb.from('mining_elementos').update(fields).eq('project_id', project_id);
-    updateQuery = applyMatchFilter(updateQuery, monikers, match);
-    const { data: updated, error } = await updateQuery.select('sp3d_moniker');
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    let updated: any[] = [];
+    if (before?.length) {
+      let updateQuery = sb.from('mining_elementos').update(fields).eq('project_id', project_id);
+      updateQuery = applyMatchFilter(updateQuery, monikers, match);
+      const { data, error } = await updateQuery.select('sp3d_moniker');
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      updated = data ?? [];
+    }
 
-    const campos = (['cwa_id', 'cv_id', 'cwp_id'] as const).filter(c => c in fields);
-    const logRows = before.flatMap((row: any) => campos
+    const campos = (['cwa_id', 'cv_id', 'cwp_id', 'swp_id'] as const).filter(c => c in fields);
+    const logRows = (before ?? []).flatMap((row: any) => campos
       .filter(campo => row[campo] !== fields[campo])
       .map(campo => ({
         project_id, sp3d_moniker: row.sp3d_moniker, campo,
         valor_anterior: row[campo], valor_nuevo: fields[campo],
         origen: origen ?? `revision_${nivel}`, usuario_id: user.id,
       })));
+
+    // Elementos del modelo que YA tienen un SP3D_MONIKER real (el visor lo lee de la propiedad nativa)
+    // pero que nunca llegaron a esta tabla — el itemizado importado desde SmartPlant 3D no los incluyó
+    // (ej. geometría agregada al modelo después del último export). Solo aplica cuando vienen `monikers[]`
+    // explícitos (clasificación puntual desde el visor) — un `match` masivo nunca debería "inventar" filas.
+    let created = 0;
+    if (Array.isArray(monikers) && monikers.length) {
+      const foundSet = new Set((before ?? []).map((r: any) => r.sp3d_moniker));
+      const missing = monikers.filter((m: string) => !foundSet.has(m));
+      if (missing.length) {
+        const names = (body?.monikerNames ?? {}) as Record<string, string>;
+        const newRows = missing.map((m: string) => ({ project_id, sp3d_moniker: m, name: names[m] ?? null, ...fields }));
+        const { error: insErr } = await sb.from('mining_elementos').upsert(newRows, { onConflict: 'project_id,sp3d_moniker' });
+        if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
+        created = missing.length;
+        for (const m of missing) {
+          for (const campo of campos) {
+            logRows.push({
+              project_id, sp3d_moniker: m, campo, valor_anterior: null, valor_nuevo: (fields as any)[campo],
+              origen: origen ? `${origen}_nuevo_del_modelo` : `revision_${nivel}_nuevo_del_modelo`, usuario_id: user.id,
+            });
+          }
+        }
+      }
+    }
+
     if (logRows.length) {
       const { error: logErr } = await sb.from('mining_cambios_log').insert(logRows);
       if (logErr) console.error('[mining-elementos] error guardando log de cambios:', logErr.message);
     }
 
-    return NextResponse.json({ updated: updated?.length ?? 0 });
+    return NextResponse.json({ updated: updated.length, created });
   } catch (e: any) {
     console.error('[mining-elementos] PATCH inesperado:', e);
     return NextResponse.json({ error: e?.message ?? 'Error inesperado en el servidor' }, { status: 500 });

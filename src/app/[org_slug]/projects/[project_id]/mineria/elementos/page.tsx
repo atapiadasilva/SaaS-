@@ -10,7 +10,7 @@ import BimConfigModal, { type BimConfig } from '@/components/modules/BimConfigMo
 import {
   Search, Box, Settings, Loader2, X, ArrowLeft, ChevronLeft, ChevronRight, ChevronDown,
   CheckSquare, Square, ArrowRightCircle, Crosshair, Palette, ListTree, SlidersHorizontal, Columns3, Eraser, Save, Plus, GitBranch,
-  Paintbrush, Ghost, Eye, MousePointerClick, StopCircle, Download,
+  Paintbrush, Ghost, Eye, MousePointerClick, StopCircle, Download, RotateCcw, Layers, RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -89,8 +89,8 @@ async function runWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
   return results;
 }
 
-type Nivel = 'cwa' | 'cv' | 'cwp';
-const NIVEL_LABEL: Record<Nivel, string> = { cwa: 'CWA', cv: 'CV', cwp: 'CWP' };
+type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
+const NIVEL_LABEL: Record<Nivel, string> = { cwa: 'CWA', cv: 'CV', cwp: 'CWP', swp: 'SWP' };
 // Paleta cíclica para distinguir grupos al colorear (rota cada ~16 valores)
 const COLOR_PAL = [
   [21,101,192],[230,81,0],[0,105,92],[173,20,87],[94,53,177],[201,161,0],[46,125,50],[141,110,99],
@@ -133,7 +133,7 @@ interface PaintTarget { nivel: Nivel; codigo: string; r: number; g: number; b: n
 interface Elemento {
   sp3d_moniker: string; name: string | null; tag_equipo: string | null; disciplina: string | null; descripcion: string | null;
   tipo_elemento: string | null; sector: string | null; area_unidad: string | null; cwp_id: string | null;
-  cwa_id: string | null; cv_id: string | null;
+  cwa_id: string | null; cv_id: string | null; swp_id: string | null;
   especialidad_cod: string | null; especialidad_nombre: string | null; categoria_constructiva: string | null;
   sitio: string | null; sistema_servicio: string | null; obra_tipo: string | null; obra_target: string | null;
   cwp_fuente: string | null; categoria_enlace: string | null; avance_pct: number | null; estado: string | null;
@@ -254,7 +254,6 @@ interface RevisionPrefs {
   nivel: Nivel;
   mostrarFiltro: 'todas' | 'oficiales' | 'creadas';
   colorearCreadas: boolean;
-  sidebarTab: 'revision' | 'arbol';
 }
 function revisionPrefsKey(projectId: string): string { return `mineria-revision-prefs-v1:${projectId}`; }
 function loadRevisionPrefs(projectId: string): Partial<RevisionPrefs> {
@@ -287,10 +286,8 @@ export default function ElementosEditorPage() {
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
   const [cwaCatalog, setCwaCatalog] = useState<{ codigo: string; nombre: string | null }[]>([]);
   const [cvCatalog, setCvCatalog] = useState<{ codigo: string; nombre: string | null }[]>([]);
+  const [swpCatalog, setSwpCatalog] = useState<{ codigo: string; nombre: string | null }[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'revision' | 'arbol'>(
-    () => (loadRevisionPrefs(project_id).sidebarTab as 'revision' | 'arbol' | undefined) ?? 'revision');
-  useEffect(() => { if (project_id) saveRevisionPrefs(project_id, { sidebarTab }); }, [project_id, sidebarTab]);
   const [treeBranch, setTreeBranch] = useState<{ dbId: number; name: string; leafDbIds: number[]; monikers: string[] | null; sinMoniker: { dbId: number; name: string }[] } | null>(null);
   const [treeBranchNivel, setTreeBranchNivel] = useState<Nivel>('cwp');
   const [treeBranchTarget, setTreeBranchTarget] = useState('');
@@ -298,19 +295,29 @@ export default function ElementosEditorPage() {
   const [treeBranchError, setTreeBranchError] = useState<string | null>(null);
   const [treeBranchProgress, setTreeBranchProgress] = useState<{ done: number; total: number } | null>(null);
   const [treeRevealDbId, setTreeRevealDbId] = useState<{ dbId: number; ts: number } | null>(null);
+  // Nivel activo (pestaña CWA/CV/CWP/SWP) reportado por RevisionPanel — lo usa el panel "Árbol del
+  // modelo" para calcular el % de cobertura de cada rama relativo a ese mismo nivel.
+  const [activeRevisionNivel, setActiveRevisionNivel] = useState<Nivel>('cwa');
+  // Puente hacia las funciones de refresco de cobertura que vive dentro de ModelTreePanel — se llena
+  // solo (vía useEffect) apenas el panel monta; confirmTreeBranchAssign lo usa para refrescar el %
+  // de la rama recién clasificada sin esperar a que el usuario apriete "Actualizar %".
+  const treeCoverageApiRef = useRef<{ refresh: (dbId: number) => void; refreshAll: () => void } | null>(null);
   const [search, setSearch] = useState('');
   const [exactMonikers, setExactMonikers] = useState<string[] | null>(null);
   const [filtros, setFiltros] = useState<Filtros>({});
   const [activeFilters, setActiveFilters] = useState<FiltrosState>(EMPTY_FILTERS);
   const [showFiltersPanel, setShowFiltersPanel] = useState(false);
   const [showColsPanel, setShowColsPanel] = useState(false);
-  const [visibleCols, setVisibleCols] = useState<Set<string>>(() => {
-    if (typeof window === 'undefined') return new Set(DEFAULT_COLS);
+  // Mismo motivo que nivel/mostrarFiltro en RevisionPanel: el default debe ser igual en
+  // server y cliente para no romper la hidratación — la preferencia guardada se aplica en el
+  // useEffect de abajo, que solo corre en el cliente.
+  const [visibleCols, setVisibleCols] = useState<Set<string>>(() => new Set(DEFAULT_COLS));
+  useEffect(() => {
     try {
       const saved = window.localStorage.getItem(COLS_STORAGE_KEY);
-      return saved ? new Set(JSON.parse(saved)) : new Set(DEFAULT_COLS);
-    } catch { return new Set(DEFAULT_COLS); }
-  });
+      if (saved) setVisibleCols(new Set(JSON.parse(saved)));
+    } catch {}
+  }, []);
   const toggleCol = useCallback((key: string) => {
     setVisibleCols(prev => {
       const next = new Set(prev);
@@ -404,6 +411,8 @@ export default function ElementosEditorPage() {
       setCwaCatalog((d.items ?? []).map((it: any) => ({ codigo: it.codigo, nombre: it.nombre })))).catch(() => {});
     fetch(`/api/mining-revision?project_id=${project_id}&nivel=cv`).then(parseJsonOrThrow).then(d =>
       setCvCatalog((d.items ?? []).map((it: any) => ({ codigo: it.codigo, nombre: it.nombre })))).catch(() => {});
+    fetch(`/api/mining-revision?project_id=${project_id}&nivel=swp`).then(parseJsonOrThrow).then(d =>
+      setSwpCatalog((d.items ?? []).map((it: any) => ({ codigo: it.codigo, nombre: it.nombre })))).catch(() => {});
   }, [project_id]);
 
   useEffect(() => {
@@ -573,7 +582,7 @@ export default function ElementosEditorPage() {
     if (!viewerReady) return; // se aplicará en onReady si corresponde, o el usuario reintenta
     setViewerStatus('Aislando elementos…');
     try {
-      const dbIds = await viewerRef.current.resolveManyByProperty(MONIKER_PROP, monikers);
+      const dbIds = await viewerRef.current.resolveMonikers(monikers);
       if (dbIds.length) {
         lastIsolatedDbIdsRef.current = dbIds;
         viewerRef.current.showOnly(dbIds, ghostMode);
@@ -630,12 +639,16 @@ export default function ElementosEditorPage() {
     return subset;
   }, [project_id]);
 
-  // Colorea TODO el modelo por nivel (CWA/CV/CWP) — cada grupo en SU color, y todo lo no
-  // clasificado en ese nivel queda atenuado (fantasma), para ver limpio el límite entre áreas.
+  // Colorea por nivel (CWA/CV/CWP/SWP) — cada grupo en SU color, y todo lo no clasificado en ese
+  // nivel queda atenuado (fantasma), para ver limpio el límite entre áreas.
+  // Si hay una rama del árbol del modelo activa (treeBranch, ej. "...ELECTRICIDAD.vue"), el
+  // coloreo queda RESTRINGIDO a esa rama — así se puede ver, ej., "solo lo eléctrico" desglosado
+  // por sus distintos CWP, en vez de colorear el modelo completo.
   const colorByLevel = useCallback(async (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => {
     if (!viewerRef.current || !viewerReady) return;
     const codigos = selections.map(s => s.codigo);
-    setViewerStatus(`Coloreando modelo por ${NIVEL_LABEL[nivel]}…`);
+    const restrictSet = treeBranch ? new Set(treeBranch.leafDbIds) : null;
+    setViewerStatus(`Coloreando${restrictSet ? ` "${treeBranch!.name}"` : ' modelo'} por ${NIVEL_LABEL[nivel]}…`);
     try {
       viewerRef.current.restoreAll();
       const groups = await fetchMonikerGroups(nivel, codigos);
@@ -646,12 +659,16 @@ export default function ElementosEditorPage() {
         const monikers = groups[codigos[i]];
         if (!monikers?.length) { perGroupDbIds.push([]); continue; }
         esperados += monikers.length;
-        const dbIds = await viewerRef.current.resolveManyByProperty(MONIKER_PROP, monikers);
+        let dbIds = await viewerRef.current.resolveMonikers(monikers);
+        // resolveManyByProperty puede devolver dbIds de ENSAMBLAJE (donde vive la propiedad SP3D_MONIKER),
+        // mientras que treeBranch.leafDbIds son dbIds HOJA — sin expandir a hojas antes de intersectar,
+        // el restrictSet nunca calzaba y la restricción quedaba sin efecto (coloreaba todo el modelo).
+        if (restrictSet) dbIds = viewerRef.current.getLeafDbIds(dbIds).filter(id => restrictSet.has(id));
         perGroupDbIds.push(dbIds);
         allDbIds.push(...dbIds);
         matched += dbIds.length;
       }
-      if (!matched) { setToast(`No se encontraron elementos de ${NIVEL_LABEL[nivel]} en el modelo.`); return; }
+      if (!matched) { setToast(`No se encontraron elementos de ${NIVEL_LABEL[nivel]}${restrictSet ? ' dentro de la rama seleccionada' : ' en el modelo'}.`); return; }
       // Aísla con fantasma TODO lo clasificado vs. lo que no tiene este nivel asignado,
       // y recién después pinta cada grupo — así el color queda sobre fondo neutro, no sobre
       // los colores nativos del CAD (que hacían parecer "confeti" la vista anterior).
@@ -664,12 +681,13 @@ export default function ElementosEditorPage() {
       }
       // Reencuadra solo si el auto-zoom está activo — si el usuario lo desactivó, respeta su cámara actual.
       if (autoZoom) viewerRef.current.fitToView(allDbIds);
-      if (matched < esperados * 0.9) setToast(`⚠ Coloreados ${matched.toLocaleString('es-CL')} de ${esperados.toLocaleString('es-CL')} esperados — puede que falten elementos en el modelo.`);
+      if (restrictSet) setToast(`Coloreados ${matched.toLocaleString('es-CL')} elemento(s) de "${treeBranch!.name}" por ${NIVEL_LABEL[nivel]}.`);
+      else if (matched < esperados * 0.9) setToast(`⚠ Coloreados ${matched.toLocaleString('es-CL')} de ${esperados.toLocaleString('es-CL')} esperados — puede que falten elementos en el modelo.`);
       else setToast(`Coloreados ${matched.toLocaleString('es-CL')} elementos por ${NIVEL_LABEL[nivel]}. Lo que se ve con su color nativo del CAD (sin tinte) no tiene ${NIVEL_LABEL[nivel]} asignado.`);
     } finally {
       setViewerStatus(null);
     }
-  }, [viewerReady, fetchMonikerGroups, autoZoom]);
+  }, [viewerReady, fetchMonikerGroups, autoZoom, treeBranch]);
 
   // Enfoca la cámara en un código sin aislar — mantiene el modelo coloreado completo visible para ver el límite
   const focusOnCodigo = useCallback(async (nivel: Nivel, codigo: string) => {
@@ -679,7 +697,7 @@ export default function ElementosEditorPage() {
       const groups = await fetchMonikerGroups(nivel, [codigo]);
       const monikers = groups[codigo] ?? [];
       if (!monikers.length) { setToast(`Sin elementos para ${codigo} en el modelo.`); return; }
-      const dbIds = await viewerRef.current.resolveManyByProperty(MONIKER_PROP, monikers);
+      const dbIds = await viewerRef.current.resolveMonikers(monikers);
       if (dbIds.length) viewerRef.current.fitToView(dbIds);
       else setToast(`Sin elementos para ${codigo} en el modelo.`);
     } finally {
@@ -700,7 +718,7 @@ export default function ElementosEditorPage() {
         const monikers = groups[sel.codigo] ?? [];
         esperados += monikers.length;
         if (!monikers.length) { perSelDbIds.push([]); continue; }
-        const dbIds = await viewerRef.current.resolveManyByProperty(MONIKER_PROP, monikers);
+        const dbIds = await viewerRef.current.resolveMonikers(monikers);
         perSelDbIds.push(dbIds);
         allDbIds.push(...dbIds);
       }
@@ -729,78 +747,103 @@ export default function ElementosEditorPage() {
     setPaintTarget({ nivel, codigo, r, g, b, a });
   }, []);
 
-  const stopPaint = useCallback(() => { setPaintTarget(null); paintedDbIdsRef.current = new Set(); }, []);
+  const stopPaint = useCallback(() => { setPaintTarget(null); setPaintCount(0); paintedDbIdsRef.current = new Set(); }, []);
+
+  // Quita el color de TODO lo seleccionado en esta sesión de pintura (todavía sin guardar) — para
+  // corregirse antes de confirmar sin tener que "Detener" y rearmar la pintura desde cero.
+  const resetPaintSelection = useCallback(() => {
+    if (!viewerRef.current || !paintedDbIdsRef.current.size) return;
+    viewerRef.current.clearThemingForDbIds([...paintedDbIdsRef.current]);
+    paintedDbIdsRef.current = new Set();
+    setPaintCount(0);
+  }, []);
+
+  // Guarda en la BD todo lo pintado en esta sesión — hasta este punto cada click solo coloreaba
+  // LOCALMENTE (sin escribir nada), así se puede revisar la selección completa antes de confirmar.
+  const savePaint = useCallback(async () => {
+    if (!viewerRef.current || !paintTarget || !paintedDbIdsRef.current.size) return;
+    const dbIds = [...paintedDbIdsRef.current];
+    setViewerStatus(`Guardando ${dbIds.length} elemento(s) en ${NIVEL_LABEL[paintTarget.nivel]} ${paintTarget.codigo}…`);
+    try {
+      const props = await viewerRef.current.loadBulkElementProps(dbIds, [MONIKER_PROP]);
+      const monikers = props.filter(p => p.props[MONIKER_PROP]).map(p => p.props[MONIKER_PROP]);
+      const sinMoniker = props.filter(p => !p.props[MONIKER_PROP]);
+      if (!monikers.length && !sinMoniker.length) { setToast('No se pudo leer los elementos seleccionados.'); return; }
+
+      // Moniker → nombre del elemento en el modelo — si el moniker no tiene fila todavía en
+      // mining_elementos (geometría agregada al modelo después del último import desde SmartPlant 3D),
+      // el PATCH la crea usando este nombre, en vez de bloquear la clasificación.
+      const monikerNames: Record<string, string> = {};
+      for (const p of props) if (p.props[MONIKER_PROP]) monikerNames[p.props[MONIKER_PROP]] = p.name;
+
+      let updated = 0, creados = 0;
+      if (monikers.length) {
+        const results = await runWithConcurrency(chunkMonikersForUrl(monikers), 6, async chunk => {
+          const res = await fetchWithRetry('/api/mining-elementos', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              project_id, nivel: paintTarget.nivel, newValue: paintTarget.codigo, monikers: chunk,
+              origen: `pintura_3d_${paintTarget.nivel}`, monikerNames,
+            }),
+          });
+          const d = await parseJsonOrThrow(res);
+          return { updated: d.updated ?? chunk.length, created: d.created ?? 0 };
+        });
+        updated = results.reduce((a, r) => a + r.updated, 0);
+        creados = results.reduce((a, r) => a + r.created, 0);
+      }
+
+      // Elementos sin SP3D_MONIKER (nunca se exportaron bien desde SmartPlant 3D): en vez de bloquear,
+      // se agregan con un moniker sintético basado en su GUID nativo del modelo y quedan marcados
+      // `requiere_alta_sp3d=true` — aparecerán en "Exportar cambios" para darlos de alta en SmartPlant.
+      let agregados = 0;
+      if (sinMoniker.length) {
+        const extMap = await viewerRef.current.getExternalIdMapping();
+        const dbIdToGuid = new Map<number, string>();
+        for (const [ext, id] of Object.entries(extMap)) dbIdToGuid.set(id, ext);
+        for (const p of sinMoniker) {
+          const guid = dbIdToGuid.get(p.dbId);
+          if (!guid) continue;
+          try {
+            const res = await fetchWithRetry('/api/mining-elementos/agregar-sin-moniker', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ project_id, nivel: paintTarget.nivel, codigo: paintTarget.codigo, guid, name: p.name }),
+            });
+            await parseJsonOrThrow(res);
+            agregados++;
+          } catch { /* sigue con el resto aunque uno falle */ }
+        }
+      }
+
+      setToast(`Guardado: ${updated} reasignado(s)${creados ? ` · ${creados} nuevo(s) desde el modelo (no estaban en la base de datos, se agregaron con su SP3D_MONIKER real)` : ''}${agregados ? ` · ${agregados} agregado(s) SIN SP3D_MONIKER — quedan marcados para dar de alta en SmartPlant 3D (revisa "Exportar cambios")` : ''}.`);
+      paintedDbIdsRef.current = new Set();
+      setPaintCount(0);
+      loadBuckets();
+      fetchRows();
+    } catch (e: any) {
+      setToast(`Error: ${e.message}`);
+    } finally {
+      setViewerStatus(null);
+    }
+  }, [paintTarget, project_id, loadBuckets, fetchRows]);
 
   const onViewerSelectionChange = useCallback(async (dbIds: number[]) => {
     if (!viewerRef.current || !dbIds.length) return;
 
     if (paintTarget) {
       // Filtra a solo lo NUEVO: en multi-selección, Forge reporta el acumulado completo en cada click.
+      // Solo COLOREA localmente acá — no escribe en la BD hasta que se apriete "Guardar" (savePaint).
       const newDbIds = dbIds.filter(id => !paintedDbIdsRef.current.has(id));
       if (!newDbIds.length) return;
-      setViewerStatus(`Asignando a ${NIVEL_LABEL[paintTarget.nivel]} ${paintTarget.codigo}…`);
-      try {
-        const props = await viewerRef.current.loadBulkElementProps(newDbIds, [MONIKER_PROP]);
-        const monikers = props.filter(p => p.props[MONIKER_PROP]).map(p => p.props[MONIKER_PROP]);
-        const sinMoniker = props.filter(p => !p.props[MONIKER_PROP]);
-        if (!monikers.length && !sinMoniker.length) { setToast('No se pudo leer el elemento.'); return; }
-
-        let updated = 0;
-        if (monikers.length) {
-          const results = await runWithConcurrency(chunkMonikersForUrl(monikers), 6, async chunk => {
-            const res = await fetchWithRetry('/api/mining-elementos', {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                project_id, nivel: paintTarget.nivel, newValue: paintTarget.codigo, monikers: chunk,
-                origen: `pintura_3d_${paintTarget.nivel}`,
-              }),
-            });
-            const d = await parseJsonOrThrow(res);
-            return d.updated ?? chunk.length;
-          });
-          updated = results.reduce((a, b) => a + b, 0);
-        }
-
-        // Elementos sin SP3D_MONIKER (nunca se exportaron bien desde SmartPlant 3D): en vez de bloquear,
-        // se agregan con un moniker sintético basado en su GUID nativo del modelo y quedan marcados
-        // `requiere_alta_sp3d=true` — aparecerán en "Exportar cambios" para darlos de alta en SmartPlant.
-        let agregados = 0;
-        if (sinMoniker.length) {
-          const extMap = await viewerRef.current.getExternalIdMapping();
-          const dbIdToGuid = new Map<number, string>();
-          for (const [ext, id] of Object.entries(extMap)) dbIdToGuid.set(id, ext);
-          for (const p of sinMoniker) {
-            const guid = dbIdToGuid.get(p.dbId);
-            if (!guid) continue;
-            try {
-              const res = await fetchWithRetry('/api/mining-elementos/agregar-sin-moniker', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ project_id, nivel: paintTarget.nivel, codigo: paintTarget.codigo, guid, name: p.name }),
-              });
-              await parseJsonOrThrow(res);
-              agregados++;
-            } catch { /* sigue con el resto aunque uno falle */ }
-          }
-        }
-
-        for (const id of newDbIds) paintedDbIdsRef.current.add(id);
-        viewerRef.current.colorDbIds(newDbIds, paintTarget.r, paintTarget.g, paintTarget.b, paintTarget.a);
-        setPaintCount(c => c + updated + agregados);
-        if (agregados) {
-          setToast(`${updated} reasignado(s) · ${agregados} agregado(s) SIN SP3D_MONIKER — quedan marcados para dar de alta en SmartPlant 3D (revisa "Exportar cambios").`);
-        }
-        loadBuckets();
-      } catch (e: any) {
-        setToast(`Error: ${e.message}`);
-      } finally {
-        setViewerStatus(null);
-      }
+      for (const id of newDbIds) paintedDbIdsRef.current.add(id);
+      viewerRef.current.colorDbIds(newDbIds, paintTarget.r, paintTarget.g, paintTarget.b, paintTarget.a);
+      setPaintCount(paintedDbIdsRef.current.size);
       return;
     }
 
-    if (sidebarTab === 'arbol') setTreeRevealDbId({ dbId: dbIds[0], ts: Date.now() });
+    setTreeRevealDbId({ dbId: dbIds[0], ts: Date.now() });
 
     setViewerStatus('Buscando elemento…');
     try {
@@ -815,7 +858,7 @@ export default function ElementosEditorPage() {
     } finally {
       setViewerStatus(null);
     }
-  }, [paintTarget, project_id, loadBuckets, sidebarTab]);
+  }, [paintTarget]);
 
   // Selecciona una rama del árbol nativo del modelo, la expande a dbIds HOJA (nunca el dbId de
   // ensamblaje crudo) y la aísla/colorea de previsualización — TODAVÍA no asigna nada en la BD.
@@ -928,6 +971,7 @@ export default function ElementosEditorPage() {
       if (updated) partes.push(`${updated.toLocaleString('es-CL')} reasignado(s)`);
       if (agregados) partes.push(`${agregados.toLocaleString('es-CL')} agregado(s) sin SP3D_MONIKER (quedan para dar de alta en SmartPlant 3D)`);
       setToast(`${partes.join(' · ')} de "${treeBranch.name}" → ${codigo}.`);
+      treeCoverageApiRef.current?.refresh(treeBranch.dbId);
       setTreeBranch(null);
       loadBuckets();
       fetchRows();
@@ -959,6 +1003,12 @@ export default function ElementosEditorPage() {
         >
           <Download className="w-3.5 h-3.5" /> Exportar cambios
         </a>
+        <Link
+          href={`/${org_slug}/projects/${project_id}/mineria/sistemas`}
+          className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
+        >
+          <Layers className="w-3.5 h-3.5" /> Sistemas
+        </Link>
         <button onClick={() => setShowPicker(true)} className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0">
           <Settings className="w-3.5 h-3.5" /> Modelo 3D
         </button>
@@ -976,37 +1026,36 @@ export default function ElementosEditorPage() {
             <ListTree className="w-3.5 h-3.5 text-slate-400 mt-2" />
           </button>
         ) : (
-          <div className="w-[320px] bg-white border-r border-slate-200 flex flex-col shrink-0 overflow-hidden">
-            <div className="flex items-center border-b border-slate-200 shrink-0">
-              <button
-                onClick={() => setSidebarTab('revision')}
-                className={cn('flex-1 py-2 text-[10.5px] font-black uppercase tracking-wide flex items-center justify-center gap-1.5',
-                  sidebarTab === 'revision' ? 'text-[#0D47A1] border-b-2 border-[#0D47A1]' : 'text-slate-400 hover:text-slate-600')}
-              >
-                <ListTree className="w-3.5 h-3.5" /> Revisión
-              </button>
-              <button
-                onClick={() => setSidebarTab('arbol')}
-                className={cn('flex-1 py-2 text-[10.5px] font-black uppercase tracking-wide flex items-center justify-center gap-1.5',
-                  sidebarTab === 'arbol' ? 'text-[#0D47A1] border-b-2 border-[#0D47A1]' : 'text-slate-400 hover:text-slate-600')}
-              >
-                <GitBranch className="w-3.5 h-3.5" /> Árbol modelo
-              </button>
-              <button onClick={() => setSidebarCollapsed(true)} title="Ocultar panel" className="p-1.5 rounded hover:bg-slate-100 text-slate-400 shrink-0 mr-1">
+          <div className="w-[480px] bg-white border-r border-slate-200 flex flex-col shrink-0 overflow-hidden">
+            <div className="flex items-center justify-end border-b border-slate-200 shrink-0">
+              <button onClick={() => setSidebarCollapsed(true)} title="Ocultar panel" className="p-1.5 rounded hover:bg-slate-100 text-slate-400 shrink-0 mr-1 my-0.5">
                 <ChevronLeft className="w-4 h-4" />
               </button>
             </div>
-            {sidebarTab === 'revision' ? (
+            <div className="flex-[3] min-h-0 flex flex-col overflow-hidden border-b border-slate-200">
+              <div className="px-2 py-1.5 bg-slate-50 border-b border-slate-200 shrink-0 flex items-center gap-1.5">
+                <ListTree className="w-3.5 h-3.5 text-[#0D47A1]" />
+                <span className="text-[10.5px] font-black uppercase tracking-wide text-[#0D47A1]">Revisión</span>
+              </div>
               <RevisionPanel
                 projectId={project_id} viewerReady={viewerReady}
                 onColorByLevel={colorByLevel} onFocus={focusOnCodigo}
                 onViewSelected={viewSelectedInViewer}
                 paintTarget={paintTarget} onArmPaint={armPaint} onStopPaint={stopPaint}
                 onCatalogChanged={loadCatalogs}
+                onNivelChange={setActiveRevisionNivel}
               />
-            ) : (
-              <ModelTreePanel viewerRef={viewerRef} viewerReady={viewerReady} onPreviewBranch={previewTreeBranch} revealDbId={treeRevealDbId} />
-            )}
+            </div>
+            <div className="flex-[2] min-h-0 flex flex-col overflow-hidden">
+              <div className="px-2 py-1.5 bg-slate-50 border-b border-slate-200 shrink-0 flex items-center gap-1.5">
+                <GitBranch className="w-3.5 h-3.5 text-[#0D47A1]" />
+                <span className="text-[10.5px] font-black uppercase tracking-wide text-[#0D47A1]">Árbol del modelo</span>
+              </div>
+              <ModelTreePanel
+                viewerRef={viewerRef} viewerReady={viewerReady} onPreviewBranch={previewTreeBranch} revealDbId={treeRevealDbId}
+                projectId={project_id} activeNivel={activeRevisionNivel} coverageApiRef={treeCoverageApiRef}
+              />
+            </div>
           </div>
         )}
 
@@ -1095,10 +1144,10 @@ export default function ElementosEditorPage() {
                 value={bulkAllNivel} onChange={e => setBulkAllNivel(e.target.value as Nivel)}
                 className="px-1.5 py-1 rounded text-[10.5px] border border-amber-300 bg-white text-amber-900"
               >
-                {(['cwa', 'cv', 'cwp'] as Nivel[]).map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
+                {(['cwa', 'cv', 'cwp', 'swp'] as Nivel[]).map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
               </select>
               <input
-                list={bulkAllNivel === 'cwa' ? 'cwa-catalog-options' : bulkAllNivel === 'cv' ? 'cv-catalog-options' : 'cwp-catalog-options'}
+                list={bulkAllNivel === 'cwa' ? 'cwa-catalog-options' : bulkAllNivel === 'cv' ? 'cv-catalog-options' : bulkAllNivel === 'swp' ? 'swp-catalog-options' : 'cwp-catalog-options'}
                 value={bulkAllTarget} onChange={e => setBulkAllTarget(e.target.value)}
                 placeholder={`Nuevo ${NIVEL_LABEL[bulkAllNivel]}…`} className="px-2 py-1 rounded text-[11px] border border-amber-300 w-44"
               />
@@ -1152,6 +1201,7 @@ export default function ElementosEditorPage() {
                     <th className="px-2 py-2 text-left">CWA</th>
                     <th className="px-2 py-2 text-left">CV</th>
                     <th className="px-2 py-2 text-left">CWP</th>
+                    <th className="px-2 py-2 text-left">SWP</th>
                     <th className="px-2 py-2 text-left">Moniker</th>
                     {COLUMN_DEFS.filter(c => visibleCols.has(c.key)).map(c => (
                       <th key={c.key} className="px-2 py-2 text-left">{c.label}</th>
@@ -1185,9 +1235,7 @@ export default function ElementosEditorPage() {
                 <span className="text-[10px] font-black uppercase tracking-wide text-slate-400 truncate">
                   {paintTarget
                     ? 'Click en un elemento para asignarlo'
-                    : sidebarTab === 'arbol'
-                      ? 'Click en un elemento para ubicarlo en el árbol y en la tabla'
-                      : 'Click en un elemento para ubicarlo en la tabla'}
+                    : 'Click en un elemento para ubicarlo en el árbol y en la tabla'}
                 </span>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
@@ -1225,10 +1273,22 @@ export default function ElementosEditorPage() {
                   {paintTarget.a === 0 ? <Eraser className="w-3.5 h-3.5 shrink-0" /> : <Paintbrush className="w-3.5 h-3.5 shrink-0" />}
                   <span className="text-[10.5px] font-bold truncate">
                     {paintTarget.a === 0
-                      ? `Restaurando color original → sacando de ${NIVEL_LABEL[paintTarget.nivel]} · ${paintCount} restaurado(s)`
-                      : `Pintura activa → ${NIVEL_LABEL[paintTarget.nivel]} ${paintTarget.codigo} · ${paintCount} asignado(s)`}
+                      ? `Restaurando color original → sacando de ${NIVEL_LABEL[paintTarget.nivel]} · ${paintCount} seleccionado(s) sin guardar`
+                      : `Pintura activa → ${NIVEL_LABEL[paintTarget.nivel]} ${paintTarget.codigo} · ${paintCount} seleccionado(s) sin guardar`}
                   </span>
-                  <button onClick={stopPaint} className="ml-auto inline-flex items-center gap-1 text-[10px] font-bold bg-amber-500/20 hover:bg-amber-500/30 rounded px-2 py-1 shrink-0">
+                  <button
+                    onClick={resetPaintSelection} disabled={!paintCount}
+                    className="ml-auto inline-flex items-center gap-1 text-[10px] font-bold bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-40 rounded px-2 py-1 shrink-0"
+                  >
+                    <RotateCcw className="w-3 h-3" /> Restablecer selección
+                  </button>
+                  <button
+                    onClick={savePaint} disabled={!paintCount}
+                    className="inline-flex items-center gap-1 text-[10px] font-bold bg-emerald-500/25 hover:bg-emerald-500/35 disabled:opacity-40 rounded px-2 py-1 shrink-0"
+                  >
+                    <Save className="w-3 h-3" /> Guardar {paintCount > 0 ? `(${paintCount})` : ''}
+                  </button>
+                  <button onClick={stopPaint} className="inline-flex items-center gap-1 text-[10px] font-bold bg-amber-500/20 hover:bg-amber-500/30 rounded px-2 py-1 shrink-0">
                     <StopCircle className="w-3 h-3" /> Detener
                   </button>
                 </div>
@@ -1263,7 +1323,7 @@ export default function ElementosEditorPage() {
                           onChange={e => { setTreeBranchNivel(e.target.value as Nivel); setTreeBranchTarget(''); }}
                           className="shrink-0 px-1.5 py-1 rounded text-[10.5px] border border-blue-300/40 bg-white text-[#08203F]"
                         >
-                          {(['cwa', 'cv', 'cwp'] as Nivel[]).map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
+                          {(['cwa', 'cv', 'cwp', 'swp'] as Nivel[]).map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
                         </select>
                         <select
                           value={treeBranchTarget} onChange={e => setTreeBranchTarget(e.target.value)}
@@ -1272,6 +1332,7 @@ export default function ElementosEditorPage() {
                           <option value="">— Elegir {NIVEL_LABEL[treeBranchNivel]} existente —</option>
                           {(treeBranchNivel === 'cwa' ? cwaCatalog.map(c => ({ codigo: c.codigo, label: c.nombre ? `${c.codigo} · ${c.nombre}` : c.codigo }))
                             : treeBranchNivel === 'cv' ? cvCatalog.map(c => ({ codigo: c.codigo, label: c.nombre ? `${c.codigo} · ${c.nombre}` : c.codigo }))
+                            : treeBranchNivel === 'swp' ? swpCatalog.map(c => ({ codigo: c.codigo, label: c.nombre ? `${c.codigo} · ${c.nombre}` : c.codigo }))
                             : catalog.map(c => ({ codigo: c.cwp_id, label: c.cwp_nombre ? `${c.cwp_id} · ${c.cwp_nombre}` : c.cwp_id }))
                           ).map(o => <option key={o.codigo} value={o.codigo}>{o.label}</option>)}
                         </select>
@@ -1305,6 +1366,9 @@ export default function ElementosEditorPage() {
                     onReady={() => {
                       viewerRef.current?.setMultiSelect(multiSelectOn);
                       setViewerReady(true);
+                      // Precarga el índice de SP3D_MONIKER apenas el modelo está listo (en vez de
+                      // esperar al primer click en "Colorear") — así el primer uso ya no se ve lento.
+                      viewerRef.current?.buildPropertyMultiIndex(MONIKER_PROP).catch(() => {});
                     }}
                     onSelectionChange={onViewerSelectionChange}
                   />
@@ -1328,6 +1392,9 @@ export default function ElementosEditorPage() {
       </datalist>
       <datalist id="cv-catalog-options">
         {cvCatalog.map(c => <option key={c.codigo} value={c.codigo}>{c.nombre}</option>)}
+      </datalist>
+      <datalist id="swp-catalog-options">
+        {swpCatalog.map(c => <option key={c.codigo} value={c.codigo}>{c.nombre}</option>)}
       </datalist>
 
       {toast && (
@@ -1372,6 +1439,7 @@ function RowItem({ r, checked, onToggle, onApply, onIsolate, visibleCols, applyi
       <LevelCell value={r.cwa_id} />
       <LevelCell value={r.cv_id} />
       <LevelCell value={r.cwp_id} />
+      <LevelCell value={r.swp_id} />
       <td className="px-2 py-1.5 font-mono text-[10px] text-slate-500 max-w-[160px] truncate">
         <span className="truncate" title={r.sp3d_moniker}>{r.sp3d_moniker}</span>
         {r.requiere_alta_sp3d && (
@@ -1412,6 +1480,15 @@ function deriveCwaCvFromCwp(cwpId: string): { cwa: string | null; cv: string | n
   return { cwa: null, cv: null };
 }
 
+// CWP_ID = {CV}.{DISC}{NNN} → la disciplina es la parte alfabética entre el punto y el número
+// (ej. "312101.C001" → "C" = Civil, "312101.EH001" → "EH" = cableado) — es la MISMA letra sin importar
+// el CWA/CV, así que sirve para agrupar "todos los Civil" del proyecto entero independiente de en qué
+// sector/área caigan.
+function deriveDisciplinaFromCwp(cwpId: string): string | null {
+  const m = cwpId.match(/^\d{6}\.([A-Za-z]+)\d+$/);
+  return m ? m[1].toUpperCase() : null;
+}
+
 function GroupCheckbox({ state }: { state: 'all' | 'some' | 'none' }) {
   if (state === 'all') return <CheckSquare className="w-3.5 h-3.5 text-blue-600" />;
   if (state === 'some') return (
@@ -1423,21 +1500,113 @@ function GroupCheckbox({ state }: { state: 'all' | 'some' | 'none' }) {
 }
 
 type TreeNode = { dbId: number; name: string; childCount: number };
+type CoverageState = { vinculados: number; total: number } | 'loading' | 'too-big' | 'error';
+// Ramas con más hojas que esto no se calculan automático (leer+consultar miles de props sería lento) —
+// quedan con "—" y el usuario puede usar el botón de aislar para revisarlas igual.
+const COVERAGE_MAX_LEAVES = 8000;
 
 // Navega el árbol NATIVO del modelo (assemblies/grupos tal como vienen del CAD) cargando hijos a demanda
 // con getChildren — nunca carga todo el árbol de una sola vez. Cada rama solo se RESUELVE a dbIds reales
 // (y se pide confirmación con el conteo) cuando el usuario hace click en el botón de "usar esta rama";
 // este componente nunca escribe nada en la BD por sí mismo.
-function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId }: {
+type TreeCoverageApi = { refresh: (dbId: number) => void; refreshAll: () => void };
+
+function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId, projectId, activeNivel, coverageApiRef }: {
   viewerRef: { current: ForgeViewerHandle | null };
   viewerReady: boolean;
   onPreviewBranch: (dbId: number, name: string) => void;
   revealDbId: { dbId: number; ts: number } | null;
+  projectId: string;
+  activeNivel: Nivel;
+  coverageApiRef?: { current: TreeCoverageApi | null };
 }) {
   const [rootId, setRootId] = useState<number | null>(null);
   const [childrenCache, setChildrenCache] = useState<Map<number, TreeNode[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [highlightDbId, setHighlightDbId] = useState<number | null>(null);
+  const [treeLoadError, setTreeLoadError] = useState(false);
+  const [retryToken, setRetryToken] = useState(0);
+
+  // Cobertura (% de elementos ya vinculados al nivel activo) por rama — se calcula UNA vez por
+  // dbId la primera vez que su fila se monta, en cola (1 a la vez) para no saturar el visor/API
+  // cuando se expanden muchas ramas de golpe. Se reinicia si cambia el nivel activo (CWA/CV/CWP/SWP),
+  // porque el % es relativo a ESE nivel.
+  const [coverage, setCoverage] = useState<Map<number, CoverageState>>(new Map());
+  const coverageQueueRef = useRef<number[]>([]);
+  const coverageBusyRef = useRef(false);
+  const coverageSeenRef = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    setCoverage(new Map());
+    coverageQueueRef.current = [];
+    coverageSeenRef.current = new Set();
+  }, [activeNivel]);
+
+  const pumpCoverageQueue = useCallback(() => {
+    if (coverageBusyRef.current) return;
+    const dbId = coverageQueueRef.current.shift();
+    if (dbId == null) return;
+    coverageBusyRef.current = true;
+    setCoverage(prev => new Map(prev).set(dbId, 'loading'));
+    (async () => {
+      let result: CoverageState = 'error';
+      try {
+        const v = viewerRef.current;
+        if (v) {
+          const leafDbIds = v.getLeafDbIds([dbId]);
+          if (!leafDbIds.length) result = { vinculados: 0, total: 0 };
+          else if (leafDbIds.length > COVERAGE_MAX_LEAVES) result = 'too-big';
+          else {
+            const props = await v.loadBulkElementProps(leafDbIds, [MONIKER_PROP]);
+            const monikers = [...new Set(props.filter(p => p.props[MONIKER_PROP]).map(p => p.props[MONIKER_PROP]))];
+            let vinculados = 0;
+            if (monikers.length) {
+              const r = await fetchWithRetry('/api/mining-elementos/cobertura', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project_id: projectId, nivel: activeNivel, monikers }),
+              });
+              const d = await parseJsonOrThrow(r);
+              vinculados = d.vinculados ?? 0;
+            }
+            result = { vinculados, total: leafDbIds.length };
+          }
+        }
+      } catch {
+        result = 'error';
+      }
+      setCoverage(prev => new Map(prev).set(dbId, result));
+      coverageBusyRef.current = false;
+      pumpCoverageQueue();
+    })();
+  }, [viewerRef, projectId, activeNivel]);
+
+  const requestCoverage = useCallback((dbId: number) => {
+    if (coverageSeenRef.current.has(dbId)) return;
+    coverageSeenRef.current.add(dbId);
+    coverageQueueRef.current.push(dbId);
+    pumpCoverageQueue();
+  }, [pumpCoverageQueue]);
+
+  // Recalcula UNA rama puntual (ej. justo después de asignarle un CWP desde el banner del visor) —
+  // se "olvida" de que ya la había visto para que requestCoverage la vuelva a encolar.
+  const refreshCoverage = useCallback((dbId: number) => {
+    coverageSeenRef.current.delete(dbId);
+    requestCoverage(dbId);
+  }, [requestCoverage]);
+
+  // Recalcula TODAS las ramas que ya se han mostrado alguna vez (incluye las colapsadas) — para el
+  // botón "Actualizar %" cuando el usuario clasificó varias ramas y quiere refrescar todo de una vez.
+  const refreshAllCoverage = useCallback(() => {
+    const dbIds = [...coverageSeenRef.current];
+    setCoverage(new Map());
+    coverageQueueRef.current = [];
+    coverageSeenRef.current = new Set();
+    dbIds.forEach(requestCoverage);
+  }, [requestCoverage]);
+
+  useEffect(() => {
+    if (coverageApiRef) coverageApiRef.current = { refresh: refreshCoverage, refreshAll: refreshAllCoverage };
+  }, [coverageApiRef, refreshCoverage, refreshAllCoverage]);
 
   const ensureChildren = useCallback((dbId: number) => {
     setChildrenCache(prev => {
@@ -1449,12 +1618,42 @@ function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId }:
     });
   }, [viewerRef]);
 
+  // getRootId() depende de que el instance tree ya esté armado — viewerReady puede activarse antes
+  // de que el tree termine de poblarse, y en modelos pesados eso puede demorar minutos (el resto del
+  // visor ya espera esto con waitForInstanceTree, hasta 5 min). Antes se pateaba con un poll de 10s
+  // hecho a mano, que se quedaba en "Cargando árbol…" para siempre en modelos grandes.
   useEffect(() => {
     if (!viewerReady || !viewerRef.current) return;
-    const r = viewerRef.current.getRootId();
-    setRootId(r);
-    if (r != null) ensureChildren(r);
-  }, [viewerReady, viewerRef, ensureChildren]);
+    setTreeLoadError(false);
+    let cancelled = false;
+    const v = viewerRef.current;
+
+    // Fallback por si el bundle del navegador quedó desactualizado (hot-reload no recargó el método
+    // nuevo del visor) — sin esto, llamar a una función inexistente tira un TypeError silencioso
+    // dentro del efecto y la UI se queda pegada en "Cargando árbol…" sin ningún aviso.
+    if (typeof v.waitForInstanceTree !== 'function') {
+      let attempts = 0;
+      const tryLoad = () => {
+        if (cancelled) return;
+        const r = viewerRef.current?.getRootId() ?? null;
+        if (r != null) { setRootId(r); ensureChildren(r); }
+        else if (attempts++ < 150) setTimeout(tryLoad, 200);
+        else setTreeLoadError(true);
+      };
+      tryLoad();
+      return () => { cancelled = true; };
+    }
+
+    v.waitForInstanceTree()
+      .then(() => {
+        if (cancelled) return;
+        const r = viewerRef.current?.getRootId() ?? null;
+        if (r != null) { setRootId(r); ensureChildren(r); }
+        else setTreeLoadError(true);
+      })
+      .catch(() => { if (!cancelled) setTreeLoadError(true); });
+    return () => { cancelled = true; };
+  }, [viewerReady, viewerRef, ensureChildren, retryToken]);
 
   // Click en el visor (rama "árbol del modelo" activa) → expande todos los ancestros del dbId
   // clickeado para revelarlo en el árbol, hace scroll hasta él y lo resalta.
@@ -1485,55 +1684,121 @@ function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId }:
     });
   };
 
-  const renderNode = (node: TreeNode, depth: number) => {
-    const isOpen = expanded.has(node.dbId);
-    const kids = childrenCache.get(node.dbId);
-    const isHighlighted = highlightDbId === node.dbId;
+  if (!viewerReady) return <div className="p-4 text-center text-[11px] text-slate-400 italic">Abre el modelo 3D primero.</div>;
+  if (treeLoadError) {
     return (
-      <div key={node.dbId}>
-        <div
-          id={`tree-node-${node.dbId}`}
-          className={cn('flex items-center gap-1 py-1 hover:bg-blue-50 rounded', isHighlighted && 'bg-amber-100 ring-1 ring-amber-400')}
-          style={{ paddingLeft: depth * 14 + 4 }}
+      <div className="p-4 text-center text-[11px] text-slate-400 flex flex-col items-center gap-2">
+        <span>No se pudo armar el árbol del modelo (demoró demasiado en cargar).</span>
+        <button
+          onClick={() => { setTreeLoadError(false); setRetryToken(t => t + 1); }}
+          className="text-blue-600 font-bold hover:text-blue-700"
         >
-          {node.childCount > 0 ? (
-            <button onClick={() => toggle(node.dbId)} className="shrink-0 p-0.5">
-              {isOpen ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <ChevronRight className="w-3 h-3 text-slate-400" />}
-            </button>
-          ) : <span className="w-4 shrink-0" />}
-          <span className="text-[11px] text-slate-700 truncate flex-1" title={node.name}>{node.name || `#${node.dbId}`}</span>
-          {node.childCount > 0 && <span className="text-[9px] text-slate-400 font-mono shrink-0">{node.childCount}</span>}
-          <button
-            onClick={() => onPreviewBranch(node.dbId, node.name || `#${node.dbId}`)}
-            title="Aislar esta rama y ver cuántos elementos tiene, antes de clasificarla"
-            className="shrink-0 p-1 rounded bg-slate-100 hover:bg-blue-100 text-blue-600"
-          >
-            <Crosshair className="w-3 h-3" />
-          </button>
-        </div>
-        {isOpen && kids?.map(k => renderNode(k, depth + 1))}
+          Reintentar
+        </button>
       </div>
     );
-  };
-
-  if (!viewerReady) return <div className="p-4 text-center text-[11px] text-slate-400 italic">Abre el modelo 3D primero.</div>;
-  if (rootId == null) return <div className="p-4 text-center text-[11px] text-slate-400 italic">Cargando árbol…</div>;
+  }
+  if (rootId == null) {
+    return (
+      <div className="p-4 text-center text-[11px] text-slate-400 italic flex items-center justify-center gap-2">
+        <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" /> Cargando árbol… (puede demorar harto en modelos pesados)
+      </div>
+    );
+  }
   const rootKids = childrenCache.get(rootId) ?? [];
   return (
     <div className="flex-1 overflow-y-auto p-2">
-      <p className="text-[9.5px] text-slate-400 px-1 pb-2 leading-snug">
-        Navega el árbol nativo del modelo. Click en <Crosshair className="w-2.5 h-2.5 inline" /> de una rama para aislarla
-        y ver cuántos elementos tiene — nunca se asigna nada hasta que confirmes en el banner del visor.
-        Click en un elemento del visor para ubicarlo aquí.
-      </p>
-      {rootKids.length ? rootKids.map(k => renderNode(k, 0)) : (
+      <div className="flex items-start gap-1.5 px-1 pb-2">
+        <p className="text-[9.5px] text-slate-400 leading-snug flex-1">
+          Navega el árbol nativo del modelo. Click en <Crosshair className="w-2.5 h-2.5 inline" /> de una rama para aislarla
+          y ver cuántos elementos tiene — nunca se asigna nada hasta que confirmes en el banner del visor.
+          Click en un elemento del visor para ubicarlo aquí. El % muestra cuántos de sus elementos ya
+          están vinculados al nivel {NIVEL_LABEL[activeNivel]} activo en Revisión.
+        </p>
+        <button
+          onClick={refreshAllCoverage}
+          title="Recalcular el % de todas las ramas que ya se han mostrado en este árbol"
+          className="shrink-0 flex items-center gap-1 px-1.5 py-1 rounded bg-slate-100 hover:bg-blue-100 text-slate-500 hover:text-blue-700 text-[9px] font-bold whitespace-nowrap"
+        >
+          <RefreshCw className="w-3 h-3" /> Actualizar %
+        </button>
+      </div>
+      {rootKids.length ? rootKids.map(k => (
+        <TreeNodeRow
+          key={k.dbId} node={k} depth={0}
+          expanded={expanded} childrenCache={childrenCache} highlightDbId={highlightDbId}
+          onToggle={toggle} onPreviewBranch={onPreviewBranch}
+          coverageMap={coverage} requestCoverage={requestCoverage}
+        />
+      )) : (
         <p className="text-[10.5px] text-slate-400 italic px-1">Esta rama no tiene hijos.</p>
       )}
     </div>
   );
 }
 
-function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onViewSelected, paintTarget, onArmPaint, onStopPaint, onCatalogChanged }: {
+function CoverageBadge({ state }: { state: CoverageState | undefined }) {
+  if (!state) return <span className="w-7 shrink-0" />;
+  if (state === 'loading') return <Loader2 className="w-3 h-3 text-slate-300 animate-spin shrink-0" />;
+  if (state === 'too-big') return <span className="text-[8.5px] text-slate-300 shrink-0" title="Rama muy grande para calcular automático — usa el botón de aislar para revisarla">—</span>;
+  if (state === 'error') return <span className="text-[9px] text-red-300 shrink-0" title="No se pudo calcular la cobertura">⚠</span>;
+  if (!state.total) return <span className="w-7 shrink-0" />;
+  const pct = Math.round((state.vinculados / state.total) * 100);
+  const color = pct >= 90 ? 'text-emerald-600' : pct >= 40 ? 'text-amber-600' : 'text-red-500';
+  return (
+    <span className={cn('text-[9px] font-mono font-bold shrink-0 w-9 text-right', color)} title={`${state.vinculados.toLocaleString('es-CL')} de ${state.total.toLocaleString('es-CL')} elementos vinculados`}>
+      {pct}%
+    </span>
+  );
+}
+
+function TreeNodeRow({ node, depth, expanded, childrenCache, highlightDbId, onToggle, onPreviewBranch, coverageMap, requestCoverage }: {
+  node: TreeNode; depth: number;
+  expanded: Set<number>; childrenCache: Map<number, TreeNode[]>; highlightDbId: number | null;
+  onToggle: (dbId: number) => void; onPreviewBranch: (dbId: number, name: string) => void;
+  coverageMap: Map<number, CoverageState>; requestCoverage: (dbId: number) => void;
+}) {
+  useEffect(() => { requestCoverage(node.dbId); }, [node.dbId, requestCoverage]);
+
+  const isOpen = expanded.has(node.dbId);
+  const kids = childrenCache.get(node.dbId);
+  const isHighlighted = highlightDbId === node.dbId;
+  return (
+    <div>
+      <div
+        id={`tree-node-${node.dbId}`}
+        className={cn('flex items-center gap-1 py-1 hover:bg-blue-50 rounded', isHighlighted && 'bg-amber-100 ring-1 ring-amber-400')}
+        style={{ paddingLeft: depth * 14 + 4 }}
+      >
+        {node.childCount > 0 ? (
+          <button onClick={() => onToggle(node.dbId)} className="shrink-0 p-0.5">
+            {isOpen ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <ChevronRight className="w-3 h-3 text-slate-400" />}
+          </button>
+        ) : <span className="w-4 shrink-0" />}
+        <span className="text-[11px] text-slate-700 truncate flex-1" title={node.name}>{node.name || `#${node.dbId}`}</span>
+        <CoverageBadge state={coverageMap.get(node.dbId)} />
+        {node.childCount > 0 && <span className="text-[9px] text-slate-400 font-mono shrink-0">{node.childCount}</span>}
+        <button
+          onClick={() => onPreviewBranch(node.dbId, node.name || `#${node.dbId}`)}
+          title="Aislar esta rama y ver cuántos elementos tiene, antes de clasificarla"
+          className="shrink-0 p-1 rounded bg-slate-100 hover:bg-blue-100 text-blue-600"
+        >
+          <Crosshair className="w-3 h-3" />
+        </button>
+      </div>
+      {isOpen && kids?.map(k => (
+        <TreeNodeRow
+          key={k.dbId} node={k} depth={depth + 1}
+          expanded={expanded} childrenCache={childrenCache} highlightDbId={highlightDbId}
+          onToggle={onToggle} onPreviewBranch={onPreviewBranch}
+          coverageMap={coverageMap} requestCoverage={requestCoverage}
+        />
+      ))}
+    </div>
+  );
+}
+
+function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onViewSelected, paintTarget, onArmPaint, onStopPaint, onCatalogChanged, onNivelChange }: {
   projectId: string; viewerReady: boolean;
   onColorByLevel: (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => void;
   onFocus: (nivel: Nivel, codigo: string) => void;
@@ -1542,9 +1807,12 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
   onArmPaint: (nivel: Nivel, codigo: string, r: number, g: number, b: number, a: number) => void;
   onStopPaint: () => void;
   onCatalogChanged: () => void;
+  onNivelChange?: (nivel: Nivel) => void;
 }) {
-  const initialPrefs = useMemo(() => loadRevisionPrefs(projectId), [projectId]);
-  const [nivel, setNivel] = useState<Nivel>(initialPrefs.nivel ?? 'cwa');
+  // Los defaults de useState deben ser IGUALES en server y cliente (el server nunca tiene
+  // localStorage) — si no, React detecta un mismatch de hidratación. La preferencia guardada se
+  // aplica recién en el useEffect de abajo, que solo corre en el cliente después del montaje.
+  const [nivel, setNivel] = useState<Nivel>('cwa');
   const nivelRef = useRef(nivel);
   nivelRef.current = nivel;
   const [items, setItems] = useState<RevisionItem[]>([]);
@@ -1557,12 +1825,24 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
   const [savingColors, setSavingColors] = useState(false);
   const [colorError, setColorError] = useState<string | null>(null);
   const [showNewForm, setShowNewForm] = useState(false);
-  const [mostrarFiltro, setMostrarFiltro] = useState<'todas' | 'oficiales' | 'creadas'>(initialPrefs.mostrarFiltro ?? 'todas');
-  const [colorearCreadas, setColorearCreadas] = useState(initialPrefs.colorearCreadas ?? true);
+  const [mostrarFiltro, setMostrarFiltro] = useState<'todas' | 'oficiales' | 'creadas'>('todas');
+  const [colorearCreadas, setColorearCreadas] = useState(true);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
 
   useEffect(() => {
+    const prefs = loadRevisionPrefs(projectId);
+    if (prefs.nivel) setNivel(prefs.nivel);
+    if (prefs.mostrarFiltro) setMostrarFiltro(prefs.mostrarFiltro);
+    if (prefs.colorearCreadas !== undefined) setColorearCreadas(prefs.colorearCreadas);
+    setPrefsLoaded(true);
+  }, [projectId]);
+
+  useEffect(() => { onNivelChange?.(nivel); }, [nivel, onNivelChange]);
+
+  useEffect(() => {
+    if (!prefsLoaded) return;
     saveRevisionPrefs(projectId, { nivel, mostrarFiltro, colorearCreadas });
-  }, [projectId, nivel, mostrarFiltro, colorearCreadas]);
+  }, [projectId, nivel, mostrarFiltro, colorearCreadas, prefsLoaded]);
   const [newCodigo, setNewCodigo] = useState('');
   const [newNombre, setNewNombre] = useState('');
   const [creating, setCreating] = useState(false);
@@ -1675,16 +1955,15 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
 
   // Marcar un checkbox aísla/colorea de inmediato esos elementos en el visor — no hace falta
   // apretar un botón "Colorear marcados" aparte, el check ES la acción.
-  const viewCodes = (codes: Set<string>) => {
-    if (!codes.size) return;
-    onViewSelected(nivel, itemsFiltrados.filter(it => codes.has(it.codigo)).map(it => ({ codigo: it.codigo, ...colorOf(it.codigo) })));
-  };
-
+  //
+  // toggleChecked/toggleGroup son simples: solo tocan el estado `checked`, nada más. Un único
+  // useEffect (más abajo) reacciona a ese cambio y dispara la vista — así hay UN solo lugar que
+  // decide cuándo mirar el visor, en vez de repetir la llamada en cada handler (eso fue lo que se
+  // rompió antes: llamar setState de otro componente desde dentro de un updater de setChecked).
   const toggleChecked = (codigo: string) => {
     setChecked(prev => {
       const next = new Set(prev);
       next.has(codigo) ? next.delete(codigo) : next.add(codigo);
-      viewCodes(next);
       return next;
     });
   };
@@ -1694,10 +1973,19 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
       const next = new Set(prev);
       const allOn = codes.length > 0 && codes.every(c => next.has(c));
       for (const c of codes) allOn ? next.delete(c) : next.add(c);
-      viewCodes(next);
       return next;
     });
   };
+
+  // Ref con la última versión de "qué significa ver estos códigos" — se actualiza cada render pero
+  // su IDENTIDAD nunca cambia, así el efecto de abajo puede depender SOLO de `checked` sin quedar
+  // con datos viejos (nivel/colores/filtro actuales) ni reactivarse de más.
+  const viewCheckedRef = useRef<(codes: Set<string>) => void>(() => {});
+  viewCheckedRef.current = (codes: Set<string>) => {
+    if (!codes.size) return;
+    onViewSelected(nivel, itemsFiltrados.filter(it => codes.has(it.codigo)).map(it => ({ codigo: it.codigo, ...colorOf(it.codigo) })));
+  };
+  useEffect(() => { viewCheckedRef.current(checked); }, [checked]);
 
   const groupState = (codes: string[]): 'all' | 'some' | 'none' => {
     if (!codes.length) return 'none';
@@ -1740,8 +2028,26 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
             type="color"
             value={rgbToHex(r, g, b)}
             onClick={e => e.stopPropagation()}
-            onChange={e => setPendingOverrides(prev => ({ ...prev, [it.codigo]: e.target.value }))}
-            title="Elegir un color personalizado para este código (recuerda Guardar)"
+            onChange={e => {
+              const hex = e.target.value;
+              setPendingOverrides(prev => {
+                const next = { ...prev, [it.codigo]: hex };
+                // Misma disciplina (la letra del CWP, ej. "C" de Civil) → mismo color en TODO el
+                // proyecto, sin importar el CWA/CV: así no hay que repintar cada uno a mano.
+                if (nivel === 'cwp') {
+                  const disc = deriveDisciplinaFromCwp(it.codigo);
+                  if (disc) {
+                    for (const other of items) {
+                      if (other.codigo !== it.codigo && deriveDisciplinaFromCwp(other.codigo) === disc) {
+                        next[other.codigo] = hex;
+                      }
+                    }
+                  }
+                }
+                return next;
+              });
+            }}
+            title={nivel === 'cwp' ? 'Elegir un color para esta disciplina — se aplica a todos los CWP con la misma letra (recuerda Guardar)' : 'Elegir un color personalizado para este código (recuerda Guardar)'}
             className="w-3.5 h-3.5 shrink-0 rounded-full border-0 p-0 cursor-pointer appearance-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:rounded-full [&::-webkit-color-swatch]:border [&::-webkit-color-swatch]:border-slate-300"
           />
         )}
@@ -1774,7 +2080,7 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="px-3 py-2 border-b border-slate-100 space-y-2 shrink-0">
         <div className="flex gap-1">
-          {(['cwa', 'cv', 'cwp'] as Nivel[]).map(n => (
+          {(['cwa', 'cv', 'cwp', 'swp'] as Nivel[]).map(n => (
             <button
               key={n} onClick={() => setNivel(n)}
               className={cn('flex-1 py-1 rounded text-[10.5px] font-bold uppercase',

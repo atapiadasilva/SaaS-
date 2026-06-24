@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
-type Nivel = 'cwa' | 'cv' | 'cwp';
+type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
 
 // Misma convención de derivación que /api/mining-elementos (mantener en sync).
 function deriveCwaCv(cwpId: string): { cwa_id: string | null; cv_id: string | null } {
@@ -11,6 +11,7 @@ function deriveCwaCv(cwpId: string): { cwa_id: string | null; cv_id: string | nu
   return { cwa_id: cv.slice(0, 4), cv_id: cv };
 }
 function fieldsForNivel(nivel: Nivel, trimmed: string): Record<string, string | null> {
+  if (nivel === 'swp') return { swp_id: trimmed === 'SIN-SWP' ? null : trimmed };
   if (trimmed === 'SIN-CWA' || trimmed === 'SIN-CV') return { cwa_id: null, cv_id: null, cwp_id: null };
   if (nivel === 'cwp') return { cwp_id: trimmed, ...deriveCwaCv(trimmed) };
   if (nivel === 'cv') return { cv_id: trimmed, cwa_id: trimmed.slice(0, 4), cwp_id: `${trimmed}.SIN-CWP` };
@@ -32,7 +33,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const { project_id, guid, name } = body ?? {};
-  const nivel: Nivel = ['cwa', 'cv', 'cwp'].includes(body?.nivel) ? body.nivel : 'cwp';
+  const nivel: Nivel = ['cwa', 'cv', 'cwp', 'swp'].includes(body?.nivel) ? body.nivel : 'cwp';
   const codigo = String(body?.codigo ?? '').trim();
   if (!project_id) return NextResponse.json({ error: 'Missing project_id' }, { status: 400 });
   if (!guid) return NextResponse.json({ error: 'Missing guid' }, { status: 400 });
@@ -49,7 +50,7 @@ export async function POST(req: NextRequest) {
   const { error } = await sb.from('mining_elementos').upsert(row, { onConflict: 'project_id,sp3d_moniker' });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const campos = (['cwa_id', 'cv_id', 'cwp_id'] as const).filter(c => c in fields);
+  const campos = (['cwa_id', 'cv_id', 'cwp_id', 'swp_id'] as const).filter(c => c in fields);
   const logRows = campos.map(campo => ({
     project_id, sp3d_moniker: sp3dMoniker, campo,
     valor_anterior: null, valor_nuevo: (fields as any)[campo],

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
-type Nivel = 'cwa' | 'cv' | 'cwp';
-const CATALOG_TABLE: Record<Nivel, string> = { cwa: 'mining_cwa', cv: 'mining_cv', cwp: 'mining_cwp' };
-const CATALOG_ID_COL: Record<Nivel, string> = { cwa: 'cwa_id', cv: 'cv_id', cwp: 'cwp_id' };
-const CATALOG_NAME_COL: Record<Nivel, string> = { cwa: 'cwa_nombre', cv: 'cv_nombre', cwp: 'cwp_nombre' };
-const NULL_COL: Record<Nivel, string | null> = { cwa: 'cwa_id', cv: 'cv_id', cwp: null };
-const SIN_CODIGO: Record<Nivel, string | null> = { cwa: 'SIN-CWA', cv: 'SIN-CV', cwp: null };
+type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
+const CATALOG_TABLE: Record<Nivel, string> = { cwa: 'mining_cwa', cv: 'mining_cv', cwp: 'mining_cwp', swp: 'mining_swp' };
+const CATALOG_ID_COL: Record<Nivel, string> = { cwa: 'cwa_id', cv: 'cv_id', cwp: 'cwp_id', swp: 'swp_id' };
+const CATALOG_NAME_COL: Record<Nivel, string> = { cwa: 'cwa_nombre', cv: 'cv_nombre', cwp: 'cwp_nombre', swp: 'nombre_swp' };
+const NULL_COL: Record<Nivel, string | null> = { cwa: 'cwa_id', cv: 'cv_id', cwp: null, swp: 'swp_id' };
+const SIN_CODIGO: Record<Nivel, string | null> = { cwa: 'SIN-CWA', cv: 'SIN-CV', cwp: null, swp: 'SIN-SWP' };
 
 // "{padre}.SIN-CV" / "{padre}.SIN-CWP" son placeholders que crea el PATCH de reasignación cuando se
 // asigna solo el nivel superior (ver fieldsForNivel en /api/mining-elementos) — les da un nombre

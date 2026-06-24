@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
-type Nivel = 'cwa' | 'cv' | 'cwp';
-const COL: Record<Nivel, string> = { cwa: 'cwa_id', cv: 'cv_id', cwp: 'cwp_id' };
-// Pseudo-código para los elementos sin clasificar oficialmente (cwa_id/cv_id en NULL en la BD) —
-// no existe como valor real de columna, así que se resuelve aparte con IS NULL.
-const SENTINEL: Record<Nivel, string | null> = { cwa: 'SIN-CWA', cv: 'SIN-CV', cwp: null };
+type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
+const COL: Record<Nivel, string> = { cwa: 'cwa_id', cv: 'cv_id', cwp: 'cwp_id', swp: 'swp_id' };
+// Pseudo-código para los elementos sin clasificar oficialmente (cwa_id/cv_id/swp_id en NULL en la
+// BD) — no existe como valor real de columna, así que se resuelve aparte con IS NULL.
+const SENTINEL: Record<Nivel, string | null> = { cwa: 'SIN-CWA', cv: 'SIN-CV', cwp: null, swp: 'SIN-SWP' };
 const PAGE = 1000; // tope real de filas por respuesta de PostgREST — pedir más no sirve, hay que paginar
 
 // Pide la 1ra página con count exacto, y dispara TODAS las páginas restantes en PARALELO

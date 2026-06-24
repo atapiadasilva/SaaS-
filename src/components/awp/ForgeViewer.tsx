@@ -67,6 +67,13 @@ export interface ForgeViewerHandle {
   fitToView:               (dbIds?: number[]) => void;
   navigateTo:              (dbId: number) => void;
   getRootId:               () => number | null;
+  /**
+   * Espera (hasta 5 min, igual que el resto de los métodos que recorren el instance tree) a que el
+   * árbol nativo del modelo esté listo — úsalo ANTES de getRootId()/getChildren() en vez de pollear
+   * a mano, porque modelos pesados pueden demorar minutos en poblar el instance tree después de
+   * que onReady() ya se disparó.
+   */
+  waitForInstanceTree:     () => Promise<void>;
   getChildren:             (dbId: number) => { dbId: number; name: string; childCount: number }[];
   getNodeName:             (dbId: number) => string | null;
   getChildCount:           (dbId: number) => number;
@@ -103,6 +110,13 @@ export interface ForgeViewerHandle {
   /** Resuelve TODOS los dbIds cuyo valor de propiedad está en `values` (deduplicado) */
   resolveManyByProperty:   (propName: string, values: string[]) => Promise<number[]>;
   /**
+   * Igual que resolveManyByProperty(SP3D_MONIKER, …) pero además resuelve los monikers SINTÉTICOS
+   * (formato `SIN-MONIKER::<guid>`, generados por /api/mining-elementos/agregar-sin-moniker para
+   * elementos sin la propiedad SP3D_MONIKER) directamente por su GUID nativo del modelo vía
+   * getExternalIdMapping — así esos elementos también aparecen al colorear/aislar por CWA/CV/CWP/SWP.
+   */
+  resolveMonikers:         (monikers: string[]) => Promise<number[]>;
+  /**
    * Igual que applyPropertyColorMap pero pinta TODOS los elementos que comparten cada valor
    * (no solo uno). Úsalo para "colorear por CWA/CV/CWP" donde un valor agrupa miles de elementos.
    * @returns Número de elementos pintados (suma de matches, no de valores)
@@ -122,6 +136,8 @@ export interface ForgeViewerHandle {
   setGhosting:             (enabled: boolean) => void;
   /** Pinta dbIds ya resueltos con un color fijo (sin pasar por ningún índice de propiedades) */
   colorDbIds:              (dbIds: number[], r: number, g: number, b: number, a: number) => void;
+  /** Quita el theming color de SOLO estos dbIds (vuelven a su color nativo del CAD), sin tocar el resto del modelo */
+  clearThemingForDbIds:    (dbIds: number[]) => void;
   /** Aísla dbIds; si ghosted=true los no-aislados quedan transparentes (fantasma), si no, ocultos del todo */
   showOnly:                (dbIds: number[], ghosted: boolean) => void;
   /** Cambia el color de fondo del visor (gradiente r1,g1,b1 -> r2,g2,b2) */
@@ -378,10 +394,16 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
      * getBulkProperties con decenas de miles de dbIds en una sola llamada puede fallar o truncarse
      * silenciosamente en el SDK de Forge — por eso se pide en chunks de 2000, igual que el índice universal.
      */
+    // Evita reconstruir el índice en paralelo si ya hay una build en curso para ese propName —
+    // sin esto, dos clicks seguidos en "Colorear" (el primero todavía cargando) disparaban DOS
+    // traversals completos de los ~57k elementos a la vez, compitiendo por el mismo trabajo.
+    const propMultiIndexBuildPromise = useRef<Map<string, Promise<Record<string, number[]>>>>(new Map());
     const buildPropIndexChunked = (propName: string): Promise<Record<string, number[]>> => {
       const cached = propMultiIndexCache.current.get(propName);
       if (cached) return Promise.resolve(cached);
-      return waitForTree().then(() => new Promise<Record<string, number[]>>((resolve, reject) => {
+      const inFlight = propMultiIndexBuildPromise.current.get(propName);
+      if (inFlight) return inFlight;
+      const promise = waitForTree().then(() => new Promise<Record<string, number[]>>((resolve, reject) => {
         const v = viewerRef.current;
         const m = modelRef.current;
         if (!v || !m) { reject(new Error('Modelo no cargado')); return; }
@@ -424,7 +446,9 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
           );
         };
         processChunk(0);
-      }));
+      })).finally(() => propMultiIndexBuildPromise.current.delete(propName));
+      propMultiIndexBuildPromise.current.set(propName, promise);
+      return promise;
     };
 
     /**
@@ -591,6 +615,8 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         const tree = modelRef.current.getInstanceTree?.();
         return tree ? tree.getRootId() : null;
       },
+
+      waitForInstanceTree: () => waitForTree(),
 
       getChildren: (dbId: number): { dbId: number; name: string; childCount: number }[] => {
         if (!modelRef.current) return [];
@@ -918,38 +944,15 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
       },
 
       resolveByProperty: async (propName, values) => {
-        const v = viewerRef.current;
-        if (!v || !modelRef.current) return [];
-        const cached = propIndexCache.current.get(propName);
-        let index: Record<string, number>;
-        if (cached) {
-          index = cached;
-        } else {
-          await waitForTree();
-          const tree = modelRef.current.getInstanceTree?.();
-          if (!tree) return [];
-          const allDbIds: number[] = [];
-          tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
-          index = await new Promise<Record<string, number>>((res, rej) =>
-            v.model.getBulkProperties(
-              allDbIds, { propFilter: [propName] },
-              (results: any[]) => {
-                const idx: Record<string, number> = {};
-                for (const r of results) {
-                  const prop = (r.properties ?? []).find((p: any) =>
-                    p.displayName === propName || p.attributeName === propName
-                  );
-                  if (prop?.displayValue != null) idx[String(prop.displayValue).trim()] = r.dbId;
-                }
-                propIndexCache.current.set(propName, idx);
-                res(idx);
-              },
-              rej
-            )
-          );
-        }
+        // Reusa el índice chunked (mismo que resolveManyByProperty) — la versión anterior filtraba
+        // con { propFilter: [propName] } a nivel SDK, que matchea por attributeName exacto y devolvía
+        // 0 resultados para propiedades de categoría custom cuyo attributeName interno difiere de su
+        // displayName (ej. SP3D_MONIKER bajo DATA_EIMISA).
+        const idx = await buildPropIndexChunked(propName);
         const set = new Set(values.map(v => String(v).trim()));
-        return Object.entries(index).filter(([k]) => set.has(k)).map(([, dbId]) => dbId);
+        const result: number[] = [];
+        for (const key of set) result.push(...(idx[key] ?? []));
+        return result;
       },
 
       buildPropertyMultiIndex: (propName: string) => buildPropIndexChunked(propName),
@@ -962,6 +965,41 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         for (const key of set) {
           for (const dbId of (idx[key] ?? [])) {
             if (!seen.has(dbId)) { seen.add(dbId); result.push(dbId); }
+          }
+        }
+        return result;
+      },
+
+      resolveMonikers: async (monikers) => {
+        const real: string[] = [];
+        const guids: string[] = [];
+        const SYNTH_PREFIX = 'SIN-MONIKER::';
+        for (const m of monikers) {
+          if (m.startsWith(SYNTH_PREFIX)) guids.push(m.slice(SYNTH_PREFIX.length));
+          else real.push(m);
+        }
+        const seen = new Set<number>();
+        const result: number[] = [];
+        if (real.length) {
+          const idx = await buildPropIndexChunked('SP3D_MONIKER');
+          for (const key of new Set(real.map(v => v.trim()))) {
+            for (const dbId of (idx[key] ?? [])) {
+              if (!seen.has(dbId)) { seen.add(dbId); result.push(dbId); }
+            }
+          }
+        }
+        if (guids.length && modelRef.current) {
+          try {
+            const mapping = await new Promise<Record<string, number>>((res, rej) => {
+              const timeout = setTimeout(() => rej(new Error('Mapping timeout')), 10000);
+              modelRef.current!.getExternalIdMapping((m: Record<string, number>) => { clearTimeout(timeout); res(m); }, (err: any) => { clearTimeout(timeout); rej(err); });
+            });
+            const guidSet = new Set(guids);
+            for (const [eid, dbId] of Object.entries(mapping)) {
+              if (guidSet.has(eid) && !seen.has(dbId)) { seen.add(dbId); result.push(dbId); }
+            }
+          } catch (e) {
+            console.warn('resolveMonikers: error resolviendo GUIDs sintéticos:', e);
           }
         }
         return result;
@@ -1185,6 +1223,13 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         if (!v || !modelRef.current || !dbIds.length) return;
         const color = new (window as any).THREE.Vector4(r, g, b, a);
         for (const dbId of expandToLeafDbIds(dbIds)) v.setThemingColor(dbId, color, modelRef.current, false);
+        v.impl?.invalidate(false, false, true);
+      },
+
+      clearThemingForDbIds: (dbIds) => {
+        const v = viewerRef.current;
+        if (!v || !modelRef.current || !dbIds.length) return;
+        for (const dbId of expandToLeafDbIds(dbIds)) v.setThemingColor(dbId, null, modelRef.current, false);
         v.impl?.invalidate(false, false, true);
       },
 

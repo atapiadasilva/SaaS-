@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
-type Nivel = 'cwa' | 'cv' | 'cwp';
-const TABLE: Record<Nivel, string> = { cwa: 'mining_cwa', cv: 'mining_cv', cwp: 'mining_cwp' };
-const ID_COL: Record<Nivel, string> = { cwa: 'cwa_id', cv: 'cv_id', cwp: 'cwp_id' };
-const NAME_COL: Record<Nivel, string> = { cwa: 'cwa_nombre', cv: 'cv_nombre', cwp: 'cwp_nombre' };
+type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
+const TABLE: Record<Nivel, string> = { cwa: 'mining_cwa', cv: 'mining_cv', cwp: 'mining_cwp', swp: 'mining_swp' };
+const ID_COL: Record<Nivel, string> = { cwa: 'cwa_id', cv: 'cv_id', cwp: 'cwp_id', swp: 'swp_id' };
+const NAME_COL: Record<Nivel, string> = { cwa: 'cwa_nombre', cv: 'cv_nombre', cwp: 'cwp_nombre', swp: 'nombre_swp' };
 
 // CWP_ID = {CV}.{DISC}{NNN} (ej. 312101.D001) → CV = "312101" → CWA = CV[:4] = "3121"
 // (misma convención usada en /api/mining-elementos) — se usa para precompletar cwa_id/cv_id del catálogo.
