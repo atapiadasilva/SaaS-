@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { listLocalDocNums } from '@/lib/aconex-local';
 
 // GET /api/mining-data?project_id=...
 // Returns the AWP mining hierarchy (CWA > CV > CWP > {planos, partidas, programa}) for one project.
@@ -20,7 +21,7 @@ export async function GET(req: NextRequest) {
     sb.from('mining_planos').select('*').eq('project_id', projectId),
     sb.from('mining_pwp').select('*').eq('project_id', projectId),
     sb.from('mining_partidas').select('*').eq('project_id', projectId),
-    sb.from('mining_programa').select('*').eq('project_id', projectId),
+    sb.from('mining_programa').select('*').eq('project_id', projectId).eq('fuente', 'P333'),
     sb.rpc('mining_cwp_element_counts', { p_project_id: projectId }),
   ]);
 
@@ -36,10 +37,15 @@ export async function GET(req: NextRequest) {
   const pwpToCwp = new Map<string, string>();
   for (const p of pwpRes.data ?? []) pwpToCwp.set(p.pwp_id, p.cwp_id);
 
+  // Códigos con PDF disponible en la carpeta local de Aconex (ACONEX_DOCS_DIR) — para no mostrar
+  // un link clickeable en planos que no tienen archivo (ej. "Procedimientos" que no vienen en el
+  // export de Aconex, solo planos/especificaciones).
+  const localDocNums = listLocalDocNums();
+
   const planosByCwp = new Map<string, any[]>();
   for (const p of planosRes.data ?? []) {
     const arr = planosByCwp.get(p.cwp_id) ?? [];
-    arr.push({ doc: p.codigo_documento, de: p.descripcion, ti: p.tipo });
+    arr.push({ doc: p.codigo_documento, de: p.descripcion, ti: p.tipo, tieneArchivo: localDocNums.has(p.codigo_documento) });
     planosByCwp.set(p.cwp_id, arr);
   }
 
@@ -55,7 +61,7 @@ export async function GET(req: NextRequest) {
   const programaByCwp = new Map<string, any[]>();
   for (const t of programaRes.data ?? []) {
     const arr = programaByCwp.get(t.cwp_id) ?? [];
-    arr.push({ n: t.nombre_actividad, hh: t.hh, s: t.fecha_inicio, e: t.fecha_fin, code: t.cod_actividad });
+    arr.push({ id: t.id, n: t.nombre_actividad, hh: t.hh, s: t.fecha_inicio, e: t.fecha_fin, code: t.cod_actividad });
     programaByCwp.set(t.cwp_id, arr);
   }
 

@@ -15,6 +15,10 @@ export interface BimConfig {
   configuredAt: string;
   projectId?: string;
   hubId?: string;
+  itemCategory?: string;
+  itemPropName?: string;
+  cwpCategory?: string;
+  cwpPropName?: string;
 }
 
 interface BimConfigModalProps {
@@ -381,6 +385,13 @@ export default function BimConfigModal({
   const [manualUrn, setManualUrn]   = useState(current?.urn ?? '');
   const [manualName, setManualName] = useState(current?.modelName ?? '');
 
+  // Advanced fields
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [itemCategory, setItemCategory] = useState(current?.itemCategory ?? 'Item');
+  const [itemPropName, setItemPropName] = useState(current?.itemPropName ?? 'SP3D_MONIKER');
+  const [cwpCategory, setCwpCategory]   = useState(current?.cwpCategory ?? 'Item');
+  const [cwpPropName, setCwpPropName]   = useState(current?.cwpPropName ?? 'CWP');
+
   const isConfigured = !!current?.urn;
 
   const handleSelectFromACC = (cfg: Pick<BimConfig, 'urn' | 'modelName' | 'projectId' | 'hubId'>) => {
@@ -401,6 +412,10 @@ export default function BimConfigModal({
       configuredAt: new Date().toISOString(),
       projectId: pending?.projectId,
       hubId: pending?.hubId,
+      itemCategory: itemCategory.trim(),
+      itemPropName: itemPropName.trim() || 'SP3D_MONIKER',
+      cwpCategory: cwpCategory.trim(),
+      cwpPropName: cwpPropName.trim() || 'CWP',
     };
 
     try {
@@ -569,6 +584,70 @@ export default function BimConfigModal({
                   className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-mono text-slate-700 outline-none focus:bg-white focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all resize-none placeholder:text-slate-300"
                 />
               </div>
+            </div>
+          )}
+
+          {wantsToChange && (
+            <div className="mt-6 border-t border-slate-100 pt-4">
+              <button 
+                onClick={() => setShowAdvanced(!showAdvanced)} 
+                className="flex items-center gap-2 text-[11px] font-bold text-slate-500 hover:text-slate-800 transition-colors uppercase tracking-wider"
+              >
+                {showAdvanced ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                Configuración Avanzada (Propiedades)
+              </button>
+              
+              {showAdvanced && (
+                <div className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4">
+                  <div className="space-y-4">
+                    <h3 className="text-[11px] font-black text-slate-800 uppercase border-b border-slate-100 pb-1">Vinculación de Ítems (Unidad)</h3>
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Categoría (Pestaña)</label>
+                      <input
+                        type="text"
+                        value={itemCategory}
+                        onChange={e => setItemCategory(e.target.value)}
+                        placeholder="Ej: EIMI_EPV1"
+                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 outline-none focus:bg-white focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all placeholder:text-slate-300"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Propiedad</label>
+                      <input
+                        type="text"
+                        value={itemPropName}
+                        onChange={e => setItemPropName(e.target.value)}
+                        placeholder="Ej: ElementGUID"
+                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 outline-none focus:bg-white focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all placeholder:text-slate-300"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <h3 className="text-[11px] font-black text-slate-800 uppercase border-b border-slate-100 pb-1">Agrupación (CWP)</h3>
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Categoría (Pestaña)</label>
+                      <input
+                        type="text"
+                        value={cwpCategory}
+                        onChange={e => setCwpCategory(e.target.value)}
+                        placeholder="Ej: EIMI_EPV1"
+                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 outline-none focus:bg-white focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all placeholder:text-slate-300"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Propiedad</label>
+                      <input
+                        type="text"
+                        value={cwpPropName}
+                        onChange={e => setCwpPropName(e.target.value)}
+                        placeholder="Ej: CWP 1"
+                        className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 outline-none focus:bg-white focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 transition-all placeholder:text-slate-300"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

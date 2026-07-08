@@ -10,15 +10,19 @@ const PAGE = 1000; // tope real de filas por respuesta de PostgREST — pedir m�
 
 // Pide la 1ra página con count exacto, y dispara TODAS las páginas restantes en PARALELO
 // (en vez de una a una) — para 50k+ filas esto reduce la espera de ~10s secuenciales a ~1 round-trip.
-async function fetchAllPaged(build: (from: number, to: number) => PromiseLike<{ data: any[] | null; error: any; count: number | null }>) {
-  const first = await build(0, PAGE - 1);
+// Solo la 1ra página pide count: 'exact' (se necesita una sola vez, para saber cuántas páginas
+// faltan) — pedirlo en cada página disparaba ~56 conteos exactos redundantes EN PARALELO sobre
+// la misma tabla (uno por página), saturando el pool de conexiones y siendo la causa real de los
+// ~4-5s que tardaba este endpoint en modelos de 50k+ elementos.
+async function fetchAllPaged(build: (from: number, to: number, withCount: boolean) => PromiseLike<{ data: any[] | null; error: any; count: number | null }>) {
+  const first = await build(0, PAGE - 1, true);
   if (first.error) throw new Error(first.error.message);
   const rows: any[] = [...(first.data ?? [])];
   const total = first.count ?? rows.length;
   if (rows.length < PAGE || total <= PAGE) return rows;
   const remainingPages = Math.ceil((total - PAGE) / PAGE);
   const pages = await Promise.all(
-    Array.from({ length: remainingPages }, (_, i) => { const from = (i + 1) * PAGE; return build(from, from + PAGE - 1); })
+    Array.from({ length: remainingPages }, (_, i) => { const from = (i + 1) * PAGE; return build(from, from + PAGE - 1, false); })
   );
   for (const p of pages) {
     if (p.error) throw new Error(p.error.message);
@@ -52,8 +56,8 @@ export async function GET(req: NextRequest) {
 
   try {
     if (!soloCodigosRaw || realCodigos?.length !== 0) {
-      const rows = await fetchAllPaged((from, to) => {
-        let q = sb.from('mining_elementos').select(`sp3d_moniker, ${col}`, { count: 'exact' }).eq('project_id', projectId).not(col, 'is', null).range(from, to);
+      const rows = await fetchAllPaged((from, to, withCount) => {
+        let q = sb.from('mining_elementos').select(`sp3d_moniker, ${col}`, withCount ? { count: 'exact' } : undefined).eq('project_id', projectId).not(col, 'is', null).range(from, to);
         if (realCodigos) q = q.in(col, realCodigos);
         return q;
       });
@@ -65,8 +69,8 @@ export async function GET(req: NextRequest) {
     }
 
     if (wantsSentinel && sentinel) {
-      const rows = await fetchAllPaged((from, to) =>
-        sb.from('mining_elementos').select('sp3d_moniker', { count: 'exact' }).eq('project_id', projectId).is(col, null).range(from, to)
+      const rows = await fetchAllPaged((from, to, withCount) =>
+        sb.from('mining_elementos').select('sp3d_moniker', withCount ? { count: 'exact' } : undefined).eq('project_id', projectId).is(col, null).range(from, to)
       );
       for (const row of rows) (groups[sentinel] ??= []).push(row.sp3d_moniker);
     }

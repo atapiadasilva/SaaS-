@@ -86,7 +86,9 @@ export async function GET(req: NextRequest) {
   // cwa_id/cv_id en NULL — sin este pseudo-código no aparecerían nunca en el checklist de estos niveles.
   const sinCodigo = SIN_CODIGO[nivel];
   const sinCount = sinAsignarRes.count ?? 0;
-  if (sinCodigo && sinCount > 0) {
+  // Si ya existe como código real del catálogo (p.ej. alguien creó "SIN-CWA" como categoría
+  // de verdad), no lo agreguemos de nuevo como pseudo-código — duplicaría la key en la UI.
+  if (sinCodigo && sinCount > 0 && !nombrePorCodigo.has(sinCodigo) && !codigosVistos.has(sinCodigo)) {
     const est = estadoPorCodigo.get(sinCodigo);
     items.push({
       codigo: sinCodigo, nombre: `Sin ${nivel.toUpperCase()} asignado (revisar / clasificar)`, nElementos: sinCount, enCatalogo: false, esOficial: false,

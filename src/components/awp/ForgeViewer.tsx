@@ -49,6 +49,10 @@ export interface NodeInfo {
 }
 
 export interface ForgeViewerHandle {
+  /** Modelo Forge cargado (Autodesk.Viewing.Model) o null si aún no carga. */
+  getModel:                () => any | null;
+  /** Instancia del viewer (GuiViewer3D) o null. */
+  getViewer:               () => any | null;
   getSelectedIds:          () => number[];
   getIsolatedNodes:        () => number[];
   /** Sube un nivel en el árbol de instancias. Devuelve null si es la raíz o el árbol no está listo. */
@@ -107,15 +111,13 @@ export interface ForgeViewerHandle {
    * Úsalo cuando muchos elementos comparten el mismo valor (ej: CWP, CWA, disciplina).
    */
   buildPropertyMultiIndex: (propName: string) => Promise<Record<string, number[]>>;
-  /** Resuelve TODOS los dbIds cuyo valor de propiedad está en `values` (deduplicado) */
+  /** Resuelve TODOS los dbIds cuyo valor de propiedad está en `values` (deduplicado). Puede recibir múltiples propiedades separadas por coma. */
   resolveManyByProperty:   (propName: string, values: string[]) => Promise<number[]>;
   /**
    * Igual que resolveManyByProperty(SP3D_MONIKER, …) pero además resuelve los monikers SINTÉTICOS
-   * (formato `SIN-MONIKER::<guid>`, generados por /api/mining-elementos/agregar-sin-moniker para
-   * elementos sin la propiedad SP3D_MONIKER) directamente por su GUID nativo del modelo vía
-   * getExternalIdMapping — así esos elementos también aparecen al colorear/aislar por CWA/CV/CWP/SWP.
+   * directamente por su GUID nativo del modelo vía getExternalIdMapping.
    */
-  resolveMonikers:         (monikers: string[]) => Promise<number[]>;
+  resolveMonikers:         (monikers: string[], propName?: string) => Promise<number[]>;
   /**
    * Igual que applyPropertyColorMap pero pinta TODOS los elementos que comparten cada valor
    * (no solo uno). Úsalo para "colorear por CWA/CV/CWP" donde un valor agrupa miles de elementos.
@@ -191,6 +193,7 @@ interface ForgeViewerProps {
   onIndexReady?:      (index: ModelIndex) => void;
   /** 0–100 durante el scan; -1 cuando termina */
   onIndexProgress?:   (pct: number) => void;
+  disableBackgroundIndex?: boolean;
 }
 
 const VIEWER_VERSION = '7.97';
@@ -215,6 +218,67 @@ const VIEWER_JS  = `https://developer.api.autodesk.com/modelderivative/v2/viewer
  */
 const HEADER_SAMPLE = 300; // elements sampled for property-headers discovery
 
+// Lotes más chicos y con más respiro entre ellos = cada lote bloquea el hilo principal mucho menos
+// tiempo (medido: con 2000/10ms, cada lote tardaba ~1.3s a 1 fps sostenido — "no fluye" aunque ya
+// no se cuelgue del todo). Con 800/30ms el trabajo total tarda un poco más pero cada bloqueo es
+// mucho más corto, así el navegador puede seguir pintando frames entre medio.
+const BULK_PROPS_CHUNK_SIZE  = 800;
+const BULK_PROPS_CHUNK_DELAY = 30;    // ms de respiro entre lotes para no congelar el frame
+const BULK_PROPS_CHUNK_TIMEOUT = 30_000; // si Forge nunca llama ni resolve ni reject, no se cuelga para siempre
+
+/**
+ * Pide getBulkProperties en LOTES de BULK_PROPS_CHUNK_SIZE en vez de pasar todos los dbIds de una
+ * sola vez — con modelos de decenas de miles de elementos, una sola llamada puede demorar varios
+ * MINUTOS o fallar/truncarse silenciosamente en el SDK de Forge (medido en este proyecto: ~57k
+ * elementos → freezes de hasta 5+ minutos). Antes este mismo patrón estaba copiado a mano en 4-5
+ * funciones distintas de este archivo — cualquier función nueva que copiara la versión vieja sin
+ * lotes reintroducía el bug, que es justo lo que pasó.
+ *
+ * checkLiveModel() se vuelve a invocar en CADA lote (no se captura una sola vez al principio) para
+ * detectar si el visor se desmontó/recargó a mitad de camino y abortar limpio en vez de romper con
+ * un TypeError no controlado. onChunk(results) hace la acumulación específica de cada caller
+ * (índice, filas CSV, etc.) — este helper solo se encarga del chunking/timeout/abort.
+ */
+function fetchBulkPropertiesChunked(
+  allDbIds: number[],
+  propFilter: string[] | null,
+  checkLiveModel: () => any | null,
+  onChunk: (results: any[], chunkLength: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const processChunk = (startIndex: number) => {
+      const liveModel = checkLiveModel();
+      if (!liveModel) { resolve(); return; } // visor desmontado — cancelar silenciosamente
+      if (startIndex >= allDbIds.length) { resolve(); return; }
+      const chunk = allDbIds.slice(startIndex, startIndex + BULK_PROPS_CHUNK_SIZE);
+      let settled = false;
+      const timeoutId = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`Timeout esperando getBulkProperties (lote ${startIndex}-${startIndex + chunk.length} de ${allDbIds.length})`));
+      }, BULK_PROPS_CHUNK_TIMEOUT);
+      liveModel.getBulkProperties(
+        chunk,
+        propFilter ? { propFilter } : undefined,
+        (results: any[]) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          try { onChunk(results, chunk.length); } catch (e) { reject(e as Error); return; }
+          setTimeout(() => processChunk(startIndex + BULK_PROPS_CHUNK_SIZE), BULK_PROPS_CHUNK_DELAY);
+        },
+        (err: any) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          reject(new Error(String(err)));
+        }
+      );
+    };
+    processChunk(0);
+  });
+}
+
 async function buildIndexBackground(
   model:      any,
   viewer:     any,
@@ -230,34 +294,35 @@ async function buildIndexBackground(
   onProgress(5); // signal start so the UI shows something immediately
 
   // ── Pass 1: GUID index ───────────────────────────────────────────────────
-  // propFilter: ['GUID'] → only requests one property for all elements (fast)
-  const guidIndex: Record<string, number> = await new Promise((resolve, reject) => {
-    viewer.model.getBulkProperties(
-      allDbIds,
-      { propFilter: ['GUID'] },
-      (results: any[]) => {
-        const idx: Record<string, number> = {};
-        for (const r of results) {
-          const p = (r.properties ?? []).find((p: any) =>
-            p.displayName === 'GUID' || p.attributeName === 'GUID'
-          );
-          if (p?.displayValue != null && p.displayValue !== '') {
-            idx[String(p.displayValue).trim()] = r.dbId;
-          }
-          if (r.name && r.name.length >= 3) {
-            idx[r.name.trim()] = r.dbId;
-            idx[r.name.trim().toLowerCase()] = r.dbId;
-          }
-          if (r.externalId && r.externalId.length >= 3) {
-            idx[r.externalId.trim()] = r.dbId;
-            idx[r.externalId.trim().toLowerCase()] = r.dbId;
-          }
+  // propFilter: ['GUID'] → only requests one property for all elements (small payload), pero
+  // igual se pide en LOTES vía fetchBulkPropertiesChunked — el límite real es la CANTIDAD de
+  // dbIds por llamada, no el tamaño de la respuesta (un propFilter angosto no evita el freeze).
+  const guidIndex: Record<string, number> = {};
+  let pass1Done = 0;
+  await fetchBulkPropertiesChunked(
+    allDbIds, ['GUID'],
+    () => model,
+    (results: any[], chunkLen: number) => {
+      for (const r of results) {
+        const p = (r.properties ?? []).find((p: any) =>
+          p.displayName === 'GUID' || p.attributeName === 'GUID'
+        );
+        if (p?.displayValue != null && p.displayValue !== '') {
+          guidIndex[String(p.displayValue).trim()] = r.dbId;
         }
-        resolve(idx);
-      },
-      (err: any) => reject(new Error(String(err)))
-    );
-  });
+        if (r.name && r.name.length >= 3) {
+          guidIndex[r.name.trim()] = r.dbId;
+          guidIndex[r.name.trim().toLowerCase()] = r.dbId;
+        }
+        if (r.externalId && r.externalId.length >= 3) {
+          guidIndex[r.externalId.trim()] = r.dbId;
+          guidIndex[r.externalId.trim().toLowerCase()] = r.dbId;
+        }
+      }
+      pass1Done += chunkLen;
+      onProgress(5 + Math.round((pass1Done / Math.max(1, allDbIds.length)) * 65)); // 5 → 70%
+    },
+  );
 
   onProgress(70); // pass 1 done
 
@@ -319,7 +384,7 @@ function loadScript(src: string): Promise<void> {
 }
 
 const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
-  ({ urn, onSelectionChange, onReady, cachedIndex, onIndexReady, onIndexProgress }, ref) => {
+  ({ urn, onSelectionChange, onReady, cachedIndex, onIndexReady, onIndexProgress, disableBackgroundIndex = false }, ref) => {
     const containerRef    = useRef<HTMLDivElement>(null);
     const viewerRef       = useRef<any>(null);
     const modelRef        = useRef<any>(null);
@@ -376,7 +441,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         
         const poller = setInterval(() => {
           elapsed += tick;
-          if (treeReadyRef.current || viewerRef.current?.model?.getInstanceTree?.()) {
+          if (treeReadyRef.current || modelRef.current?.getInstanceTree?.()) {
             clearInterval(poller);
             treeReadyRef.current = true;
             resolve();
@@ -403,51 +468,134 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
       if (cached) return Promise.resolve(cached);
       const inFlight = propMultiIndexBuildPromise.current.get(propName);
       if (inFlight) return inFlight;
-      const promise = waitForTree().then(() => new Promise<Record<string, number[]>>((resolve, reject) => {
+      // Persistido en IndexedDB por urn+propName+elementCount — si el modelo cambia (aunque el URN
+      // sea el mismo), el conteo de elementos será diferente y se invalida el caché automáticamente.
+      const promise = waitForTree().then(async () => {
         const v = viewerRef.current;
         const m = modelRef.current;
-        if (!v || !m) { reject(new Error('Modelo no cargado')); return; }
+        if (!v || !m) throw new Error('Modelo no cargado');
         const tree = m.getInstanceTree?.();
-        if (!tree) { reject(new Error('Instance tree no disponible')); return; }
+        if (!tree) throw new Error('Instance tree no disponible');
 
         const allDbIds: number[] = [];
         tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
 
-        const CHUNK_SIZE = 2000;
+        const idbKey = `propidxv5-${propName}-${urn}-${allDbIds.length}`;
+        try {
+          const fromIdb = await get(idbKey);
+          if (fromIdb) { propMultiIndexCache.current.set(propName, fromIdb); return fromIdb; }
+        } catch (e) { console.warn('IDB read err', e); }
+
+        const idxParts = propName.split('/');
+        const categoryFilter = idxParts.length > 1 ? idxParts[0] : null;
+        const actualPropName = idxParts.length > 1 ? idxParts[1] : propName;
+
         const index: Record<string, number[]> = {};
-        const processChunk = (startIndex: number) => {
-          // Releer en vivo en cada chunk (no la captura de arriba): si el visor/modelo se recarga o
-          // se desmonta mientras esto sigue en curso (varios setTimeout encadenados), v.model puede
-          // quedar undefined y romper con un TypeError no controlado en vez de simplemente abortar.
-          const vNow = viewerRef.current;
-          const mNow = modelRef.current;
-          if (!vNow?.model || !mNow) { reject(new Error('El visor se cerró o recargó antes de terminar')); return; }
-          if (startIndex >= allDbIds.length) {
-            propMultiIndexCache.current.set(propName, index);
-            resolve(index);
-            return;
-          }
-          const chunk = allDbIds.slice(startIndex, startIndex + CHUNK_SIZE);
-          vNow.model.getBulkProperties(
-            chunk, { propFilter: [propName] },
-            (results: any[]) => {
-              for (const r of results) {
-                const prop = (r.properties ?? []).find((p: any) =>
-                  p.displayName === propName || p.attributeName === propName
-                );
-                if (prop?.displayValue == null || prop.displayValue === '') continue;
-                const key = String(prop.displayValue).trim();
-                if (!key) continue;
-                (index[key] ??= []).push(r.dbId);
-              }
-              setTimeout(() => processChunk(startIndex + CHUNK_SIZE), 10);
-            },
-            (err: any) => reject(new Error(String(err)))
-          );
-        };
-        processChunk(0);
-      })).finally(() => propMultiIndexBuildPromise.current.delete(propName));
+        let pass1Done = 0;
+        return fetchBulkPropertiesChunked(
+          allDbIds, [actualPropName],
+          () => modelRef.current ? modelRef.current : null,
+          (results: any[], chunkLen: number) => {
+            for (const r of results) {
+              // Modelo federado: el mismo elemento puede traer la propiedad bajo otra categoría
+              // según el archivo fuente original (ej. Civil/Estructura vs Piping/Instrumentos en
+              // un NWD). Si no aparece en la categoría configurada, se acepta igual bajo cualquier
+              // otra categoría — exigir la categoría exacta dejaba esas disciplinas sin resolver
+              // aunque el resto sí calzara (el fallback "sin categoría" de filterByCwps solo se
+              // activa cuando TODO falla, no cuando falla una parte).
+              const matches = (r.properties ?? []).filter((p: any) =>
+                p.displayName === actualPropName || p.attributeName === actualPropName);
+              const prop = (categoryFilter ? matches.find((p: any) => p.displayCategory === categoryFilter) : undefined)
+                ?? matches[0];
+              if (prop?.displayValue == null || prop.displayValue === '') continue;
+              const key = String(prop.displayValue).trim();
+              if (!key) continue;
+              (index[key] ??= []).push(r.dbId);
+            }
+            pass1Done += chunkLen;
+            onIndexProgressRef.current?.(Math.round((pass1Done / Math.max(1, allDbIds.length)) * 100));
+          },
+        ).then(async () => {
+          propMultiIndexCache.current.set(propName, index);
+          try { await set(idbKey, index); } catch (e) { console.warn('IDB save err', e); }
+          onIndexProgressRef.current?.(-1);
+          return index;
+        }).catch(err => {
+          onIndexProgressRef.current?.(-1);
+          throw err;
+        });
+      }).finally(() => propMultiIndexBuildPromise.current.delete(propName));
       propMultiIndexBuildPromise.current.set(propName, promise);
+      return promise;
+    };
+
+    // Evita reconstruir en paralelo si ya hay una build en curso para ese propName (mismo motivo
+    // que propMultiIndexBuildPromise arriba).
+    const propIndexBuildPromise = useRef<Map<string, Promise<Record<string, number>>>>(new Map());
+    /**
+     * Como buildPropIndexChunked pero 1 dbId por valor (para propiedades únicas como GUID) — usada
+     * por buildPropertyIndex/applyPropertyColorMap. Pedir TODOS los dbIds de un modelo grande en una
+     * sola llamada a getBulkProperties podía colgar el navegador varios minutos; esta versión pide
+     * en lotes de 2000 igual que buildPropIndexChunked.
+     */
+    const buildPropIndexChunkedSingle = (propName: string): Promise<Record<string, number>> => {
+      const cached = propIndexCache.current.get(propName);
+      if (cached) return Promise.resolve(cached);
+      const inFlight = propIndexBuildPromise.current.get(propName);
+      if (inFlight) return inFlight;
+      // Mismo motivo/clave que buildPropIndexChunked — incluye elementCount para auto-invalidar.
+      const promise = waitForTree().then(async () => {
+        const v = viewerRef.current;
+        const m = modelRef.current;
+        if (!v || !m) throw new Error('Modelo no cargado');
+        const tree = m.getInstanceTree?.();
+        if (!tree) throw new Error('Instance tree no disponible');
+
+        const allDbIds: number[] = [];
+        tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
+
+        const idbKey = `propidxv5-single-${propName}-${urn}-${allDbIds.length}`;
+        try {
+          const fromIdb = await get(idbKey);
+          if (fromIdb) { propIndexCache.current.set(propName, fromIdb); return fromIdb; }
+        } catch (e) { console.warn('IDB read err', e); }
+
+        const idxParts = propName.split('/');
+        const categoryFilter = idxParts.length > 1 ? idxParts[0] : null;
+        const actualPropName = idxParts.length > 1 ? idxParts[1] : propName;
+
+        const index: Record<string, number> = {};
+        let pass1Done = 0;
+        return fetchBulkPropertiesChunked(
+          allDbIds, [actualPropName],
+          () => modelRef.current ? modelRef.current : null,
+          (results: any[], chunkLen: number) => {
+            for (const r of results) {
+              // Mismo motivo que en buildPropIndexChunked: aceptar la propiedad bajo cualquier
+              // categoría si no aparece en la configurada, por modelos federados con fuentes mixtas.
+              const matches = (r.properties ?? []).filter((p: any) =>
+                p.displayName === actualPropName || p.attributeName === actualPropName);
+              const prop = (categoryFilter ? matches.find((p: any) => p.displayCategory === categoryFilter) : undefined)
+                ?? matches[0];
+              if (prop?.displayValue == null || prop.displayValue === '') continue;
+              const key = String(prop.displayValue).trim();
+              if (!key) continue;
+              index[key] = r.dbId;
+            }
+            pass1Done += chunkLen;
+            onIndexProgressRef.current?.(Math.round((pass1Done / Math.max(1, allDbIds.length)) * 100));
+          },
+        ).then(async () => {
+          propIndexCache.current.set(propName, index);
+          try { await set(idbKey, index); } catch (e) { console.warn('IDB save err', e); }
+          onIndexProgressRef.current?.(-1);
+          return index;
+        }).catch(err => {
+          onIndexProgressRef.current?.(-1);
+          throw err;
+        });
+      }).finally(() => propIndexBuildPromise.current.delete(propName));
+      propIndexBuildPromise.current.set(propName, promise);
       return promise;
     };
 
@@ -474,8 +622,80 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
       return leaves;
     };
 
+    /**
+     * Construye (y cachea en IndexedDB) el índice universal: TODAS las propiedades de TODOS los
+     * elementos en un solo mapa value→dbId[]. buildUniversalIndex y applyUniversalColorMap tenían
+     * cada uno su propia copia casi idéntica de este traversal+chunking (con umbrales de longitud
+     * de clave distintos, ≥2 vs ≥3, por descuido) — quedó en un solo lugar.
+     */
+    const ensureUniversalIndex = async (onProgress?: (pct: number) => void): Promise<Record<string, number[]>> => {
+      if (universalIndex.current) { onProgress?.(100); return universalIndex.current; }
+      if (!universalBuildPromise.current) {
+        universalBuildPromise.current = (async () => {
+          try {
+            const cached = await get(`universal-idx-${urn}`);
+            if (cached) { universalIndex.current = cached; return; }
+          } catch (e) { console.warn('IDB read err', e); }
+
+          await waitForTree();
+          if (!viewerRef.current || !modelRef.current) throw new Error('Modelo no cargado');
+          const tree = modelRef.current.getInstanceTree?.();
+          if (!tree) throw new Error('Instance tree no disponible');
+
+          const allDbIds: number[] = [];
+          tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
+
+          const idx: Record<string, Set<number>> = {};
+          const addDbId = (k: string, id: number) => { (idx[k] ??= new Set()).add(id); };
+          let done = 0;
+
+          await fetchBulkPropertiesChunked(
+            allDbIds, null,
+            () => modelRef.current ? modelRef.current : null,
+            (results: any[]) => {
+              for (const r of results) {
+                if (r.properties) {
+                  for (const p of r.properties) {
+                    const raw = p.displayValue;
+                    if (raw == null || raw === '') continue;
+                    const key = String(raw).trim();
+                    if (key.length >= 2) { // Permitir 2 chars (ej. C1)
+                      addDbId(key, r.dbId);
+                      const lower = key.toLowerCase();
+                      if (lower !== key) addDbId(lower, r.dbId);
+                    }
+                  }
+                }
+                if (r.name && r.name.length >= 2) {
+                  const kn = r.name.trim();
+                  addDbId(kn, r.dbId);
+                  addDbId(kn.toLowerCase(), r.dbId);
+                }
+                if (r.externalId && r.externalId.length >= 2) {
+                  addDbId(r.externalId.trim(), r.dbId);
+                }
+              }
+              done += results.length;
+              onProgress?.(Math.min(99, Math.round((done / allDbIds.length) * 100)));
+            },
+          );
+
+          const finalIdx: Record<string, number[]> = {};
+          for (const [k, set] of Object.entries(idx)) finalIdx[k] = Array.from(set);
+          universalIndex.current = finalIdx;
+          try { await set(`universal-idx-${urn}`, finalIdx); } catch (e) { console.warn('IDB save err', e); }
+          onProgress?.(100);
+        })().finally(() => { universalBuildPromise.current = null; });
+      }
+      await universalBuildPromise.current;
+      return universalIndex.current!;
+    };
+
     // Expose imperative API
     useImperativeHandle(ref, () => ({
+      getModel: () => modelRef.current,
+      getViewer: () => viewerRef.current,
+      
       getSelectedIds: () => viewerRef.current?.getSelection() ?? [],
       getIsolatedNodes: () => viewerRef.current?.getIsolatedNodes() ?? [],
 
@@ -772,60 +992,59 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
 
       // ── Bulk property export ────────────────────────────────────────────────
 
-      exportAllProperties: (propNames: string[]) =>
-        new Promise((resolve, reject) => {
-          if (!viewerRef.current || !modelRef.current) {
-            reject(new Error('Modelo no cargado')); return;
-          }
-          // Get all dbIds in the model
-          const tree = viewerRef.current.model?.getInstanceTree?.() ?? modelRef.current.getInstanceTree?.();
-          if (!tree) { reject(new Error('Instance tree no disponible')); return; }
+      exportAllProperties: (propNames: string[]) => {
+        if (!viewerRef.current || !modelRef.current) {
+          return Promise.reject(new Error('Modelo no cargado'));
+        }
+        const tree = viewerRef.current.model?.getInstanceTree?.() ?? modelRef.current.getInstanceTree?.();
+        if (!tree) return Promise.reject(new Error('Instance tree no disponible'));
 
-          const allDbIds: number[] = [];
-          tree.enumNodeChildren(tree.getRootId(), (dbId: number) => { allDbIds.push(dbId); }, true);
+        const allDbIds: number[] = [];
+        tree.enumNodeChildren(tree.getRootId(), (dbId: number) => { allDbIds.push(dbId); }, true);
 
-          viewerRef.current.model.getBulkProperties(
-            allDbIds,
-            { propFilter: propNames.length ? propNames : undefined },
-            (results: any[]) => {
-              const headers = ['dbId', 'externalId', 'name', ...propNames];
-              const rows    = [headers.join(',')];
-              for (const r of results) {
-                const propMap: Record<string, string> = {};
-                for (const p of (r.properties ?? [])) {
-                  propMap[p.displayName] = String(p.displayValue ?? '');
-                }
-                const row = [
-                  r.dbId,
-                  `"${r.externalId ?? ''}"`,
-                  `"${(r.name ?? '').replace(/"/g, '""')}"`,
-                  ...propNames.map(n => `"${(propMap[n] ?? '').replace(/"/g, '""')}"`),
-                ];
-                rows.push(row.join(','));
+        const headers = ['dbId', 'externalId', 'name', ...propNames];
+        const rows = [headers.join(',')];
+        return fetchBulkPropertiesChunked(
+          allDbIds, propNames.length ? propNames : null,
+          () => modelRef.current ? modelRef.current : null,
+          (results: any[]) => {
+            for (const r of results) {
+              const propMap: Record<string, string> = {};
+              for (const p of (r.properties ?? [])) {
+                propMap[p.displayName] = String(p.displayValue ?? '');
               }
-              resolve(rows.join('\n'));
-            },
-            (err: any) => reject(new Error(err))
-          );
-        }),
+              const row = [
+                r.dbId,
+                `"${r.externalId ?? ''}"`,
+                `"${(r.name ?? '').replace(/"/g, '""')}"`,
+                ...propNames.map(n => `"${(propMap[n] ?? '').replace(/"/g, '""')}"`),
+              ];
+              rows.push(row.join(','));
+            }
+          },
+        ).then(() => rows.join('\n'));
+      },
 
       // ── GUID index (Revit/NW GUID property) ────────────────────────────────
 
       buildGuidIndex: () =>
-        waitForTree().then(() => new Promise<Record<string,number>>((resolve, reject) => {
-          // backward-compat shim — delegates to generic index
+        waitForTree().then(() => {
+          // backward-compat shim — delegates to generic index, pero agrega claves extra
+          // (name/externalId) que buildPropertyIndex('GUID') no agrega, así que no se puede
+          // delegar directo a esa función sin perder esas claves.
           const cached = propIndexCache.current.get('GUID');
-          if (cached) { resolve(cached); return; }
-          if (!viewerRef.current || !modelRef.current) { reject(new Error('Modelo no cargado')); return; }
+          if (cached) return Promise.resolve(cached);
+          if (!viewerRef.current || !modelRef.current) throw new Error('Modelo no cargado');
           const tree = modelRef.current.getInstanceTree?.();
-          if (!tree) { reject(new Error('Instance tree no disponible')); return; }
+          if (!tree) throw new Error('Instance tree no disponible');
           const allDbIds: number[] = [];
           tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
-          viewerRef.current.model.getBulkProperties(
-            allDbIds,
-            { propFilter: ['GUID'] },
+
+          const index: Record<string, number> = {};
+          return fetchBulkPropertiesChunked(
+            allDbIds, ['GUID'],
+            () => modelRef.current ? modelRef.current : null,
             (results: any[]) => {
-              const index: Record<string, number> = {};
               for (const r of results) {
                 const p = (r.properties ?? []).find((p: any) => p.displayName === 'GUID' || p.attributeName === 'GUID');
                 if (p?.displayValue != null && p.displayValue !== '') {
@@ -840,12 +1059,12 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
                   index[r.externalId.trim().toLowerCase()] = r.dbId;
                 }
               }
-              propIndexCache.current.set('GUID', index);
-              resolve(index);
             },
-            (err: any) => reject(new Error(err))
-          );
-        })),
+          ).then(() => {
+            propIndexCache.current.set('GUID', index);
+            return index;
+          });
+        }),
 
       applyGuidColorMap: async (map) => {
         // Backward-compat shim
@@ -857,77 +1076,15 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
 
       // ── Generic property index ─────────────────────────────────────────────
 
-      buildPropertyIndex: (propName: string) =>
-        waitForTree().then(() => new Promise<Record<string,number>>((resolve, reject) => {
-          // Return cached index if already built for this property
-          const cached = propIndexCache.current.get(propName);
-          if (cached) { resolve(cached); return; }
-          if (!viewerRef.current || !modelRef.current) { reject(new Error('Modelo no cargado')); return; }
-          const tree = modelRef.current.getInstanceTree?.();
-          if (!tree) { reject(new Error('Instance tree no disponible')); return; }
-
-          const allDbIds: number[] = [];
-          tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
-
-          viewerRef.current.model.getBulkProperties(
-            allDbIds,
-            { propFilter: [propName] },
-            (results: any[]) => {
-              const index: Record<string, number> = {};
-              for (const r of results) {
-                // Match both displayName and attributeName
-                const prop = (r.properties ?? []).find((p: any) =>
-                  p.displayName === propName || p.attributeName === propName
-                );
-                if (prop?.displayValue != null && prop.displayValue !== '') {
-                  const key = String(prop.displayValue).trim();
-                  if (key) index[key] = r.dbId;
-                }
-              }
-              propIndexCache.current.set(propName, index);
-              resolve(index);
-            },
-            (err: any) => reject(new Error(String(err)))
-          );
-        })),
+      buildPropertyIndex: (propName: string) => buildPropIndexChunkedSingle(propName),
 
       applyPropertyColorMap: async (propName, map) => {
         const v = viewerRef.current;
         if (!v || !modelRef.current) return 0;
 
-        // Build or retrieve index
-        const cached = propIndexCache.current.get(propName);
-        let index: Record<string, number>;
-        if (cached) {
-          index = cached;
-        } else {
-          await new Promise<void>((res, rej) => {
-            const tree = modelRef.current.getInstanceTree?.();
-            if (!tree) { rej(new Error('tree')); return; }
-            const allDbIds: number[] = [];
-            tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
-            v.model.getBulkProperties(
-              allDbIds, { propFilter: [propName] },
-              (results: any[]) => {
-                const idx: Record<string, number> = {};
-                for (const r of results) {
-                  const prop = (r.properties ?? []).find((p: any) =>
-                    p.displayName === propName || p.attributeName === propName
-                  );
-                  if (prop?.displayValue != null && prop.displayValue !== '') {
-                    const key = String(prop.displayValue).trim();
-                    if (key) idx[key] = r.dbId;
-                  }
-                }
-                propIndexCache.current.set(propName, idx);
-                index = idx;
-                res();
-              },
-              (err: any) => rej(new Error(String(err)))
-            );
-          });
-          index = propIndexCache.current.get(propName)!;
-        }
+        // buildPropIndexChunkedSingle ya revisa el caché internamente (y pide en lotes de 2000 si
+        // hace falta construirlo — pedir TODOS los dbIds de una sola vez congelaba el navegador).
+        const index = await buildPropIndexChunkedSingle(propName);
 
         const t0 = performance.now();
         let matched = 0;
@@ -949,28 +1106,48 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         // 0 resultados para propiedades de categoría custom cuyo attributeName interno difiere de su
         // displayName (ej. SP3D_MONIKER bajo DATA_EIMISA).
         const idx = await buildPropIndexChunked(propName);
-        const set = new Set(values.map(v => String(v).trim()));
+        const set = new Set(values.map(v => String(v).trim().toLowerCase()));
         const result: number[] = [];
-        for (const key of set) result.push(...(idx[key] ?? []));
+        
+        const ciIdx: Record<string, number[]> = {};
+        for (const [k, v] of Object.entries(idx)) {
+           const norm = k.toLowerCase();
+           if (!ciIdx[norm]) ciIdx[norm] = [];
+           ciIdx[norm].push(...v);
+        }
+
+        for (const key of set) result.push(...(ciIdx[key] ?? []));
         return result;
       },
 
       buildPropertyMultiIndex: (propName: string) => buildPropIndexChunked(propName),
 
-      resolveManyByProperty: async (propName, values) => {
-        const idx = await buildPropIndexChunked(propName);
-        const set = new Set(values.map(v => String(v).trim()));
+      resolveManyByProperty: async (propNameStr, values) => {
+        const props = propNameStr.split(',').map(p => p.trim()).filter(Boolean);
+        const set = new Set(values.map(v => String(v).trim().toLowerCase()));
         const result: number[] = [];
         const seen = new Set<number>();
-        for (const key of set) {
-          for (const dbId of (idx[key] ?? [])) {
-            if (!seen.has(dbId)) { seen.add(dbId); result.push(dbId); }
+        
+        for (const prop of props) {
+          const idx = await buildPropIndexChunked(prop);
+          
+          const ciIdx: Record<string, number[]> = {};
+          for (const [k, v] of Object.entries(idx)) {
+             const norm = k.toLowerCase();
+             if (!ciIdx[norm]) ciIdx[norm] = [];
+             ciIdx[norm].push(...v);
+          }
+
+          for (const key of set) {
+            for (const dbId of (ciIdx[key] ?? [])) {
+              if (!seen.has(dbId)) { seen.add(dbId); result.push(dbId); }
+            }
           }
         }
         return result;
       },
 
-      resolveMonikers: async (monikers) => {
+      resolveMonikers: async (monikers, propNameStr = 'SP3D_MONIKER') => {
         const real: string[] = [];
         const guids: string[] = [];
         const SYNTH_PREFIX = 'SIN-MONIKER::';
@@ -981,10 +1158,22 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         const seen = new Set<number>();
         const result: number[] = [];
         if (real.length) {
-          const idx = await buildPropIndexChunked('SP3D_MONIKER');
-          for (const key of new Set(real.map(v => v.trim()))) {
-            for (const dbId of (idx[key] ?? [])) {
-              if (!seen.has(dbId)) { seen.add(dbId); result.push(dbId); }
+          const props = propNameStr.split(',').map(p => p.trim()).filter(Boolean);
+          const keySet = new Set(real.map(v => v.trim().toLowerCase()));
+          for (const prop of props) {
+            const idx = await buildPropIndexChunked(prop);
+            
+            const ciIdx: Record<string, number[]> = {};
+            for (const [k, v] of Object.entries(idx)) {
+               const norm = k.toLowerCase();
+               if (!ciIdx[norm]) ciIdx[norm] = [];
+               ciIdx[norm].push(...v);
+            }
+
+            for (const key of keySet) {
+              for (const dbId of (ciIdx[key] ?? [])) {
+                if (!seen.has(dbId)) { seen.add(dbId); result.push(dbId); }
+              }
             }
           }
         }
@@ -992,14 +1181,17 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
           try {
             const mapping = await new Promise<Record<string, number>>((res, rej) => {
               const timeout = setTimeout(() => rej(new Error('Mapping timeout')), 10000);
-              modelRef.current!.getExternalIdMapping((m: Record<string, number>) => { clearTimeout(timeout); res(m); }, (err: any) => { clearTimeout(timeout); rej(err); });
+              modelRef.current!.getExternalIdMapping(
+                (m: Record<string, number>) => { clearTimeout(timeout); res(m); },
+                (e: any) => { clearTimeout(timeout); rej(e); }
+              );
             });
             const guidSet = new Set(guids);
             for (const [eid, dbId] of Object.entries(mapping)) {
               if (guidSet.has(eid) && !seen.has(dbId)) { seen.add(dbId); result.push(dbId); }
             }
           } catch (e) {
-            console.warn('resolveMonikers: error resolviendo GUIDs sintéticos:', e);
+            console.warn('[BIM] resolveMonikers: error en getExternalIdMapping:', e);
           }
         }
         return result;
@@ -1031,132 +1223,13 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
       // Solo indexa valores string con ≥3 chars para evitar falsos positivos.
 
       buildUniversalIndex: async (onProgress?: (pct: number) => void): Promise<void> => {
-        if (universalIndex.current) { if (onProgress) onProgress(100); return; }
-        if (universalBuildPromise.current) return universalBuildPromise.current;
-
-        universalBuildPromise.current = (async () => {
-          try {
-            const cached = await get(`universal-idx-${urn}`);
-            if (cached) { universalIndex.current = cached; return; }
-          } catch (e) { console.warn('IDB read err', e); }
-
-          await waitForTree();
-
-          return new Promise<void>((resolve, reject) => {
-            if (!viewerRef.current || !modelRef.current) { reject(new Error('Modelo no cargado')); return; }
-            const tree = modelRef.current.getInstanceTree?.();
-            if (!tree) { reject(new Error('Instance tree no disponible')); return; }
-
-            const allDbIds: number[] = [];
-            tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
-
-            const idx: Record<string, Set<number>> = {};
-            const addDbId = (k: string, id: number) => {
-              if (!idx[k]) idx[k] = new Set();
-              idx[k].add(id);
-            };
-            const CHUNK_SIZE = 2000;
-
-            const processChunk = async (startIndex: number) => {
-              if (!viewerRef.current?.model) { reject(new Error('El visor se cerró o recargó antes de terminar')); return; }
-              if (onProgress) onProgress(Math.min(99, Math.round((startIndex / allDbIds.length) * 100)));
-              if (startIndex >= allDbIds.length) {
-                // Convert Sets to arrays for final index
-                const finalIdx: Record<string, number[]> = {};
-                for (const [k, set] of Object.entries(idx)) {
-                  finalIdx[k] = Array.from(set);
-                }
-                universalIndex.current = finalIdx;
-                try { await set(`universal-idx-${urn}`, finalIdx); } catch (e) { console.warn('IDB save err', e); }
-                if (onProgress) onProgress(100);
-                resolve();
-                return;
-              }
-              const chunk = allDbIds.slice(startIndex, startIndex + CHUNK_SIZE);
-              viewerRef.current.model.getBulkProperties(
-                chunk,
-                null,
-                (results: any[]) => {
-                  for (const r of results) {
-                    if (r.properties) {
-                      for (const p of r.properties) {
-                        const raw = p.displayValue;
-                        if (raw == null || raw === '') continue;
-                        const key = String(raw).trim();
-                        if (key.length >= 2) { // Permitir 2 chars (ej. C1)
-                          addDbId(key, r.dbId);
-                          const lower = key.toLowerCase();
-                          if (lower !== key) addDbId(lower, r.dbId);
-                        }
-                      }
-                    }
-                    if (r.name && r.name.length >= 2) {
-                      const kn = r.name.trim();
-                      addDbId(kn, r.dbId);
-                      addDbId(kn.toLowerCase(), r.dbId);
-                    }
-                    if (r.externalId && r.externalId.length >= 2) {
-                      addDbId(r.externalId.trim(), r.dbId);
-                    }
-                  }
-                  setTimeout(() => processChunk(startIndex + CHUNK_SIZE), 10);
-                },
-                (err: any) => reject(new Error(String(err)))
-              );
-            };
-            processChunk(0);
-          });
-        })();
-        return universalBuildPromise.current;
+        await ensureUniversalIndex(onProgress);
       },
 
       applyUniversalColorMap: async (map: Array<{ value: string; r: number; g: number; b: number; a: number }>) => {
         const v = viewerRef.current;
         if (!v || !modelRef.current) return 0;
-        if (!universalIndex.current) {
-          await new Promise<void>((res, rej) => {
-            const tree = modelRef.current.getInstanceTree?.();
-            if (!tree) { rej(new Error('tree')); return; }
-            const allDbIds: number[] = [];
-            tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
-            const idx: Record<string, number[]> = {};
-            const addDbId = (k: string, id: number) => {
-              if (!idx[k]) idx[k] = [];
-              else if (idx[k].includes(id)) return;
-              idx[k].push(id);
-            };
-            const CHUNK_SIZE = 1000;
-
-            const processChunk = async (startIndex: number) => {
-              if (!viewerRef.current?.model) { rej(new Error('El visor se cerró o recargó antes de terminar')); return; }
-              if (startIndex >= allDbIds.length) {
-                universalIndex.current = idx;
-                try { await set(`universal-idx-${urn}`, idx); } catch (e) {}
-                res();
-                return;
-              }
-              const chunk = allDbIds.slice(startIndex, startIndex + CHUNK_SIZE);
-              viewerRef.current.model.getBulkProperties(
-                chunk,
-                null,
-                (results: any[]) => {
-                  for (const r of results) {
-                    for (const p of (r.properties ?? [])) {
-                      const key = String(p.displayValue ?? '').trim();
-                      if (key.length >= 3) { addDbId(key, r.dbId); addDbId(key.toLowerCase(), r.dbId); }
-                    }
-                    if (r.name?.length >= 3) addDbId(r.name.trim(), r.dbId);
-                    if (r.externalId?.length >= 3) addDbId(r.externalId.trim(), r.dbId);
-                  }
-                  setTimeout(() => processChunk(startIndex + CHUNK_SIZE), 40);
-                },
-                (err: any) => rej(new Error(String(err)))
-              );
-            };
-            processChunk(0);
-          });
-        }
-        const idx = universalIndex.current!;
+        const idx = await ensureUniversalIndex();
         let matched = 0;
         for (const entry of map) {
           const key  = String(entry.value).trim();
@@ -1582,6 +1655,18 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
           try { viewer.prefs?.set('optimizeNavigation',   true);  } catch {}
           try { viewer.prefs?.set('lineRendering',        false); } catch {}
 
+          // Forzar SIEMPRE prendida — el panel de Configuración (engranaje) deja al usuario
+          // apagarla con un click sin querer, y eso ya causó una sesión completa de "se siente
+          // pegado" que en realidad era esto. Si algo la apaga (UI o código), se vuelve a
+          // prender de inmediato escuchando el evento nativo de cambio de preferencias.
+          try {
+            viewer.addEventListener(AV.PREF_CHANGED_EVENT, (e: any) => {
+              if (e?.name === 'progressiveRendering' && e?.value === false) {
+                viewer.prefs.set('progressiveRendering', true);
+              }
+            });
+          } catch {}
+
           // ── Fondo blanco por defecto (Blanco simple = lightPreset 10) ────
           try { viewer.setLightPreset(10); } catch {}
           try { viewer.setEnvMapBackground(false); } catch {}
@@ -1840,6 +1925,12 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
                   console.log('[BIM] Iniciando scan de índice...');
 
                   const runIndexing = () => {
+                    if (disableBackgroundIndex) {
+                      console.log('[BIM] disableBackgroundIndex = true. Omitiendo escaneo de GUIDs.');
+                      // Call onIndexReady immediately, but don't mess with progress
+                      onIndexReadyRef.current?.({ urn, guidIndex: {}, propertyHeaders: [], builtAt: new Date().toISOString() });
+                      return;
+                    }
                     const tree = model.getInstanceTree?.();
                     console.log('[BIM] Iniciando indexación. InstanceTree:', !!tree,
                       '| dbIds disponibles:', tree ? (() => { let n = 0; tree.enumNodeChildren(tree.getRootId(), () => n++, true); return n; })() : 0);
@@ -1857,6 +1948,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
                       onIndexProgressRef.current?.(-1);
                     }).catch((err) => {
                       console.error('[BIM] Error en indexación:', err);
+                      if (!cancelled) onIndexProgressRef.current?.(-1);
                     });
                   };
 
@@ -1873,17 +1965,27 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
                     signalTreeReady();
                     runIndexing();
                   } else {
-                    console.log('[BIM] Esperando OBJECT_TREE_CREATED_EVENT...');
-                    const onTreeReady = (e: any) => {
+                    let intervalId: any;
+                    const onTreeReady = (e?: any) => {
                       if (cancelled) return;
                       // Only handle event for THIS model
-                      if (e.model && e.model !== model) return;
+                      if (e && e.model && e.model !== model) return;
                       viewer.removeEventListener(AV.OBJECT_TREE_CREATED_EVENT, onTreeReady);
-                      console.log('[BIM] OBJECT_TREE_CREATED_EVENT recibido, iniciando scan.');
+                      if (intervalId) clearInterval(intervalId);
+                      console.log('[BIM] Tree detectado (evento o polling), iniciando scan.');
                       signalTreeReady();
                       runIndexing();
                     };
                     viewer.addEventListener(AV.OBJECT_TREE_CREATED_EVENT, onTreeReady);
+                    
+                    // Fallback polling for SVF2/lazy loads where the event might be missed
+                    intervalId = setInterval(() => {
+                      if (cancelled) { clearInterval(intervalId); return; }
+                      if (model.getInstanceTree?.()) {
+                        console.log('[BIM] InstanceTree detectado por polling.');
+                        onTreeReady();
+                      }
+                    }, 500);
                   }
                 } catch (e: any) { reject(e); }
               },
@@ -1902,6 +2004,18 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         treeReadyWaiters.current = [];
         resizeObserver?.disconnect();
         try { viewerRef.current?.finish(); viewerRef.current = null; modelRef.current = null; } catch {}
+        // Los dbIds son válidos SOLO para el modelo que se acaba de cerrar — si este componente
+        // cambia de urn sin desmontarse (ej. selector de modelo BIM dentro del mismo proyecto), un
+        // cache viejo se reusaría con dbIds que en el modelo NUEVO apuntan a otros elementos
+        // (o a ninguno), coloreando/exportando lo que no corresponde sin ningún error visible.
+        propIndexCache.current.clear();
+        propMultiIndexCache.current.clear();
+        propIndexBuildPromise.current.clear();
+        propMultiIndexBuildPromise.current.clear();
+        universalIndex.current = null;
+        universalBuildPromise.current = null;
+        guidIndexRef2.current = null;
+        propHeadersRef.current = [];
       };
     }, [urn]);
 

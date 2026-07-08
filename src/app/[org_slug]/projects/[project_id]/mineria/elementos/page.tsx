@@ -7,6 +7,7 @@ import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase/client';
 import type { ForgeViewerHandle } from '@/components/awp/ForgeViewer';
 import BimConfigModal, { type BimConfig } from '@/components/modules/BimConfigModal';
+import ExportDataModal, { type ExportColumnDef } from '@/components/awp/ExportDataModal';
 import {
   Search, Box, Settings, Loader2, X, ArrowLeft, ChevronLeft, ChevronRight, ChevronDown,
   CheckSquare, Square, ArrowRightCircle, Crosshair, Palette, ListTree, SlidersHorizontal, Columns3, Eraser, Save, Plus, GitBranch,
@@ -248,6 +249,16 @@ const COLUMN_DEFS: { key: string; label: string; get: (e: Elemento) => string | 
 const DEFAULT_COLS = ['nombre', 'disciplina', 'categoria', 'descripcion', 'sector', 'obra', 'avance'];
 const COLS_STORAGE_KEY = 'mineria-elementos-columnas-v1';
 
+// Moniker/CWA/CV/CWP no están en COLUMN_DEFS porque se renderizan hardcodeados en la tabla (siempre
+// visibles) — para el export se agregan como columnas "locked" (siempre incluidas, no se pueden destildar).
+const EXPORT_LOCKED_KEYS = ['moniker', 'cwa', 'cv', 'cwp'];
+const EXPORT_LOCKED_DEFS: ExportColumnDef[] = [
+  { key: 'moniker', label: 'SP3D Moniker', get: e => e.sp3d_moniker },
+  { key: 'cwa', label: 'CWA', get: e => e.cwa_id },
+  { key: 'cv', label: 'CV', get: e => e.cv_id },
+  { key: 'cwp', label: 'CWP', get: e => e.cwp_id },
+];
+
 // Preferencias del panel de Revisión (pestaña CWA/CV/CWP, filtro oficiales/creadas, etc.) — se
 // guardan por proyecto para no tener que reconfigurarlas cada vez que se entra a la página.
 interface RevisionPrefs {
@@ -288,6 +299,7 @@ export default function ElementosEditorPage() {
   const [cvCatalog, setCvCatalog] = useState<{ codigo: string; nombre: string | null }[]>([]);
   const [swpCatalog, setSwpCatalog] = useState<{ codigo: string; nombre: string | null }[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [tableCollapsed, setTableCollapsed] = useState(false);
   const [treeBranch, setTreeBranch] = useState<{ dbId: number; name: string; leafDbIds: number[]; monikers: string[] | null; sinMoniker: { dbId: number; name: string }[] } | null>(null);
   const [treeBranchNivel, setTreeBranchNivel] = useState<Nivel>('cwp');
   const [treeBranchTarget, setTreeBranchTarget] = useState('');
@@ -298,6 +310,11 @@ export default function ElementosEditorPage() {
   // Nivel activo (pestaña CWA/CV/CWP/SWP) reportado por RevisionPanel — lo usa el panel "Árbol del
   // modelo" para calcular el % de cobertura de cada rama relativo a ese mismo nivel.
   const [activeRevisionNivel, setActiveRevisionNivel] = useState<Nivel>('cwa');
+  // Se incrementa cada vez que una reasignación (pintura 3D, árbol, fila o bulk) escribe en la BD —
+  // RevisionPanel lo mira para recargar sus conteos (nElementos por CWA/CV/CWP) sin que el usuario
+  // tenga que cambiar de pestaña o recargar la página para verlos actualizados.
+  const [revisionRefreshSignal, setRevisionRefreshSignal] = useState(0);
+  const bumpRevisionRefresh = useCallback(() => setRevisionRefreshSignal(s => s + 1), []);
   // Puente hacia las funciones de refresco de cobertura que vive dentro de ModelTreePanel — se llena
   // solo (vía useEffect) apenas el panel monta; confirmTreeBranchAssign lo usa para refrescar el %
   // de la rama recién clasificada sin esperar a que el usuario apriete "Actualizar %".
@@ -503,12 +520,13 @@ export default function ElementosEditorPage() {
       setSelected(new Set());
       fetchRows();
       loadBuckets();
+      bumpRevisionRefresh();
     } catch (e: any) {
       setToast(`Error: ${e.message}`);
     } finally {
       setApplying(false);
     }
-  }, [bulkTarget, selected, project_id, fetchRows, loadBuckets]);
+  }, [bulkTarget, selected, project_id, fetchRows, loadBuckets, bumpRevisionRefresh]);
 
   // Filtro activo en la tabla (búsqueda + dropdowns) expresado como `match` para el PATCH
   // server-side — permite reasignar TODOS los resultados que coinciden (no solo los 100 de la página).
@@ -527,6 +545,9 @@ export default function ElementosEditorPage() {
   const [bulkAllNivel, setBulkAllNivel] = useState<Nivel>('cwp');
   const [bulkAllTarget, setBulkAllTarget] = useState('');
   const [isolatingAll, setIsolatingAll] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportRows, setExportRows] = useState<Elemento[] | null>(null);
+  const [exportProgress, setExportProgress] = useState<{ loaded: number; total: number } | null>(null);
 
   const applyToAllMatching = useCallback(async () => {
     const match = currentMatch();
@@ -543,12 +564,13 @@ export default function ElementosEditorPage() {
       setBulkAllTarget('');
       fetchRows();
       loadBuckets();
+      bumpRevisionRefresh();
     } catch (e: any) {
       setToast(`Error: ${e.message}`);
     } finally {
       setApplying(false);
     }
-  }, [currentMatch, bulkAllTarget, bulkAllNivel, project_id, fetchRows, loadBuckets]);
+  }, [currentMatch, bulkAllTarget, bulkAllNivel, project_id, fetchRows, loadBuckets, bumpRevisionRefresh]);
 
   const applyToRow = useCallback(async (moniker: string, target: string) => {
     if (!target.trim()) return;
@@ -563,12 +585,13 @@ export default function ElementosEditorPage() {
       setToast(`Reasignado a ${target.trim()}`);
       fetchRows();
       loadBuckets();
+      bumpRevisionRefresh();
     } catch (e: any) {
       setToast(`Error: ${e.message}`);
     } finally {
       setApplying(false);
     }
-  }, [project_id, fetchRows, loadBuckets]);
+  }, [project_id, fetchRows, loadBuckets, bumpRevisionRefresh]);
 
   useEffect(() => {
     if (!toast) return;
@@ -582,7 +605,8 @@ export default function ElementosEditorPage() {
     if (!viewerReady) return; // se aplicará en onReady si corresponde, o el usuario reintenta
     setViewerStatus('Aislando elementos…');
     try {
-      const dbIds = await viewerRef.current.resolveMonikers(monikers);
+      const itemProp = (bimConfig?.itemCategory && bimConfig?.itemPropName) ? `${bimConfig.itemCategory}/${bimConfig.itemPropName}` : (bimConfig?.itemPropName || 'SP3D_MONIKER');
+      const dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
       if (dbIds.length) {
         lastIsolatedDbIdsRef.current = dbIds;
         viewerRef.current.showOnly(dbIds, ghostMode);
@@ -619,6 +643,34 @@ export default function ElementosEditorPage() {
       setIsolatingAll(false);
     }
   }, [currentMatch, project_id, isolateInViewer]);
+
+  // Trae TODAS las filas completas que coinciden con el filtro/búsqueda actual (no solo la página
+  // visible) para el modal de exportar — mismo patrón de paginado por chunks que isolateAllMatching,
+  // pero sin el `if (!match) return` porque exportar "todo el proyecto" sin filtro también es válido.
+  const openExportModal = useCallback(async () => {
+    setShowExportModal(true);
+    setExportRows(null);
+    setExportProgress({ loaded: 0, total: total || 0 });
+    try {
+      const match = currentMatch();
+      const pageSize = 500;
+      const all: Elemento[] = [];
+      for (let p = 0; ; p++) {
+        const params = new URLSearchParams({ project_id, page: String(p), pageSize: String(pageSize) });
+        if (match) for (const [k, v] of Object.entries(match)) params.set(k, v);
+        const res = await fetchWithRetry(`/api/mining-elementos?${params}`);
+        const d = await parseJsonOrThrow(res);
+        const page: Elemento[] = d.rows ?? [];
+        all.push(...page);
+        setExportProgress({ loaded: all.length, total: d.total ?? total ?? all.length });
+        if (page.length < pageSize) break;
+      }
+      setExportRows(all);
+    } catch (e: any) {
+      setToast(`Error al cargar datos para exportar: ${e.message}`);
+      setShowExportModal(false);
+    }
+  }, [currentMatch, project_id, total]);
 
   // Trae sp3d_moniker agrupados por valor de CWA/CV/CWP desde la BD (no depende de que el modelo
   // tenga una propiedad nativa "CWA"/"CV" — solo necesita "SP3d Moniker", que sí es confiable).
@@ -659,7 +711,8 @@ export default function ElementosEditorPage() {
         const monikers = groups[codigos[i]];
         if (!monikers?.length) { perGroupDbIds.push([]); continue; }
         esperados += monikers.length;
-        let dbIds = await viewerRef.current.resolveMonikers(monikers);
+        const itemProp = (bimConfig?.itemCategory && bimConfig?.itemPropName) ? `${bimConfig.itemCategory}/${bimConfig.itemPropName}` : (bimConfig?.itemPropName || 'SP3D_MONIKER');
+        let dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
         // resolveManyByProperty puede devolver dbIds de ENSAMBLAJE (donde vive la propiedad SP3D_MONIKER),
         // mientras que treeBranch.leafDbIds son dbIds HOJA — sin expandir a hojas antes de intersectar,
         // el restrictSet nunca calzaba y la restricción quedaba sin efecto (coloreaba todo el modelo).
@@ -697,7 +750,8 @@ export default function ElementosEditorPage() {
       const groups = await fetchMonikerGroups(nivel, [codigo]);
       const monikers = groups[codigo] ?? [];
       if (!monikers.length) { setToast(`Sin elementos para ${codigo} en el modelo.`); return; }
-      const dbIds = await viewerRef.current.resolveMonikers(monikers);
+      const itemProp = (bimConfig?.itemCategory && bimConfig?.itemPropName) ? `${bimConfig.itemCategory}/${bimConfig.itemPropName}` : (bimConfig?.itemPropName || 'SP3D_MONIKER');
+      const dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
       if (dbIds.length) viewerRef.current.fitToView(dbIds);
       else setToast(`Sin elementos para ${codigo} en el modelo.`);
     } finally {
@@ -718,7 +772,8 @@ export default function ElementosEditorPage() {
         const monikers = groups[sel.codigo] ?? [];
         esperados += monikers.length;
         if (!monikers.length) { perSelDbIds.push([]); continue; }
-        const dbIds = await viewerRef.current.resolveMonikers(monikers);
+        const itemProp = (bimConfig?.itemCategory && bimConfig?.itemPropName) ? `${bimConfig.itemCategory}/${bimConfig.itemPropName}` : (bimConfig?.itemPropName || 'SP3D_MONIKER');
+        const dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
         perSelDbIds.push(dbIds);
         allDbIds.push(...dbIds);
       }
@@ -822,12 +877,13 @@ export default function ElementosEditorPage() {
       setPaintCount(0);
       loadBuckets();
       fetchRows();
+      bumpRevisionRefresh();
     } catch (e: any) {
       setToast(`Error: ${e.message}`);
     } finally {
       setViewerStatus(null);
     }
-  }, [paintTarget, project_id, loadBuckets, fetchRows]);
+  }, [paintTarget, project_id, loadBuckets, fetchRows, bumpRevisionRefresh]);
 
   const onViewerSelectionChange = useCallback(async (dbIds: number[]) => {
     if (!viewerRef.current || !dbIds.length) return;
@@ -975,13 +1031,14 @@ export default function ElementosEditorPage() {
       setTreeBranch(null);
       loadBuckets();
       fetchRows();
+      bumpRevisionRefresh();
     } catch (e: any) {
       setTreeBranchError(e.message);
     } finally {
       setTreeBranchBusy(false);
       setTreeBranchProgress(null);
     }
-  }, [treeBranch, treeBranchTarget, treeBranchNivel, project_id, loadBuckets, fetchRows]);
+  }, [treeBranch, treeBranchTarget, treeBranchNivel, project_id, loadBuckets, fetchRows, bumpRevisionRefresh]);
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -996,6 +1053,13 @@ export default function ElementosEditorPage() {
           <div><div className="text-[15px] font-black">{totalElementos.toLocaleString('es-CL')}</div><div className="text-[9px] uppercase opacity-70">elementos</div></div>
           <div><div className="text-[15px] font-black text-amber-300">{totalSinCwp.toLocaleString('es-CL')}</div><div className="text-[9px] uppercase opacity-70">sin CWP</div></div>
         </div>
+        <button
+          onClick={openExportModal}
+          className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
+          title="Elegir columnas, previsualizar y exportar los elementos (respeta el filtro/búsqueda activo)"
+        >
+          <Download className="w-3.5 h-3.5" /> Exportar datos
+        </button>
         <a
           href={`/api/mining-cambios-log?project_id=${project_id}&format=csv`}
           className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
@@ -1044,6 +1108,7 @@ export default function ElementosEditorPage() {
                 paintTarget={paintTarget} onArmPaint={armPaint} onStopPaint={stopPaint}
                 onCatalogChanged={loadCatalogs}
                 onNivelChange={setActiveRevisionNivel}
+                refreshSignal={revisionRefreshSignal}
               />
             </div>
             <div className="flex-[2] min-h-0 flex flex-col overflow-hidden">
@@ -1059,9 +1124,22 @@ export default function ElementosEditorPage() {
           </div>
         )}
 
-        {/* Main */}
+        {/* Main — colapsable para dejarle todo el espacio horizontal al modelo 3D */}
+        {tableCollapsed ? (
+          <button
+            onClick={() => setTableCollapsed(false)}
+            title="Mostrar tabla"
+            className="w-7 bg-white border-r border-slate-200 shrink-0 flex flex-col items-center pt-3 hover:bg-slate-50"
+          >
+            <ChevronRight className="w-4 h-4 text-slate-400" />
+            <ListTree className="w-3.5 h-3.5 text-slate-400 mt-2" />
+          </button>
+        ) : (
         <div className="flex-1 flex flex-col overflow-hidden min-w-0">
           <div className="bg-white border-b border-slate-200 px-4 py-2.5 flex items-center gap-3">
+            <button onClick={() => setTableCollapsed(true)} title="Ocultar tabla" className="p-1.5 rounded hover:bg-slate-100 text-slate-400 shrink-0">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
             <div className="relative flex-1 max-w-sm">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
               <input
@@ -1225,11 +1303,14 @@ export default function ElementosEditorPage() {
             )}
           </div>
         </div>
+        )}
 
-        {/* Viewer drawer */}
+        {/* Viewer drawer — toma todo el ancho disponible cuando la tabla está oculta */}
         {showViewer && (
-          <div className="flex shrink-0 relative" style={{ width: viewerWidth }}>
-            <div onMouseDown={onResizeStart} className="absolute left-0 top-0 h-full w-1.5 -ml-[3px] cursor-col-resize z-20 hover:bg-blue-500/40 active:bg-blue-500/60 transition-colors" title="Arrastra para redimensionar" />
+          <div className={cn('flex shrink-0 relative', tableCollapsed && 'flex-1')} style={tableCollapsed ? undefined : { width: viewerWidth }}>
+            {!tableCollapsed && (
+              <div onMouseDown={onResizeStart} className="absolute left-0 top-0 h-full w-1.5 -ml-[3px] cursor-col-resize z-20 hover:bg-blue-500/40 active:bg-blue-500/60 transition-colors" title="Arrastra para redimensionar" />
+            )}
             <div className="flex-1 border-l border-slate-200 bg-[#060d1f] flex flex-col min-w-0">
               <div className="px-3 py-2 flex items-center justify-between bg-[#0a1628] border-b border-white/5 gap-2">
                 <span className="text-[10px] font-black uppercase tracking-wide text-slate-400 truncate">
@@ -1368,7 +1449,9 @@ export default function ElementosEditorPage() {
                       setViewerReady(true);
                       // Precarga el índice de SP3D_MONIKER apenas el modelo está listo (en vez de
                       // esperar al primer click en "Colorear") — así el primer uso ya no se ve lento.
-                      viewerRef.current?.buildPropertyMultiIndex(MONIKER_PROP).catch(() => {});
+                      // Se da un respiro de 1.5s antes de arrancar para que el resto del onReady
+                      // (árbol, paneles) termine de pintarse sin competir con este fetch pesado.
+                      setTimeout(() => { viewerRef.current?.buildPropertyMultiIndex(MONIKER_PROP).catch(() => {}); }, 1500);
                     }}
                     onSelectionChange={onViewerSelectionChange}
                   />
@@ -1413,6 +1496,15 @@ export default function ElementosEditorPage() {
           returnPath={typeof window !== 'undefined' ? window.location.pathname : undefined}
         />
       )}
+      <ExportDataModal
+        open={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        columns={[...EXPORT_LOCKED_DEFS, ...COLUMN_DEFS]}
+        lockedKeys={EXPORT_LOCKED_KEYS}
+        rows={exportRows}
+        loadingProgress={exportProgress}
+        filename={`elementos_${project_id}.xlsx`}
+      />
     </div>
   );
 }
@@ -1501,9 +1593,14 @@ function GroupCheckbox({ state }: { state: 'all' | 'some' | 'none' }) {
 
 type TreeNode = { dbId: number; name: string; childCount: number };
 type CoverageState = { vinculados: number; total: number } | 'loading' | 'too-big' | 'error';
-// Ramas con más hojas que esto no se calculan automático (leer+consultar miles de props sería lento) —
-// quedan con "—" y el usuario puede usar el botón de aislar para revisarlas igual.
-const COVERAGE_MAX_LEAVES = 8000;
+// Ramas con más hojas que esto no se calculan automático — leer sus propiedades (getLeafDbIds +
+// loadBulkElementProps) es trabajo síncrono pesado del SDK de Forge que congela el frame del
+// navegador varios segundos en ramas grandes (medido: ~8s con 8000 hojas). Quedan con "—" y el
+// usuario puede usar el botón de aislar para revisarlas igual.
+const COVERAGE_MAX_LEAVES = 1500;
+// Pausa entre cada rama de la cola — sin esto, el navegador encola decenas de ramas pesadas de
+// seguido al abrir el árbol y queda "pegado" varios segundos seguidos sin poder repintar nada.
+const COVERAGE_QUEUE_DELAY_MS = 400;
 
 // Navega el árbol NATIVO del modelo (assemblies/grupos tal como vienen del CAD) cargando hijos a demanda
 // con getChildren — nunca carga todo el árbol de una sola vez. Cada rama solo se RESUELVE a dbIds reales
@@ -1576,7 +1673,7 @@ function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId, p
       }
       setCoverage(prev => new Map(prev).set(dbId, result));
       coverageBusyRef.current = false;
-      pumpCoverageQueue();
+      setTimeout(pumpCoverageQueue, COVERAGE_QUEUE_DELAY_MS);
     })();
   }, [viewerRef, projectId, activeNivel]);
 
@@ -1594,15 +1691,17 @@ function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId, p
     requestCoverage(dbId);
   }, [requestCoverage]);
 
-  // Recalcula TODAS las ramas que ya se han mostrado alguna vez (incluye las colapsadas) — para el
-  // botón "Actualizar %" cuando el usuario clasificó varias ramas y quiere refrescar todo de una vez.
+  // Recalcula TODAS las ramas YA RENDERIZADAS al menos una vez (todo lo que hay en childrenCache,
+  // colapsado o no) — el % NUNCA se calcula solo al abrir/expandir (eso es lo que congelaba el
+  // navegador, ver COVERAGE_QUEUE_DELAY_MS arriba); solo corre cuando el usuario aprieta este botón.
   const refreshAllCoverage = useCallback(() => {
-    const dbIds = [...coverageSeenRef.current];
+    const dbIds = new Set<number>();
+    for (const kids of childrenCache.values()) for (const k of kids) dbIds.add(k.dbId);
     setCoverage(new Map());
     coverageQueueRef.current = [];
     coverageSeenRef.current = new Set();
     dbIds.forEach(requestCoverage);
-  }, [requestCoverage]);
+  }, [childrenCache, requestCoverage]);
 
   useEffect(() => {
     if (coverageApiRef) coverageApiRef.current = { refresh: refreshCoverage, refreshAll: refreshAllCoverage };
@@ -1712,8 +1811,9 @@ function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId, p
         <p className="text-[9.5px] text-slate-400 leading-snug flex-1">
           Navega el árbol nativo del modelo. Click en <Crosshair className="w-2.5 h-2.5 inline" /> de una rama para aislarla
           y ver cuántos elementos tiene — nunca se asigna nada hasta que confirmes en el banner del visor.
-          Click en un elemento del visor para ubicarlo aquí. El % muestra cuántos de sus elementos ya
-          están vinculados al nivel {NIVEL_LABEL[activeNivel]} activo en Revisión.
+          Click en un elemento del visor para ubicarlo aquí. El % (cuántos elementos ya están vinculados
+          al nivel {NIVEL_LABEL[activeNivel]} activo en Revisión) NO se calcula solo — click en el "%" de
+          una rama para calcularla, o usa "Actualizar %" para calcular todas las que ya viste.
         </p>
         <button
           onClick={refreshAllCoverage}
@@ -1737,8 +1837,17 @@ function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId, p
   );
 }
 
-function CoverageBadge({ state }: { state: CoverageState | undefined }) {
-  if (!state) return <span className="w-7 shrink-0" />;
+// El % NUNCA se calcula solo: o lo pide el usuario click-eando este badge (una rama puntual) o con
+// el botón "Actualizar %" de arriba (todas las renderizadas) — antes se disparaba en cuanto la fila
+// se montaba, lo que en este modelo (57k elementos) congelaba el navegador varios segundos por rama.
+function CoverageBadge({ state, onRequest }: { state: CoverageState | undefined; onRequest: () => void }) {
+  if (!state) {
+    return (
+      <button onClick={onRequest} title="Calcular el % de esta rama" className="w-7 shrink-0 text-[9px] text-slate-300 hover:text-blue-500">
+        %
+      </button>
+    );
+  }
   if (state === 'loading') return <Loader2 className="w-3 h-3 text-slate-300 animate-spin shrink-0" />;
   if (state === 'too-big') return <span className="text-[8.5px] text-slate-300 shrink-0" title="Rama muy grande para calcular automático — usa el botón de aislar para revisarla">—</span>;
   if (state === 'error') return <span className="text-[9px] text-red-300 shrink-0" title="No se pudo calcular la cobertura">⚠</span>;
@@ -1758,8 +1867,6 @@ function TreeNodeRow({ node, depth, expanded, childrenCache, highlightDbId, onTo
   onToggle: (dbId: number) => void; onPreviewBranch: (dbId: number, name: string) => void;
   coverageMap: Map<number, CoverageState>; requestCoverage: (dbId: number) => void;
 }) {
-  useEffect(() => { requestCoverage(node.dbId); }, [node.dbId, requestCoverage]);
-
   const isOpen = expanded.has(node.dbId);
   const kids = childrenCache.get(node.dbId);
   const isHighlighted = highlightDbId === node.dbId;
@@ -1776,7 +1883,7 @@ function TreeNodeRow({ node, depth, expanded, childrenCache, highlightDbId, onTo
           </button>
         ) : <span className="w-4 shrink-0" />}
         <span className="text-[11px] text-slate-700 truncate flex-1" title={node.name}>{node.name || `#${node.dbId}`}</span>
-        <CoverageBadge state={coverageMap.get(node.dbId)} />
+        <CoverageBadge state={coverageMap.get(node.dbId)} onRequest={() => requestCoverage(node.dbId)} />
         {node.childCount > 0 && <span className="text-[9px] text-slate-400 font-mono shrink-0">{node.childCount}</span>}
         <button
           onClick={() => onPreviewBranch(node.dbId, node.name || `#${node.dbId}`)}
@@ -1798,7 +1905,7 @@ function TreeNodeRow({ node, depth, expanded, childrenCache, highlightDbId, onTo
   );
 }
 
-function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onViewSelected, paintTarget, onArmPaint, onStopPaint, onCatalogChanged, onNivelChange }: {
+function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onViewSelected, paintTarget, onArmPaint, onStopPaint, onCatalogChanged, onNivelChange, refreshSignal }: {
   projectId: string; viewerReady: boolean;
   onColorByLevel: (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => void;
   onFocus: (nivel: Nivel, codigo: string) => void;
@@ -1808,6 +1915,9 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
   onStopPaint: () => void;
   onCatalogChanged: () => void;
   onNivelChange?: (nivel: Nivel) => void;
+  // Se incrementa desde la página cada vez que una reasignación (pintura 3D, árbol, fila o bulk)
+  // escribe en la BD, para recargar los conteos (nElementos) sin esperar a un cambio de pestaña.
+  refreshSignal?: number;
 }) {
   // Los defaults de useState deben ser IGUALES en server y cliente (el server nunca tiene
   // localStorage) — si no, React detecta un mismatch de hidratación. La preferencia guardada se
@@ -1912,6 +2022,18 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
 
   useEffect(() => { load(); setChecked(new Set()); }, [load]);
 
+  // refreshSignal cambia tras CUALQUIER reasignación (pintura 3D, árbol, fila o bulk) — recarga los
+  // conteos sin tocar `checked` (a diferencia del efecto de arriba, que sí lo resetea porque ahí el
+  // cambio es de nivel/proyecto, no de datos). No se lista `load` en las deps a propósito: ya cambia
+  // de nivel/projectId vía el efecto de arriba, listarlo aquí también duplicaría el fetch en cada
+  // cambio de pestaña.
+  const didMountRefreshRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRefreshRef.current) { didMountRefreshRef.current = true; return; }
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshSignal]);
+
   // "Oficiales" = vienen del itemizado/DevPack original (catálogo importado). "Creadas" = se agregaron
   // después desde esta misma página (botón "+ Nueva categoría") o son placeholders "por asignar".
   const itemsFiltrados = useMemo(() => {
@@ -2002,10 +2124,22 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
     onColorByLevel(nivel, itemsFiltrados.map(it => ({ codigo: it.codigo, ...colorOf(it.codigo) })));
   };
 
-  // Vista de contraste: ignora el filtro Oficiales/Creadas (necesita ver AMBOS lados a la vez) —
-  // los oficiales quedan con su color de paleta normal, todo lo demás (creadas + sin asignar) queda
-  // con un único color casi negro, para que el límite de batería AWP resalte de inmediato.
+  // Vista de contraste — dos modos:
+  // 1) Con CWP marcados en el árbol: cada uno marcado queda con un color de paleta DISTINTO por
+  //    posición (ignora colorOf()/overrides por disciplina a propósito — esos hacen que todos los
+  //    CWP de una misma disciplina comparten color y el límite entre ellos se pierde). Todo lo NO
+  //    marcado queda casi negro, para que el límite de batería ENTRE los CWP marcados resalte.
+  // 2) Sin nada marcado: fallback al contraste original oficial-vs-no-oficial (límite de batería AWP).
   const handleVistaContraste = () => {
+    if (checked.size > 0) {
+      const checkedCodes = items.map(it => it.codigo).filter(c => checked.has(c));
+      const idxByCodigo = new Map(checkedCodes.map((c, i) => [c, i]));
+      onColorByLevel(nivel, items.map(it => {
+        const idx = idxByCodigo.get(it.codigo);
+        return { codigo: it.codigo, ...(idx !== undefined ? { ...colorForIndex(idx), a: 1 } : CONTRASTE_COLOR) };
+      }));
+      return;
+    }
     onColorByLevel(nivel, items.map(it => ({
       codigo: it.codigo,
       ...(it.esOficial && !isSinAsignar(it.codigo) ? { ...colorOf(it.codigo) } : CONTRASTE_COLOR),
@@ -2165,9 +2299,11 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
           onClick={handleVistaContraste}
           disabled={!viewerReady || loading}
           className="w-full inline-flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-black disabled:opacity-40 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
-          title="Oficiales con su color de paleta, todo lo demás (creadas + sin asignar) en negro — para revisar el límite de batería AWP"
+          title={checked.size > 0
+            ? `Cada uno de los ${checked.size} ${NIVEL_LABEL[nivel]} marcados queda con un color bien distinto entre sí (no por disciplina), el resto en negro — para ver el límite entre ellos`
+            : 'Oficiales con su color de paleta, todo lo demás (creadas + sin asignar) en negro — para revisar el límite de batería AWP'}
         >
-          <Eye className="w-3.5 h-3.5" /> Vista de contraste (límite de batería)
+          <Eye className="w-3.5 h-3.5" /> {checked.size > 0 ? `Límite entre ${checked.size} marcado(s)` : 'Vista de contraste (límite de batería)'}
         </button>
         <p className="text-[9.5px] text-slate-400 leading-snug">
           Cada {NIVEL_LABEL[nivel]} queda con un color. Click en uno para ubicarlo en el visor. Si ves elementos

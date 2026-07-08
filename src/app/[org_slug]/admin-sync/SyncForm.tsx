@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { OFFICIAL_PROJECTS } from "@/lib/project-constants";
+import { OFFICIAL_PROJECTS_SEED as OFFICIAL_PROJECTS } from "@/lib/project-constants";
 import { renameProject, deleteProject } from "./actions";
 
 export default function SyncForm({
@@ -62,8 +62,8 @@ export default function SyncForm({
                     Selecciona un proyecto oficial...
                   </option>
                   {OFFICIAL_PROJECTS.map((op) => (
-                    <option key={op.code} value={op.name}>
-                      {op.name} ({op.code})
+                    <option key={op.external_code} value={op.name}>
+                      {op.name} ({op.external_code})
                     </option>
                   ))}
                 </select>

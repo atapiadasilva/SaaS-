@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client';
 import {
   Box, Database, FileText, Users, ShieldCheck, CalendarDays,
   GitBranch, Target, ArrowRight, CheckCircle2, FileSearch2,
-  Hammer, ChevronRight, Settings2, AlertTriangle, Lock, Star,
+  Hammer, ChevronRight, Settings2, AlertTriangle, Lock, Star, Pickaxe,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { BimConfig } from '@/components/modules/BimConfigModal';
@@ -29,6 +29,18 @@ const MODULES = [
     requiresConfig: false,
   },
   {
+    id: 'mineria',
+    name: 'Minería',
+    desc: 'Control de Proyecto y Avances',
+    icon: Pickaxe,
+    path: 'mineria',
+    color: 'text-amber-600',
+    bg: 'bg-amber-50',
+    ring: 'ring-amber-200',
+    dot: 'bg-amber-500',
+    requiresConfig: false,
+  },
+  {
     id: 'programa',
     name: 'Programa',
     desc: 'Carta Gantt · WBS · HH por disciplina',
@@ -42,7 +54,7 @@ const MODULES = [
   },
   {
     id: 'tidp',
-    name: 'Hilo Digital',
+    name: 'Gemelo Digital',
     desc: 'ISO 19650-2 · Planes de Entrega de Información',
     icon: GitBranch,
     path: 'tidp',
@@ -54,10 +66,10 @@ const MODULES = [
   },
   {
     id: '90dias',
-    name: 'Plan 90 Días',
+    name: 'Plan 30 Días',
     desc: 'Lookahead · Restricciones · Vinculación BIM',
     icon: Target,
-    path: '90dias',
+    path: '30dias',
     color: 'text-fuchsia-600',
     bg: 'bg-fuchsia-50',
     ring: 'ring-fuchsia-200',
@@ -124,78 +136,59 @@ const STAGE_CFG: Record<Stage, { label: string; icon: any; color: string; bg: st
   cierre:     { label: 'Cierre',     icon: CheckCircle2, color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200', dot: 'bg-emerald-500' },
 };
 
-// ─── Toggle switch ────────────────────────────────────────────────────────────
-
-function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
-  return (
-    <button
-      onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!disabled) onChange(!checked); }}
-      disabled={disabled}
-      title={disabled ? 'Configura el módulo primero' : undefined}
-      className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none ${
-        disabled ? 'bg-slate-200 cursor-not-allowed opacity-50' : checked ? 'bg-[#0C1E4F]' : 'bg-slate-200'
-      }`}
-    >
-      <span className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform duration-200 ${
-        checked && !disabled ? 'translate-x-3.5' : 'translate-x-0.5'
-      }`} />
-    </button>
-  );
-}
-
 // ─── Compact module chip (2-col grid) ────────────────────────────────────────
 
 function CompactModuleChip({
-  mod, enabled, orgSlug, projectId, onToggle, isOwner, isConfigured, onConfigClick,
+  mod, orgSlug, projectId, isOwner, isConfigured, onConfigClick,
 }: {
   mod: typeof MODULES[0];
-  enabled: boolean;
   orgSlug: string;
   projectId: string;
-  onToggle: (id: string, val: boolean) => void;
   isOwner: boolean;
   isConfigured: boolean;
   onConfigClick: () => void;
 }) {
   const Icon = mod.icon;
-  const toggleBlocked = mod.requiresConfig && !isConfigured;
-  const active = enabled && !toggleBlocked;
+  const needsConfig = mod.requiresConfig && !isConfigured;
 
-  return (
-    <div className={`flex items-center gap-1.5 rounded-xl border px-2 py-1.5 transition-all ${
-      active ? `${mod.bg} ring-1 ${mod.ring} border-transparent` : 'bg-slate-50 border-slate-100 opacity-50'
-    }`}>
-      <Icon size={11} className={active ? mod.color : 'text-slate-300'} />
-      <span className={`text-[9px] font-bold uppercase tracking-tight flex-1 truncate leading-none ${
-        active ? 'text-slate-700' : 'text-slate-400'
-      }`}>
+  const content = (
+    <>
+      <Icon size={12} className={mod.color} />
+      <span className={`text-[10px] font-bold uppercase tracking-tight flex-1 truncate leading-none text-slate-700`}>
         {mod.name}
       </span>
-
       <div className="flex items-center gap-1 shrink-0">
-        {isOwner && mod.requiresConfig && !isConfigured && (
-          <button
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onConfigClick(); }}
-            className="p-0.5 rounded bg-amber-100 text-amber-600 hover:bg-amber-200 animate-pulse"
-          >
-            <Settings2 size={9} />
-          </button>
-        )}
-        {!isOwner && mod.requiresConfig && !isConfigured && (
-          <Lock size={8} className="text-slate-300" />
-        )}
-        <Toggle checked={enabled} onChange={(v) => onToggle(mod.id, v)} disabled={toggleBlocked} />
-        {active && (
-          <Link
-            href={`/${orgSlug}/projects/${projectId}/${mod.path}`}
-            onClick={(e) => e.stopPropagation()}
-            className={`p-0.5 rounded ${mod.bg} ${mod.color} hover:scale-110 transition-transform`}
-          >
-            <ArrowRight size={9} />
-          </Link>
+        {needsConfig ? (
+          isOwner ? (
+            <span className="p-1 rounded bg-amber-100 text-amber-600 animate-pulse flex items-center gap-1 text-[9px] font-black uppercase">
+              <Settings2 size={10} /> Configurar
+            </span>
+          ) : (
+            <Lock size={10} className="text-slate-300" />
+          )
+        ) : (
+          <span className={`p-0.5 rounded ${mod.bg} ${mod.color} group-hover:scale-110 transition-transform`}>
+            <ArrowRight size={10} />
+          </span>
         )}
       </div>
-    </div>
+    </>
+  );
+
+  const className = `flex items-center gap-2 rounded-xl border px-3 py-2 transition-all cursor-pointer group hover:shadow-sm ${mod.bg} ring-1 ${mod.ring} border-transparent hover:ring-2`;
+
+  if (needsConfig) {
+    return (
+      <button onClick={isOwner ? onConfigClick : undefined} className={className + (isOwner ? '' : ' cursor-not-allowed opacity-60')}>
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <Link href={`/${orgSlug}/projects/${projectId}/${mod.path}`} className={className}>
+      {content}
+    </Link>
   );
 }
 
@@ -212,30 +205,14 @@ function ProjectCard({
   isFavorite: boolean;
   onToggleFavorite: (id: string) => void;
 }) {
-  const [modules, setModules] = useState<Record<string, boolean>>(project.active_modules ?? {});
   const [moduleConfig, setModuleConfig] = useState<ModuleConfig>(project.module_config ?? {});
-  const [saving, setSaving] = useState<string | null>(null);
   const [configModalOpen, setConfigModalOpen] = useState<string | null>(null);
 
   const stage = STAGE_CFG[project.stage] ?? STAGE_CFG.operacion;
-  const isEnabled = (id: string) => modules[id] !== false;
   const getIsConfigured = (id: string) => {
     const mod = MODULES.find(m => m.id === id);
     if (!mod?.requiresConfig) return true;
     return !!(moduleConfig[id] as any)?.urn;
-  };
-
-  const activeCount = MODULES.filter(m => isEnabled(m.id) && !(m.requiresConfig && !getIsConfigured(m.id))).length;
-
-  const handleToggle = async (modId: string, value: boolean) => {
-    const mod = MODULES.find(m => m.id === modId);
-    if (mod?.requiresConfig && !getIsConfigured(modId) && value) return;
-    const next = { ...modules, [modId]: value };
-    setModules(next);
-    setSaving(modId);
-    const supabase = createClient();
-    await (supabase as any).from('projects').update({ active_modules: next }).eq('id', project.id);
-    setSaving(null);
   };
 
   const handleBimSave = (cfg: BimConfig | null) => {
@@ -245,12 +222,6 @@ function ProjectCard({
         next.bim = cfg;
       } else {
         delete next.bim;
-        setModules(prev2 => {
-          const next2 = { ...prev2, bim: false };
-          const supabase = createClient();
-          (supabase as any).from('projects').update({ active_modules: next2 }).eq('id', project.id);
-          return next2;
-        });
       }
       return next;
     });
@@ -298,22 +269,19 @@ function ProjectCard({
 
         {/* Modules grid */}
         <div className="px-3 pt-2 pb-3">
-          <div className="flex items-center justify-between mb-1.5">
-            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest">
-              Módulos · <span className="text-[#0C1E4F]">{activeCount}</span>/{MODULES.length} activos
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
+              Módulos Disponibles
             </p>
-            {saving && <p className="text-[8px] text-blue-500 animate-pulse">Guardando…</p>}
           </div>
 
-          <div className="grid grid-cols-2 gap-1">
+          <div className="grid grid-cols-2 gap-2">
             {MODULES.map(mod => (
               <CompactModuleChip
                 key={mod.id}
                 mod={mod}
-                enabled={isEnabled(mod.id)}
                 orgSlug={orgSlug}
                 projectId={project.id}
-                onToggle={handleToggle}
                 isOwner={isOwner}
                 isConfigured={getIsConfigured(mod.id)}
                 onConfigClick={() => setConfigModalOpen(mod.id)}

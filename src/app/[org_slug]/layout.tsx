@@ -1,7 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { PremiumSidebar } from "@/components/layout/PremiumSidebar";
-import { RolePreviewSwitcher } from "@/components/dev/RolePreviewSwitcher";
 import { previewOrgRole } from "@/lib/rolePreview";
 import { getPreviewRole } from "@/lib/rolePreviewServer";
 
@@ -46,9 +45,6 @@ export default async function OrgLayout({
 
   return (
     <>
-      {/* Switcher flotante — solo el owner real lo ve */}
-      {realIsOwner && <RolePreviewSwitcher currentPreview={preview} />}
-
       {isOrgAdmin ? (
         <div className="flex min-h-screen w-full bg-background font-sans">
           <PremiumSidebar

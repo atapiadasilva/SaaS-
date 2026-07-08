@@ -43,3 +43,6 @@ next-env.d.ts
 # claude code (internal state, no es parte del proyecto)
 .claude/worktrees/
 .nextdevlogsnext-development.log
+
+# artefactos locales del bot
+qr_whatsapp.png

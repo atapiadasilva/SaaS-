@@ -1,11 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { ProjectNavBar } from "@/components/layout/ProjectNavBar";
+import { HiloLogo, HiloWave } from "@/components/brand/Hilo";
 
-// Los 3 módulos AWP (edificación) — siempre visibles, sin activación en DB
-const ACTIVE_MODULES = ['awp', 'lps', 'vistas'];
-// Proyectos con data en mining_cwa usan el módulo de minería en vez de los de edificación
-const MINING_MODULES = ['mineria'];
+const MINING_MODULES = ['panel', 'mineria', 'planificacion', 'calidad', 'medio-ambiente', 'sso', 'equipos', 'rrhh', 'conciliacion', 'estado-pago'];
 
 export default async function ProjectLayout({
   children,
@@ -30,29 +28,27 @@ export default async function ProjectLayout({
     redirect("/organizaciones");
   }
 
-  const { count: miningCwaCount } = await (supabase as any)
-    .from("mining_cwa")
-    .select("cwa_id", { count: "exact", head: true })
-    .eq("project_id", project_id);
-
-  const activeModules = (miningCwaCount ?? 0) > 0 ? MINING_MODULES : ACTIVE_MODULES;
+  const activeModules = [...MINING_MODULES, 'setup'];
 
   return (
-    <div className="h-screen bg-slate-50 flex flex-col overflow-hidden">
-      <header className="bg-[#0a1628] border-b border-white/5 sticky top-0 z-10 px-6 py-3 flex items-center gap-4">
-        {/* Logo */}
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center">
-            <span className="text-white font-black text-sm">D</span>
-          </div>
+    <div className="h-screen bg-white flex flex-col overflow-hidden">
+      <header className="relative bg-white border-b-2 border-[#FF0000] sticky top-0 z-10 px-6 py-2.5 flex items-center gap-4 overflow-hidden">
+        {/* Hilo decorativo de fondo */}
+        <HiloWave className="absolute right-0 top-0 h-full w-[420px]" opacity={0.14} />
+
+        {/* Logo Hilo Digital */}
+        <div className="flex items-center gap-2.5 shrink-0 relative">
+          <HiloLogo size={34} />
           <div>
-            <div className="text-[11px] font-black text-white leading-none">{project.name}</div>
-            <div className="text-[8px] text-slate-500 leading-none uppercase tracking-widest">Datos AWP</div>
+            <div className="font-display text-[13px] font-bold text-[#1A1A1A] leading-none">
+              HILO <span className="text-[#FF0000]">DIGITAL</span>
+            </div>
+            <div className="text-[8px] text-[#757575] leading-none tracking-[0.18em] uppercase mt-0.5">{project.name}</div>
           </div>
         </div>
 
         {/* Nav centrado */}
-        <div className="flex-1 flex justify-center">
+        <div className="flex-1 flex justify-center relative">
           <ProjectNavBar
             orgSlug={org_slug}
             projectId={project_id}
@@ -61,14 +57,14 @@ export default async function ProjectLayout({
         </div>
 
         {/* Stage badge */}
-        <div className="shrink-0">
-          <span className="px-2 py-1 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-[9px] font-black rounded-full uppercase tracking-wider">
+        <div className="shrink-0 relative">
+          <span className="px-2.5 py-1 bg-white border border-[#FF0000]/40 text-[#A00000] text-[9px] font-black rounded-full uppercase tracking-wider">
             {project.stage}
           </span>
         </div>
       </header>
 
-      <div className="p-6 flex-1 overflow-auto">
+      <div className="p-6 flex-1 overflow-auto bg-white">
         {children}
       </div>
     </div>

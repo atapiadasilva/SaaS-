@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { Loader2 } from 'lucide-react';
 
-// Redirige directo al primer proyecto disponible → costanera
+// Redirige directo al primer proyecto disponible → módulo Minería
 export default function OrganizacionesPage() {
   useEffect(() => {
     (async () => {
@@ -19,7 +19,7 @@ export default function OrganizacionesPage() {
         .single();
 
       if (orgs?.slug && orgs?.projects?.[0]?.id) {
-        window.location.href = `/${orgs.slug}/projects/${orgs.projects[0].id}/awp`;
+        window.location.href = `/${orgs.slug}/projects/${orgs.projects[0].id}`;
       } else {
         // Fallback: ir al login si no hay proyecto
         window.location.href = '/auth/login';
