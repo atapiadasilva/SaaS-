@@ -159,7 +159,7 @@ function ActivityBar({
       <div className="flex items-stretch" style={{ minHeight: 16 }}>
         {/* Nombre */}
         <div
-          className="w-[38%] shrink-0 flex items-center gap-1 pr-2 cursor-pointer group min-w-0"
+          className="w-[26%] shrink-0 flex items-center gap-1 pr-2 cursor-pointer group min-w-0"
           onClick={() => relatedIwps.length && setExpanded(v => !v)}
         >
           {relatedIwps.length > 0 ? (
@@ -177,13 +177,22 @@ function ActivityBar({
             </span>
           )}
           <span className="text-[10px] text-[#33475B] truncate leading-tight" title={`${task.n} · ${task.code}`}>{task.n}</span>
-          <span className="text-[8.5px] text-slate-400 font-mono shrink-0 hidden xl:inline">{task.code.split('-').slice(-2).join('-')}</span>
+        </div>
+
+        {/* Fechas inicio – fin */}
+        <div className="w-[12%] shrink-0 flex items-center text-[8.5px] text-slate-400 font-mono whitespace-nowrap overflow-hidden">
+          {fd(task.s)} – {fd(task.e)}
+        </div>
+
+        {/* HH */}
+        <div className="w-[6%] shrink-0 flex items-center justify-end pr-2 text-[9px] font-mono font-semibold text-slate-500 whitespace-nowrap">
+          {fn(task.hh)}
         </div>
 
         {/* Timeline barra */}
         <div className="flex-1 relative flex items-center">
           <div
-            className="absolute inset-y-[1.5px] rounded cursor-pointer transition-opacity hover:opacity-85 flex items-center overflow-hidden"
+            className="absolute inset-y-[1.5px] rounded cursor-pointer transition-opacity hover:opacity-85"
             style={{
               left: `${leftPct}%`,
               width: `max(${minWidthPx}px, ${widthPct}%)`,
@@ -191,16 +200,7 @@ function ActivityBar({
             }}
             onMouseMove={showTip}
             onMouseLeave={() => setTip(null)}
-          >
-            <span className="text-[8px] text-white font-bold whitespace-nowrap px-1 drop-shadow">
-              {fn(task.hh)} HH
-            </span>
-          </div>
-        </div>
-
-        {/* Fechas a la derecha */}
-        <div className="w-[100px] shrink-0 flex items-center justify-end text-[8.5px] text-slate-400 font-mono pr-1 whitespace-nowrap">
-          {fd(task.s)} – {fd(task.e)}
+          />
         </div>
       </div>
 
@@ -242,8 +242,8 @@ function IwpBar({
   const blocked = iwp.constraints.total > 0 && iwp.constraints.despejados < iwp.constraints.total;
 
   return (
-    <div className="flex items-stretch pl-5" style={{ minHeight: 14 }}>
-      <div className="w-[38%] shrink-0 flex items-center pr-2 pl-2 gap-1">
+    <div className="flex items-stretch" style={{ minHeight: 14 }}>
+      <div className="w-[26%] shrink-0 flex items-center pr-2 pl-6 gap-1 min-w-0">
         <Layers className="w-2.5 h-2.5 text-[#FF0000] shrink-0" />
         <span className="text-[9px] text-slate-500 truncate font-mono">{iwp.iwp_id}</span>
         {blocked && (
@@ -252,9 +252,15 @@ function IwpBar({
           </span>
         )}
       </div>
+      <div className="w-[12%] shrink-0 flex items-center text-[8.5px] text-slate-400 font-mono whitespace-nowrap overflow-hidden">
+        {fd(iwp.fecha_inicio_plan)} – {fd(iwp.fecha_fin_plan)}
+      </div>
+      <div className="w-[6%] shrink-0 flex items-center justify-end pr-2 text-[8.5px] font-mono text-slate-400 whitespace-nowrap">
+        {fn(iwp.hh_estimadas)}
+      </div>
       <div className="flex-1 relative flex items-center">
         <div
-          className={cn('absolute inset-y-[1.5px] rounded cursor-pointer opacity-80 hover:opacity-100 transition flex items-center overflow-hidden', colorCls)}
+          className={cn('absolute inset-y-[1.5px] rounded cursor-pointer opacity-80 hover:opacity-100 transition', colorCls)}
           style={{ left: `${leftPct}%`, width: `max(${minWidthPx * 0.6}px, ${widthPct}%)` }}
           onMouseMove={e => setTip({
             x: e.clientX, y: e.clientY,
@@ -269,11 +275,8 @@ function IwpBar({
             ],
           })}
           onMouseLeave={() => setTip(null)}
-        >
-          <span className="text-[8px] text-white font-bold px-1 whitespace-nowrap">{iwp.iwp_id}</span>
-        </div>
+        />
       </div>
-      <div className="w-[100px] shrink-0" />
       {tip && <Tooltip info={tip} />}
     </div>
   );
@@ -309,7 +312,7 @@ export function CwpGantt({ c, extras = [], projectId }: { c: MCwp; extras?: MCwp
   // Medir ancho del contenedor para calcular el minWidthPx
   useEffect(() => {
     if (!containerRef.current) return;
-    const ro = new ResizeObserver(([e]) => setContainerW(e.contentRect.width * 0.62)); // 62% = zona timeline
+    const ro = new ResizeObserver(([e]) => setContainerW(e.contentRect.width * 0.56)); // 56% = zona timeline
     ro.observe(containerRef.current);
     return () => ro.disconnect();
   }, []);
@@ -413,8 +416,14 @@ export function CwpGantt({ c, extras = [], projectId }: { c: MCwp; extras?: MCwp
 
         {/* Header meses */}
         <div className="flex border-b border-[#E2D3C4] bg-[#FDF7F2]">
-          <div className="w-[38%] shrink-0 px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-r border-[#E2D3C4]">
+          <div className="w-[26%] shrink-0 px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
             Actividad / IWP
+          </div>
+          <div className="w-[12%] shrink-0 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+            Fechas
+          </div>
+          <div className="w-[6%] shrink-0 py-1.5 pr-2 text-right text-[10px] font-bold text-slate-400 uppercase tracking-wider border-r border-[#E2D3C4]">
+            HH
           </div>
           <div className="flex-1 relative flex">
             {months.map((m, i) => (
@@ -427,15 +436,12 @@ export function CwpGantt({ c, extras = [], projectId }: { c: MCwp; extras?: MCwp
               </div>
             ))}
           </div>
-          <div className="w-[100px] shrink-0 border-l border-[#E2D3C4] py-1.5 text-center text-[10px] text-slate-400 font-bold">
-            Fechas
-          </div>
         </div>
 
         {/* Body */}
         <div className="relative">
           {/* Grid de semanas */}
-          <div className="absolute inset-0 pointer-events-none z-0" style={{ left: '38%', right: 100 }}>
+          <div className="absolute inset-0 pointer-events-none z-0" style={{ left: '44%', right: 0 }}>
             {weeks.map((pct, i) => (
               <div key={i} className="absolute top-0 bottom-0 border-l border-dashed border-[#E2D3C4]/60" style={{ left: `${pct}%` }} />
             ))}
@@ -445,7 +451,7 @@ export function CwpGantt({ c, extras = [], projectId }: { c: MCwp; extras?: MCwp
           {showToday && (
             <div
               className="absolute top-0 bottom-0 w-[2px] bg-red-400/70 z-10 pointer-events-none"
-              style={{ left: `calc(38% + ${todayPct}% * 0.62)` }}
+              style={{ left: `calc(44% + ${todayPct}% * 0.56)` }}
             >
               <span className="absolute -top-0 left-1 text-[9px] text-red-400 font-bold bg-white/80 px-0.5 rounded leading-none whitespace-nowrap">
                 Hoy
