@@ -304,7 +304,7 @@ export function OrgsGrid({ orgs }: { orgs: Org[]; userEmail?: string }) {
                       <h3 className="font-bold text-lg text-foreground truncate">{org.name}</h3>
                     </Link>
                     <span className="inline-block mt-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-accent/10 text-accent uppercase tracking-wider">
-                      Plan {PLAN_LABELS[org.plan] ?? org.plan}
+                      Plan {org.plan ? (PLAN_LABELS[org.plan] ?? org.plan) : '—'}
                     </span>
                   </div>
                   <button

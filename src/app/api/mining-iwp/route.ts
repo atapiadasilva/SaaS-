@@ -16,14 +16,19 @@ export async function GET(req: NextRequest) {
   if (iwp_id) {
     const [iwpRes, actRes, constRes, progRes] = await Promise.all([
       sb.from('mining_iwp').select('*').eq('project_id', pid).eq('iwp_id', iwp_id).single(),
-      sb.from('mining_iwp_actividad').select('*, mining_programa(id, codigo, descripcion, hh, fecha_inicio, fecha_fin, tipo)').eq('project_id', pid).eq('iwp_id', iwp_id),
+      sb.from('mining_iwp_actividad').select('*, mining_programa(id, cod_actividad, nombre_actividad, hh, fecha_inicio, fecha_fin, tipo)').eq('project_id', pid).eq('iwp_id', iwp_id),
       sb.from('mining_iwp_constraint').select('*').eq('project_id', pid).eq('iwp_id', iwp_id),
       sb.from('mining_iwp_progreso').select('*').eq('project_id', pid).eq('iwp_id', iwp_id).order('fecha_reporte', { ascending: false }),
     ]);
     if (iwpRes.error) return NextResponse.json({ error: iwpRes.error.message }, { status: 500 });
     return NextResponse.json({
       iwp: iwpRes.data,
-      actividades: (actRes.data ?? []).map((a: any) => ({ ...a, prog: a.mining_programa })),
+      actividades: (actRes.data ?? []).map((a: any) => ({
+        ...a,
+        prog: a.mining_programa
+          ? { ...a.mining_programa, codigo: a.mining_programa.cod_actividad, descripcion: a.mining_programa.nombre_actividad }
+          : null,
+      })),
       constraints: constRes.data ?? [],
       progreso: progRes.data ?? [],
     });

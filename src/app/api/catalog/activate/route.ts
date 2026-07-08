@@ -123,12 +123,12 @@ export async function POST(req: NextRequest) {
 
       // ── 2. TIDP ───────────────────────────────────────────────────────────
       let { data: tidp } = await supabase.from('tidps').select('id')
-        .eq('project_id', projectId).eq('task_team_id', team.id)
+        .eq('project_id', projectId).eq('task_team_id', team!.id)
         .in('status', ['DRAFT', 'CURRENT']).maybeSingle()
 
       if (!tidp) {
         const { data: newTidp, error: e } = await supabase.from('tidps').insert({
-          project_id: projectId, task_team_id: team.id,
+          project_id: projectId, task_team_id: team!.id,
           name: `TIDP ${DEPT_NAMES[deptCode] ?? deptCode}`,
           code: `TIDP-${deptCode}-AUTO`, version: '1.0', status: 'DRAFT',
           author: user.email ?? 'Sistema',
@@ -157,7 +157,7 @@ export async function POST(req: NextRequest) {
 
       // ── 4. Insertar entregables (con ID de vuelta) ────────────────────────
       const { data: inserted, error: insertErr } = await supabase
-        .from('deliverables').insert(toInsert).select('id, iso_code, name, loin_geometric')
+        .from('deliverables').insert(toInsert as any).select('id, iso_code, name, loin_geometric')
       if (insertErr || !inserted) {
         results[projectId] = { created, skipped, tidpsCreated, constraintsCreated, error: insertErr?.message }
         continue
@@ -181,7 +181,7 @@ export async function POST(req: NextRequest) {
       })
 
       const { data: createdCons, error: consErr } = await supabase
-        .from('tidp_constraints').insert(constraints).select('id')
+        .from('tidp_constraints').insert(constraints as any).select('id')
       if (!consErr && createdCons) constraintsCreated += createdCons.length
     }
 

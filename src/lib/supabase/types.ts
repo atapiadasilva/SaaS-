@@ -574,6 +574,51 @@ export type Database = {
           },
         ]
       }
+      mining_avance_pasos: {
+        Row: {
+          actualizado_por: string | null
+          id: string
+          item: string
+          pct: number
+          ponderacion_id: string
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          actualizado_por?: string | null
+          id?: string
+          item: string
+          pct?: number
+          ponderacion_id: string
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          actualizado_por?: string | null
+          id?: string
+          item?: string
+          pct?: number
+          ponderacion_id?: string
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_avance_pasos_ponderacion_id_fkey"
+            columns: ["ponderacion_id"]
+            isOneToOne: false
+            referencedRelation: "mining_ponderaciones"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mining_avance_pasos_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       mining_awp_equipo: {
         Row: {
           area: string | null
@@ -1115,28 +1160,140 @@ export type Database = {
           },
         ]
       }
+      mining_condiciones: {
+        Row: {
+          concepto: string | null
+          fuente: string | null
+          id: string
+          project_id: string
+          regla: string | null
+        }
+        Insert: {
+          concepto?: string | null
+          fuente?: string | null
+          id?: string
+          project_id: string
+          regla?: string | null
+        }
+        Update: {
+          concepto?: string | null
+          fuente?: string | null
+          id?: string
+          project_id?: string
+          regla?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_condiciones_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_consideraciones: {
+        Row: {
+          created_at: string
+          cwp_id: string | null
+          depto: string
+          detalle: string | null
+          estado: string
+          fecha_limite: string | null
+          fecha_reporte: string
+          fuente: string
+          id: string
+          iwp_id: string | null
+          metadata: Json | null
+          n_cmdic: string | null
+          project_id: string
+          responsable: string | null
+          severidad: string
+          tipo: string
+          titulo: string
+        }
+        Insert: {
+          created_at?: string
+          cwp_id?: string | null
+          depto: string
+          detalle?: string | null
+          estado?: string
+          fecha_limite?: string | null
+          fecha_reporte?: string
+          fuente?: string
+          id?: string
+          iwp_id?: string | null
+          metadata?: Json | null
+          n_cmdic?: string | null
+          project_id: string
+          responsable?: string | null
+          severidad?: string
+          tipo: string
+          titulo: string
+        }
+        Update: {
+          created_at?: string
+          cwp_id?: string | null
+          depto?: string
+          detalle?: string | null
+          estado?: string
+          fecha_limite?: string | null
+          fecha_reporte?: string
+          fuente?: string
+          id?: string
+          iwp_id?: string | null
+          metadata?: Json | null
+          n_cmdic?: string | null
+          project_id?: string
+          responsable?: string | null
+          severidad?: string
+          tipo?: string
+          titulo?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_consideraciones_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       mining_cv: {
         Row: {
+          area: string | null
           cv_id: string
           cv_nombre: string | null
           cwa_id: string | null
           es_oficial: boolean
+          fecha_fin: string | null
+          fecha_inicio: string | null
+          hh_total: number | null
           n_cwp: number | null
           project_id: string
         }
         Insert: {
+          area?: string | null
           cv_id: string
           cv_nombre?: string | null
           cwa_id?: string | null
           es_oficial?: boolean
+          fecha_fin?: string | null
+          fecha_inicio?: string | null
+          hh_total?: number | null
           n_cwp?: number | null
           project_id: string
         }
         Update: {
+          area?: string | null
           cv_id?: string
           cv_nombre?: string | null
           cwa_id?: string | null
           es_oficial?: boolean
+          fecha_fin?: string | null
+          fecha_inicio?: string | null
+          hh_total?: number | null
           n_cwp?: number | null
           project_id?: string
         }
@@ -1152,28 +1309,43 @@ export type Database = {
       }
       mining_cwa: {
         Row: {
+          area: string | null
           contrato: string | null
           cwa_id: string
           cwa_nombre: string | null
+          duracion_dias: number | null
           es_oficial: boolean
+          fecha_fin: string | null
+          fecha_inicio: string | null
+          hh_total: number | null
           n_cv: number | null
           n_cwp: number | null
           project_id: string
         }
         Insert: {
+          area?: string | null
           contrato?: string | null
           cwa_id: string
           cwa_nombre?: string | null
+          duracion_dias?: number | null
           es_oficial?: boolean
+          fecha_fin?: string | null
+          fecha_inicio?: string | null
+          hh_total?: number | null
           n_cv?: number | null
           n_cwp?: number | null
           project_id: string
         }
         Update: {
+          area?: string | null
           contrato?: string | null
           cwa_id?: string
           cwa_nombre?: string | null
+          duracion_dias?: number | null
           es_oficial?: boolean
+          fecha_fin?: string | null
+          fecha_inicio?: string | null
+          hh_total?: number | null
           n_cv?: number | null
           n_cwp?: number | null
           project_id?: string
@@ -1190,7 +1362,9 @@ export type Database = {
       }
       mining_cwp: {
         Row: {
+          activity_id_ifc: string | null
           alcance: string | null
+          area_contrato: string | null
           costo_oferta_clp: number | null
           cv_id: string | null
           cwa_id: string | null
@@ -1202,12 +1376,21 @@ export type Database = {
           es_oficial: boolean
           ewp_id: string | null
           fecha_fin: string | null
+          fecha_ifc: string | null
           fecha_ini: string | null
           hh_planner: number | null
+          hito_contractual: string | null
+          pct_hh_cwa: number | null
+          pct_hh_proyecto: number | null
           project_id: string
+          ruta_critica: boolean | null
+          status_cwp: string | null
+          suministro: string | null
         }
         Insert: {
+          activity_id_ifc?: string | null
           alcance?: string | null
+          area_contrato?: string | null
           costo_oferta_clp?: number | null
           cv_id?: string | null
           cwa_id?: string | null
@@ -1219,12 +1402,21 @@ export type Database = {
           es_oficial?: boolean
           ewp_id?: string | null
           fecha_fin?: string | null
+          fecha_ifc?: string | null
           fecha_ini?: string | null
           hh_planner?: number | null
+          hito_contractual?: string | null
+          pct_hh_cwa?: number | null
+          pct_hh_proyecto?: number | null
           project_id: string
+          ruta_critica?: boolean | null
+          status_cwp?: string | null
+          suministro?: string | null
         }
         Update: {
+          activity_id_ifc?: string | null
           alcance?: string | null
+          area_contrato?: string | null
           costo_oferta_clp?: number | null
           cv_id?: string | null
           cwa_id?: string | null
@@ -1236,9 +1428,16 @@ export type Database = {
           es_oficial?: boolean
           ewp_id?: string | null
           fecha_fin?: string | null
+          fecha_ifc?: string | null
           fecha_ini?: string | null
           hh_planner?: number | null
+          hito_contractual?: string | null
+          pct_hh_cwa?: number | null
+          pct_hh_proyecto?: number | null
           project_id?: string
+          ruta_critica?: boolean | null
+          status_cwp?: string | null
+          suministro?: string | null
         }
         Relationships: [
           {
@@ -1252,26 +1451,209 @@ export type Database = {
       }
       mining_disciplinas: {
         Row: {
+          commodity: string | null
           disciplina_cod: string
           disciplina_nombre: string | null
           grupo_mineria: string | null
+          hoja_itemizado: string | null
           project_id: string
+          tipo_trabajo: string | null
         }
         Insert: {
+          commodity?: string | null
           disciplina_cod: string
           disciplina_nombre?: string | null
           grupo_mineria?: string | null
+          hoja_itemizado?: string | null
           project_id: string
+          tipo_trabajo?: string | null
         }
         Update: {
+          commodity?: string | null
           disciplina_cod?: string
           disciplina_nombre?: string | null
           grupo_mineria?: string | null
+          hoja_itemizado?: string | null
           project_id?: string
+          tipo_trabajo?: string | null
         }
         Relationships: [
           {
             foreignKeyName: "mining_disciplinas_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_doc_aconex: {
+        Row: {
+          archivo: string | null
+          categoria: string | null
+          cwa_id: string | null
+          cwp_id_exacto: string | null
+          cwp_sugerido: string | null
+          disciplina_doc: string | null
+          disciplina_id: string | null
+          estado_aconex: string | null
+          ext: string | null
+          fecha_modificacion: string | null
+          funcion: string | null
+          id: string
+          n_bechtel: string | null
+          n_cmdic: string | null
+          origen: string | null
+          project_id: string
+          rev: string | null
+          sector: string | null
+          tipo_doc: string | null
+          titulo: string | null
+        }
+        Insert: {
+          archivo?: string | null
+          categoria?: string | null
+          cwa_id?: string | null
+          cwp_id_exacto?: string | null
+          cwp_sugerido?: string | null
+          disciplina_doc?: string | null
+          disciplina_id?: string | null
+          estado_aconex?: string | null
+          ext?: string | null
+          fecha_modificacion?: string | null
+          funcion?: string | null
+          id?: string
+          n_bechtel?: string | null
+          n_cmdic?: string | null
+          origen?: string | null
+          project_id: string
+          rev?: string | null
+          sector?: string | null
+          tipo_doc?: string | null
+          titulo?: string | null
+        }
+        Update: {
+          archivo?: string | null
+          categoria?: string | null
+          cwa_id?: string | null
+          cwp_id_exacto?: string | null
+          cwp_sugerido?: string | null
+          disciplina_doc?: string | null
+          disciplina_id?: string | null
+          estado_aconex?: string | null
+          ext?: string | null
+          fecha_modificacion?: string | null
+          funcion?: string | null
+          id?: string
+          n_bechtel?: string | null
+          n_cmdic?: string | null
+          origen?: string | null
+          project_id?: string
+          rev?: string | null
+          sector?: string | null
+          tipo_doc?: string | null
+          titulo?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_doc_aconex_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_doc_referencia: {
+        Row: {
+          doc_bechtel: string | null
+          doc_cmdic: string | null
+          en_aconex: boolean | null
+          en_carpeta: boolean | null
+          id: string
+          project_id: string
+          titulo: string | null
+        }
+        Insert: {
+          doc_bechtel?: string | null
+          doc_cmdic?: string | null
+          en_aconex?: boolean | null
+          en_carpeta?: boolean | null
+          id?: string
+          project_id: string
+          titulo?: string | null
+        }
+        Update: {
+          doc_bechtel?: string | null
+          doc_cmdic?: string | null
+          en_aconex?: boolean | null
+          en_carpeta?: boolean | null
+          id?: string
+          project_id?: string
+          titulo?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_doc_referencia_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_dotacion: {
+        Row: {
+          actividades: Json | null
+          documentos: Json | null
+          equipos: Json | null
+          fecha: string
+          id: string
+          mod_hd: number | null
+          mod_hh_acum: number | null
+          mod_hh_dia: number | null
+          moi_hd: number | null
+          moi_hh_acum: number | null
+          moi_hh_dia: number | null
+          n_cmdic: string | null
+          observaciones: string | null
+          project_id: string
+        }
+        Insert: {
+          actividades?: Json | null
+          documentos?: Json | null
+          equipos?: Json | null
+          fecha: string
+          id?: string
+          mod_hd?: number | null
+          mod_hh_acum?: number | null
+          mod_hh_dia?: number | null
+          moi_hd?: number | null
+          moi_hh_acum?: number | null
+          moi_hh_dia?: number | null
+          n_cmdic?: string | null
+          observaciones?: string | null
+          project_id: string
+        }
+        Update: {
+          actividades?: Json | null
+          documentos?: Json | null
+          equipos?: Json | null
+          fecha?: string
+          id?: string
+          mod_hd?: number | null
+          mod_hh_acum?: number | null
+          mod_hh_dia?: number | null
+          moi_hd?: number | null
+          moi_hh_acum?: number | null
+          moi_hh_dia?: number | null
+          n_cmdic?: string | null
+          observaciones?: string | null
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_dotacion_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
@@ -1509,6 +1891,611 @@ export type Database = {
           },
         ]
       }
+      mining_epr: {
+        Row: {
+          cwa_propuesta: string | null
+          cwp_propuesto: string | null
+          disciplina_propuesta: string | null
+          en_aconex: boolean | null
+          id: string
+          info_aprob: string | null
+          item_eco02b: string | null
+          motivo_emision: string | null
+          n_cmdic: string | null
+          n_esed: string | null
+          project_id: string
+          titulo: string | null
+        }
+        Insert: {
+          cwa_propuesta?: string | null
+          cwp_propuesto?: string | null
+          disciplina_propuesta?: string | null
+          en_aconex?: boolean | null
+          id?: string
+          info_aprob?: string | null
+          item_eco02b?: string | null
+          motivo_emision?: string | null
+          n_cmdic?: string | null
+          n_esed?: string | null
+          project_id: string
+          titulo?: string | null
+        }
+        Update: {
+          cwa_propuesta?: string | null
+          cwp_propuesto?: string | null
+          disciplina_propuesta?: string | null
+          en_aconex?: boolean | null
+          id?: string
+          info_aprob?: string | null
+          item_eco02b?: string | null
+          motivo_emision?: string | null
+          n_cmdic?: string | null
+          n_esed?: string | null
+          project_id?: string
+          titulo?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_epr_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_equipos: {
+        Row: {
+          acreditado: boolean | null
+          descripcion: string
+          dias_registrado: number | null
+          horas_mantencion: number | null
+          horas_operando: number | null
+          horas_standby: number | null
+          id: string
+          marca: string | null
+          metadata: Json | null
+          modelo: string | null
+          operador: string | null
+          patente_codigo: string | null
+          primera_vez_visto: string | null
+          project_id: string
+          ultima_vez_visto: string | null
+        }
+        Insert: {
+          acreditado?: boolean | null
+          descripcion: string
+          dias_registrado?: number | null
+          horas_mantencion?: number | null
+          horas_operando?: number | null
+          horas_standby?: number | null
+          id?: string
+          marca?: string | null
+          metadata?: Json | null
+          modelo?: string | null
+          operador?: string | null
+          patente_codigo?: string | null
+          primera_vez_visto?: string | null
+          project_id: string
+          ultima_vez_visto?: string | null
+        }
+        Update: {
+          acreditado?: boolean | null
+          descripcion?: string
+          dias_registrado?: number | null
+          horas_mantencion?: number | null
+          horas_operando?: number | null
+          horas_standby?: number | null
+          id?: string
+          marca?: string | null
+          metadata?: Json | null
+          modelo?: string | null
+          operador?: string | null
+          patente_codigo?: string | null
+          primera_vez_visto?: string | null
+          project_id?: string
+          ultima_vez_visto?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_equipos_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_estudio_aconex: {
+        Row: {
+          categoria: string
+          created_at: string
+          data: Json
+          documentos: Json | null
+          id: string
+          n_cmdic: string | null
+          project_id: string
+          titulo: string | null
+        }
+        Insert: {
+          categoria: string
+          created_at?: string
+          data: Json
+          documentos?: Json | null
+          id?: string
+          n_cmdic?: string | null
+          project_id: string
+          titulo?: string | null
+        }
+        Update: {
+          categoria?: string
+          created_at?: string
+          data?: Json
+          documentos?: Json | null
+          id?: string
+          n_cmdic?: string | null
+          project_id?: string
+          titulo?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_estudio_aconex_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_ewp_ifc: {
+        Row: {
+          activity_id_ifc: string | null
+          cwp_id: string
+          documento_ifc: string | null
+          fecha_ifc_plan: string | null
+          fecha_ifc_real: string | null
+          id: string
+          liberado: boolean
+          observacion: string | null
+          project_id: string
+        }
+        Insert: {
+          activity_id_ifc?: string | null
+          cwp_id: string
+          documento_ifc?: string | null
+          fecha_ifc_plan?: string | null
+          fecha_ifc_real?: string | null
+          id?: string
+          liberado?: boolean
+          observacion?: string | null
+          project_id: string
+        }
+        Update: {
+          activity_id_ifc?: string | null
+          cwp_id?: string
+          documento_ifc?: string | null
+          fecha_ifc_plan?: string | null
+          fecha_ifc_real?: string | null
+          id?: string
+          liberado?: boolean
+          observacion?: string | null
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_ewp_ifc_project_id_cwp_id_fkey"
+            columns: ["project_id", "cwp_id"]
+            isOneToOne: false
+            referencedRelation: "mining_cwp"
+            referencedColumns: ["project_id", "cwp_id"]
+          },
+        ]
+      }
+      mining_hitos: {
+        Row: {
+          hito: string | null
+          id: string
+          multa: string | null
+          numero: number | null
+          plazo_dias: number | null
+          project_id: string
+        }
+        Insert: {
+          hito?: string | null
+          id?: string
+          multa?: string | null
+          numero?: number | null
+          plazo_dias?: number | null
+          project_id: string
+        }
+        Update: {
+          hito?: string | null
+          id?: string
+          multa?: string | null
+          numero?: number | null
+          plazo_dias?: number | null
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_hitos_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_itemizado: {
+        Row: {
+          area: string | null
+          cantidad: number | null
+          commodity: string | null
+          cwa_id: string | null
+          cwp_id: string | null
+          cwps_via_mc: string | null
+          descripcion: string | null
+          descripcion_codigo: string | null
+          hh_item: number | null
+          hh_unidad: number | null
+          id: string
+          item: string
+          n_partida: string | null
+          obra: string | null
+          p_total_clp: number | null
+          partida_bmp: string | null
+          project_id: string
+          pu_clp: number | null
+          tipo_partida: string | null
+          unidad: string | null
+          vinculado: boolean | null
+          wbs: string | null
+        }
+        Insert: {
+          area?: string | null
+          cantidad?: number | null
+          commodity?: string | null
+          cwa_id?: string | null
+          cwp_id?: string | null
+          cwps_via_mc?: string | null
+          descripcion?: string | null
+          descripcion_codigo?: string | null
+          hh_item?: number | null
+          hh_unidad?: number | null
+          id?: string
+          item: string
+          n_partida?: string | null
+          obra?: string | null
+          p_total_clp?: number | null
+          partida_bmp?: string | null
+          project_id: string
+          pu_clp?: number | null
+          tipo_partida?: string | null
+          unidad?: string | null
+          vinculado?: boolean | null
+          wbs?: string | null
+        }
+        Update: {
+          area?: string | null
+          cantidad?: number | null
+          commodity?: string | null
+          cwa_id?: string | null
+          cwp_id?: string | null
+          cwps_via_mc?: string | null
+          descripcion?: string | null
+          descripcion_codigo?: string | null
+          hh_item?: number | null
+          hh_unidad?: number | null
+          id?: string
+          item?: string
+          n_partida?: string | null
+          obra?: string | null
+          p_total_clp?: number | null
+          partida_bmp?: string | null
+          project_id?: string
+          pu_clp?: number | null
+          tipo_partida?: string | null
+          unidad?: string | null
+          vinculado?: boolean | null
+          wbs?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_itemizado_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_iwp: {
+        Row: {
+          avance_fisico_pct: number
+          constraint_cleared: boolean
+          creado_por: string | null
+          crew_size: number | null
+          cwp_id: string
+          descripcion: string | null
+          descripcion_scope: string | null
+          duracion_dias: number | null
+          fecha_creacion: string
+          fecha_fin_plan: string | null
+          fecha_inicio_plan: string | null
+          fecha_ultima_actualizacion: string
+          hh_estimadas: number | null
+          hh_reales_acum: number
+          imagen_scope: string | null
+          imagenes: Json | null
+          iwp_id: string
+          project_id: string
+          semana_ejecucion: string | null
+          status: string
+        }
+        Insert: {
+          avance_fisico_pct?: number
+          constraint_cleared?: boolean
+          creado_por?: string | null
+          crew_size?: number | null
+          cwp_id: string
+          descripcion?: string | null
+          descripcion_scope?: string | null
+          duracion_dias?: number | null
+          fecha_creacion?: string
+          fecha_fin_plan?: string | null
+          fecha_inicio_plan?: string | null
+          fecha_ultima_actualizacion?: string
+          hh_estimadas?: number | null
+          hh_reales_acum?: number
+          imagen_scope?: string | null
+          imagenes?: Json | null
+          iwp_id: string
+          project_id: string
+          semana_ejecucion?: string | null
+          status?: string
+        }
+        Update: {
+          avance_fisico_pct?: number
+          constraint_cleared?: boolean
+          creado_por?: string | null
+          crew_size?: number | null
+          cwp_id?: string
+          descripcion?: string | null
+          descripcion_scope?: string | null
+          duracion_dias?: number | null
+          fecha_creacion?: string
+          fecha_fin_plan?: string | null
+          fecha_inicio_plan?: string | null
+          fecha_ultima_actualizacion?: string
+          hh_estimadas?: number | null
+          hh_reales_acum?: number
+          imagen_scope?: string | null
+          imagenes?: Json | null
+          iwp_id?: string
+          project_id?: string
+          semana_ejecucion?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_iwp_project_id_cwp_id_fkey"
+            columns: ["project_id", "cwp_id"]
+            isOneToOne: false
+            referencedRelation: "mining_cwp"
+            referencedColumns: ["project_id", "cwp_id"]
+          },
+        ]
+      }
+      mining_iwp_actividad: {
+        Row: {
+          cantidad_asignada: number | null
+          completado: boolean
+          hh_asignadas_iwp: number | null
+          id: string
+          iwp_id: string
+          programa_id: string
+          project_id: string
+          unidad: string | null
+        }
+        Insert: {
+          cantidad_asignada?: number | null
+          completado?: boolean
+          hh_asignadas_iwp?: number | null
+          id?: string
+          iwp_id: string
+          programa_id: string
+          project_id: string
+          unidad?: string | null
+        }
+        Update: {
+          cantidad_asignada?: number | null
+          completado?: boolean
+          hh_asignadas_iwp?: number | null
+          id?: string
+          iwp_id?: string
+          programa_id?: string
+          project_id?: string
+          unidad?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_iwp_actividad_programa_id_fkey"
+            columns: ["programa_id"]
+            isOneToOne: false
+            referencedRelation: "mining_programa"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mining_iwp_actividad_project_id_iwp_id_fkey"
+            columns: ["project_id", "iwp_id"]
+            isOneToOne: false
+            referencedRelation: "mining_iwp"
+            referencedColumns: ["project_id", "iwp_id"]
+          },
+        ]
+      }
+      mining_iwp_constraint: {
+        Row: {
+          cleared: boolean
+          descripcion: string | null
+          despejado_por: string | null
+          ewp_id: string | null
+          fecha_cleared: string | null
+          fecha_necesaria: string | null
+          id: string
+          iwp_id: string
+          nota: string | null
+          project_id: string
+          suministro_id: string | null
+          tipo: string
+        }
+        Insert: {
+          cleared?: boolean
+          descripcion?: string | null
+          despejado_por?: string | null
+          ewp_id?: string | null
+          fecha_cleared?: string | null
+          fecha_necesaria?: string | null
+          id?: string
+          iwp_id: string
+          nota?: string | null
+          project_id: string
+          suministro_id?: string | null
+          tipo: string
+        }
+        Update: {
+          cleared?: boolean
+          descripcion?: string | null
+          despejado_por?: string | null
+          ewp_id?: string | null
+          fecha_cleared?: string | null
+          fecha_necesaria?: string | null
+          id?: string
+          iwp_id?: string
+          nota?: string | null
+          project_id?: string
+          suministro_id?: string | null
+          tipo?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_iwp_constraint_ewp_id_fkey"
+            columns: ["ewp_id"]
+            isOneToOne: false
+            referencedRelation: "mining_ewp_ifc"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mining_iwp_constraint_project_id_iwp_id_fkey"
+            columns: ["project_id", "iwp_id"]
+            isOneToOne: false
+            referencedRelation: "mining_iwp"
+            referencedColumns: ["project_id", "iwp_id"]
+          },
+          {
+            foreignKeyName: "mining_iwp_constraint_suministro_id_fkey"
+            columns: ["suministro_id"]
+            isOneToOne: false
+            referencedRelation: "mining_suministro"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_iwp_elemento: {
+        Row: {
+          asignado_por: string | null
+          fecha_asignacion: string | null
+          id: string
+          iwp_id: string
+          moniker: string
+          nombre: string | null
+          project_id: string
+        }
+        Insert: {
+          asignado_por?: string | null
+          fecha_asignacion?: string | null
+          id?: string
+          iwp_id: string
+          moniker: string
+          nombre?: string | null
+          project_id: string
+        }
+        Update: {
+          asignado_por?: string | null
+          fecha_asignacion?: string | null
+          id?: string
+          iwp_id?: string
+          moniker?: string
+          nombre?: string | null
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_iwp_elemento_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_iwp_progreso: {
+        Row: {
+          avance_financiero_pct: number | null
+          avance_fisico_pct: number | null
+          completado: boolean
+          fecha_reporte: string
+          hh_reales_acum: number | null
+          id: string
+          iwp_id: string
+          observacion: string | null
+          ponderacion_id: string | null
+          project_id: string
+          reportado_por: string | null
+        }
+        Insert: {
+          avance_financiero_pct?: number | null
+          avance_fisico_pct?: number | null
+          completado?: boolean
+          fecha_reporte: string
+          hh_reales_acum?: number | null
+          id?: string
+          iwp_id: string
+          observacion?: string | null
+          ponderacion_id?: string | null
+          project_id: string
+          reportado_por?: string | null
+        }
+        Update: {
+          avance_financiero_pct?: number | null
+          avance_fisico_pct?: number | null
+          completado?: boolean
+          fecha_reporte?: string
+          hh_reales_acum?: number | null
+          id?: string
+          iwp_id?: string
+          observacion?: string | null
+          ponderacion_id?: string | null
+          project_id?: string
+          reportado_por?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_iwp_progreso_ponderacion_id_fkey"
+            columns: ["ponderacion_id"]
+            isOneToOne: false
+            referencedRelation: "mining_ponderaciones"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mining_iwp_progreso_project_id_iwp_id_fkey"
+            columns: ["project_id", "iwp_id"]
+            isOneToOne: false
+            referencedRelation: "mining_iwp"
+            referencedColumns: ["project_id", "iwp_id"]
+          },
+        ]
+      }
       mining_mapeo_area_cwa: {
         Row: {
           area_wbs: string | null
@@ -1534,6 +2521,65 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "mining_mapeo_area_cwa_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_mc: {
+        Row: {
+          cantidad_item: number | null
+          cwp_id: string | null
+          estado_vinculo: string | null
+          fecha_fin: string | null
+          fecha_inicio: string | null
+          hh_actividad: number | null
+          hh_item: number | null
+          id: string
+          id_antiguo: string | null
+          item_eco2: string | null
+          nombre_actividad: string | null
+          project_id: string
+          rendimiento: number | null
+          task_id: string
+        }
+        Insert: {
+          cantidad_item?: number | null
+          cwp_id?: string | null
+          estado_vinculo?: string | null
+          fecha_fin?: string | null
+          fecha_inicio?: string | null
+          hh_actividad?: number | null
+          hh_item?: number | null
+          id?: string
+          id_antiguo?: string | null
+          item_eco2?: string | null
+          nombre_actividad?: string | null
+          project_id: string
+          rendimiento?: number | null
+          task_id: string
+        }
+        Update: {
+          cantidad_item?: number | null
+          cwp_id?: string | null
+          estado_vinculo?: string | null
+          fecha_fin?: string | null
+          fecha_inicio?: string | null
+          hh_actividad?: number | null
+          hh_item?: number | null
+          id?: string
+          id_antiguo?: string | null
+          item_eco2?: string | null
+          nombre_actividad?: string | null
+          project_id?: string
+          rendimiento?: number | null
+          task_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_mc_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
@@ -1716,34 +2762,70 @@ export type Database = {
       }
       mining_programa: {
         Row: {
+          cantidad: number | null
           cod_actividad: string | null
+          cv_id: string | null
+          cwa_id: string | null
           cwp_id: string | null
+          duracion_dias: number | null
+          en_mc: boolean | null
           fecha_fin: string | null
           fecha_inicio: string | null
+          fuente: string | null
           hh: number | null
           id: string
+          id_antiguo: string | null
+          iwp_codigo: string | null
           nombre_actividad: string | null
           project_id: string
+          sector: string | null
+          tipo: string | null
+          unidad: string | null
+          wbs: string | null
         }
         Insert: {
+          cantidad?: number | null
           cod_actividad?: string | null
+          cv_id?: string | null
+          cwa_id?: string | null
           cwp_id?: string | null
+          duracion_dias?: number | null
+          en_mc?: boolean | null
           fecha_fin?: string | null
           fecha_inicio?: string | null
+          fuente?: string | null
           hh?: number | null
           id?: string
+          id_antiguo?: string | null
+          iwp_codigo?: string | null
           nombre_actividad?: string | null
           project_id: string
+          sector?: string | null
+          tipo?: string | null
+          unidad?: string | null
+          wbs?: string | null
         }
         Update: {
+          cantidad?: number | null
           cod_actividad?: string | null
+          cv_id?: string | null
+          cwa_id?: string | null
           cwp_id?: string | null
+          duracion_dias?: number | null
+          en_mc?: boolean | null
           fecha_fin?: string | null
           fecha_inicio?: string | null
+          fuente?: string | null
           hh?: number | null
           id?: string
+          id_antiguo?: string | null
+          iwp_codigo?: string | null
           nombre_actividad?: string | null
           project_id?: string
+          sector?: string | null
+          tipo?: string | null
+          unidad?: string | null
+          wbs?: string | null
         }
         Relationships: [
           {
@@ -1825,6 +2907,53 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "projects"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      mining_suministro: {
+        Row: {
+          cwp_id: string
+          descripcion_material: string | null
+          fecha_entrega_plan: string | null
+          fecha_entrega_real: string | null
+          id: string
+          liberado: boolean
+          numero_po: string | null
+          observacion: string | null
+          project_id: string
+          proveedor: string | null
+        }
+        Insert: {
+          cwp_id: string
+          descripcion_material?: string | null
+          fecha_entrega_plan?: string | null
+          fecha_entrega_real?: string | null
+          id?: string
+          liberado?: boolean
+          numero_po?: string | null
+          observacion?: string | null
+          project_id: string
+          proveedor?: string | null
+        }
+        Update: {
+          cwp_id?: string
+          descripcion_material?: string | null
+          fecha_entrega_plan?: string | null
+          fecha_entrega_real?: string | null
+          id?: string
+          liberado?: boolean
+          numero_po?: string | null
+          observacion?: string | null
+          project_id?: string
+          proveedor?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mining_suministro_project_id_cwp_id_fkey"
+            columns: ["project_id", "cwp_id"]
+            isOneToOne: false
+            referencedRelation: "mining_cwp"
+            referencedColumns: ["project_id", "cwp_id"]
           },
         ]
       }
@@ -2545,7 +3674,17 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      v_mining_brechas: {
+        Row: {
+          codigo: string | null
+          cwp_id: string | null
+          descripcion: string | null
+          hh: number | null
+          project_id: string | null
+          tipo_brecha: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       create_organization: {
@@ -2582,6 +3721,14 @@ export type Database = {
       merge_module_config: {
         Args: { p_key: string; p_project_id: string; p_value: Json }
         Returns: undefined
+      }
+      mining_bot_schema_map: {
+        Args: never
+        Returns: {
+          column_name: string
+          data_type: string
+          table_name: string
+        }[]
       }
       mining_cwp_element_counts: {
         Args: { p_project_id: string }
@@ -2842,3 +3989,6 @@ export const Constants = {
     },
   },
 } as const
+
+// --- Adiciones manuales (mantener al regenerar tipos con supabase gen types) ---
+export type OrgPlan = 'starter' | 'pro' | 'enterprise'

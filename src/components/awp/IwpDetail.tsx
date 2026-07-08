@@ -14,24 +14,107 @@ interface Props {
   projectId: string;
   iwpId: string;
   onClose?: () => void;
+  onChanged?: () => void;
 }
 
 const fecha = (s: string | null) => s ? new Date(s).toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' }) : '—';
 const num = (v: number | null | undefined) => v == null ? '—' : Math.round(v).toLocaleString('es-CL');
+const hoyISO = () => new Date().toISOString().slice(0, 10);
 
-export default function IwpDetail({ projectId, iwpId, onClose }: Props) {
+export default function IwpDetail({ projectId, iwpId, onClose, onChanged }: Props) {
   const [data, setData] = useState<IwpData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [imageInput, setImageInput] = useState('');
   const [imageType, setImageType] = useState<'scope_3d' | 'plano' | 'foto'>('scope_3d');
-  const [tab, setTab] = useState<'resumen' | 'gantt' | 'constraints' | 'imagenes'>('resumen');
+  const [tab, setTab] = useState<'resumen' | 'gantt' | 'constraints' | 'avance' | 'imagenes'>('resumen');
 
-  useEffect(() => {
+  // Avance
+  const [pasos, setPasos] = useState<any[] | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [manualPct, setManualPct] = useState('');
+  const [hhReales, setHhReales] = useState('');
+  const [observacion, setObservacion] = useState('');
+  const [savingAvance, setSavingAvance] = useState(false);
+
+  // Constraints
+  const [consTipo, setConsTipo] = useState('IFC');
+  const [consDesc, setConsDesc] = useState('');
+  const [consFecha, setConsFecha] = useState('');
+  const [savingCons, setSavingCons] = useState(false);
+
+  const reload = () => {
     fetch(`/api/mining-iwp?project_id=${projectId}&iwp_id=${iwpId}`)
       .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d?.error); return d; })
       .then(setData)
       .catch(e => setError(e.message));
-  }, [projectId, iwpId]);
+  };
+
+  useEffect(() => { setData(null); setPasos(null); setChecked(new Set()); reload(); }, [projectId, iwpId]);
+
+  // Cargar pasos de ponderación cuando se conoce el CWP del IWP
+  useEffect(() => {
+    if (!data?.iwp?.cwp_id || pasos !== null) return;
+    fetch(`/api/mining-iwp-progreso?project_id=${projectId}&cwp_id=${encodeURIComponent(data.iwp.cwp_id)}`)
+      .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d?.error); return d; })
+      .then(d => setPasos(d.pasos ?? []))
+      .catch(() => setPasos([]));
+  }, [data?.iwp?.cwp_id, projectId, pasos]);
+
+  const handleToggleConstraint = async (c: any) => {
+    try {
+      const res = await fetch('/api/mining-iwp-constraint', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, constraint_id: c.id, cleared: !c.cleared }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      reload(); onChanged?.();
+    } catch (e) { setError(String(e)); }
+  };
+
+  const handleAddConstraint = async () => {
+    if (!consTipo.trim()) return;
+    setSavingCons(true);
+    try {
+      const res = await fetch('/api/mining-iwp-constraint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, iwp_id: iwpId, tipo: consTipo, descripcion: consDesc || null, fecha_necesaria: consFecha || null }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      setConsDesc(''); setConsFecha('');
+      reload(); onChanged?.();
+    } catch (e) { setError(String(e)); }
+    finally { setSavingCons(false); }
+  };
+
+  const handleReportarAvance = async () => {
+    setSavingAvance(true);
+    try {
+      const usaPasos = (pasos?.length ?? 0) > 0;
+      const body: any = {
+        project_id: projectId, iwp_id: iwpId, fecha_reporte: hoyISO(),
+        hh_reales_acum: hhReales ? Number(hhReales) : null,
+        observacion: observacion || null,
+      };
+      if (usaPasos) {
+        body.pasos_completados = Array.from(checked);
+        body.pasos_disponibles_total = pasos!.map((p: any) => p.id);
+      } else {
+        if (manualPct === '') throw new Error('Ingresa el % de avance');
+        body.avance_fisico_pct_manual = Number(manualPct);
+      }
+      const res = await fetch('/api/mining-iwp-progreso', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      setObservacion('');
+      reload(); onChanged?.();
+    } catch (e) { setError(String(e)); }
+    finally { setSavingAvance(false); }
+  };
 
   const handleAddImage = async () => {
     if (!imageInput.trim()) return;
@@ -85,7 +168,7 @@ export default function IwpDetail({ projectId, iwpId, onClose }: Props) {
       </div>
 
       <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #FF0000', backgroundColor: '#FAFAFA' }}>
-        {(['resumen', 'gantt', 'constraints', 'imagenes'] as const).map(t => (
+        {(['resumen', 'gantt', 'constraints', 'avance', 'imagenes'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} style={{ flex: 1, padding: '9px 12px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', border: 'none', backgroundColor: tab === t ? 'white' : '#FAFAFA', color: tab === t ? '#FF0000' : '#757575', cursor: 'pointer', borderBottom: tab === t ? '2px solid #FF0000' : 'none' }}>
             {t}
           </button>
@@ -137,13 +220,98 @@ export default function IwpDetail({ projectId, iwpId, onClose }: Props) {
             {constraints.map((c: any, i: number) => (
               <div key={i} style={{ borderRadius: 8, border: c.cleared ? '1px solid #E0E0E0' : '1px solid #FDE68A', backgroundColor: c.cleared ? '#FAFAFA' : 'white', padding: '10px 12px', opacity: c.cleared ? 0.65 : 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                  {c.cleared ? <CheckCircle2 style={{ width: 14, height: 14, color: '#166534' }} /> : <AlertCircle style={{ width: 14, height: 14, color: '#B45309' }} />}
+                  <button onClick={() => handleToggleConstraint(c)} title={c.cleared ? 'Reabrir' : 'Marcar despejado'} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'inline-flex' }}>
+                    {c.cleared ? <CheckCircle2 style={{ width: 14, height: 14, color: '#166534' }} /> : <AlertCircle style={{ width: 14, height: 14, color: '#B45309' }} />}
+                  </button>
                   <span style={{ fontSize: 11, fontWeight: 700, color: '#1A1A1A' }}>{c.tipo}</span>
-                  <span style={{ fontSize: 9, color: '#757575', marginLeft: 'auto' }}>{c.cleared ? '✓ Despejado' : `vence ${fecha(c.fecha_necesaria)}`}</span>
+                  <span style={{ fontSize: 9, color: '#757575', marginLeft: 'auto' }}>{c.cleared ? `✓ Despejado ${c.despejado_por ? 'por ' + c.despejado_por : ''}` : `vence ${fecha(c.fecha_necesaria)}`}</span>
                 </div>
                 <div style={{ fontSize: 10, color: '#33475B' }}>{c.descripcion}</div>
               </div>
             ))}
+            <div style={{ borderRadius: 8, border: '1px dashed #E0E0E0', padding: '10px 12px', marginTop: 4 }}>
+              <div style={{ fontSize: 9.5, fontWeight: 900, color: '#757575', textTransform: 'uppercase', marginBottom: 8 }}>Agregar restricción</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 130px auto', gap: 8 }}>
+                <select value={consTipo} onChange={e => setConsTipo(e.target.value)} style={{ padding: '7px 8px', fontSize: 10.5, border: '1px solid #EEEEEE', borderRadius: 8 }}>
+                  {['IFC', 'MATERIAL', 'PERMISO', 'EQUIPO', 'PREDECESORA', 'OTRO'].map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <input type="text" value={consDesc} onChange={e => setConsDesc(e.target.value)} placeholder="Descripción" style={{ padding: '7px 10px', fontSize: 10.5, border: '1px solid #EEEEEE', borderRadius: 8 }} />
+                <input type="date" value={consFecha} onChange={e => setConsFecha(e.target.value)} style={{ padding: '7px 8px', fontSize: 10.5, border: '1px solid #EEEEEE', borderRadius: 8 }} />
+                <button onClick={handleAddConstraint} disabled={savingCons} style={{ padding: '7px 12px', fontSize: 10.5, fontWeight: 700, backgroundColor: '#FF0000', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer' }}><Plus style={{ width: 12, height: 12 }} /></button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === 'avance' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {pasos === null && <div style={{ fontSize: 11, color: '#757575' }}>Cargando pasos de avance…</div>}
+
+            {pasos !== null && pasos.length > 0 && (() => {
+              const totalPeso = pasos.reduce((s: number, p: any) => s + Number(p.peso ?? 0), 0);
+              const pesoChecked = pasos.filter((p: any) => checked.has(p.id)).reduce((s: number, p: any) => s + Number(p.peso ?? 0), 0);
+              const pctLive = totalPeso > 0 ? Math.round((pesoChecked / totalPeso) * 10000) / 100 : 0;
+              return (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#1A1A1A' }}>Pasos de avance ({pasos.length})</span>
+                    <span style={{ fontSize: 13, fontWeight: 900, color: pctLive >= 100 ? '#166534' : '#FF0000' }}>{pctLive}%</span>
+                  </div>
+                  <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {pasos.map((p: any) => (
+                      <label key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 10px', borderRadius: 8, border: checked.has(p.id) ? '1px solid #BBF7D0' : '1px solid #F3F4F6', backgroundColor: checked.has(p.id) ? '#F0FDF4' : 'white', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={checked.has(p.id)} style={{ accentColor: '#16A34A' }}
+                          onChange={() => setChecked(prev => { const n = new Set(prev); if (n.has(p.id)) { n.delete(p.id); } else { n.add(p.id); } return n; })} />
+                        <span style={{ flex: 1, fontSize: 10.5, color: '#33475B' }}>{p.descripcion ?? p.paso ?? p.subitem ?? p.item_code}</span>
+                        <span style={{ fontSize: 9.5, fontWeight: 700, color: '#757575' }}>{Number(p.peso ?? 0)}%</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
+
+            {pasos !== null && pasos.length === 0 && (
+              <div>
+                <div style={{ fontSize: 10.5, color: '#92400E', backgroundColor: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8, padding: '8px 12px', marginBottom: 10 }}>
+                  Esta disciplina aún no tiene pasos de ponderación cargados — registra el avance con % manual.
+                </div>
+                <label style={{ fontSize: 10, fontWeight: 900, color: '#757575', textTransform: 'uppercase' }}>% Avance físico
+                  <input type="number" min={0} max={100} value={manualPct} onChange={e => setManualPct(e.target.value)}
+                    style={{ display: 'block', width: 120, marginTop: 6, padding: '7px 10px', fontSize: 12, border: '1px solid #E5E7EB', borderRadius: 8, fontWeight: 400 }} />
+                </label>
+              </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', gap: 10 }}>
+              <label style={{ fontSize: 10, fontWeight: 900, color: '#757575', textTransform: 'uppercase' }}>HH reales acum.
+                <input type="number" min={0} value={hhReales} onChange={e => setHhReales(e.target.value)}
+                  style={{ display: 'block', width: '100%', marginTop: 6, padding: '7px 10px', fontSize: 11.5, border: '1px solid #E5E7EB', borderRadius: 8, fontWeight: 400 }} />
+              </label>
+              <label style={{ fontSize: 10, fontWeight: 900, color: '#757575', textTransform: 'uppercase' }}>Observación
+                <input type="text" value={observacion} onChange={e => setObservacion(e.target.value)} placeholder="Opcional"
+                  style={{ display: 'block', width: '100%', marginTop: 6, padding: '7px 10px', fontSize: 11.5, border: '1px solid #E5E7EB', borderRadius: 8, fontWeight: 400 }} />
+              </label>
+            </div>
+            <button onClick={handleReportarAvance} disabled={savingAvance}
+              style={{ alignSelf: 'flex-start', padding: '9px 18px', fontSize: 11, fontWeight: 800, backgroundColor: savingAvance ? '#FCA5A5' : '#FF0000', color: 'white', border: 'none', borderRadius: 10, cursor: savingAvance ? 'default' : 'pointer' }}>
+              {savingAvance ? 'Guardando…' : 'Registrar avance'}
+            </button>
+
+            {(data.progreso ?? []).length > 0 && (
+              <div style={{ marginTop: 4 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 900, color: '#757575', textTransform: 'uppercase', marginBottom: 6 }}>Historial</div>
+                {(data.progreso ?? []).map((r: any, i: number) => (
+                  <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'baseline', fontSize: 10.5, color: '#33475B', padding: '5px 0', borderBottom: '1px solid #F3F4F6' }}>
+                    <span style={{ fontWeight: 700, color: '#1A1A1A' }}>{fecha(r.fecha_reporte)}</span>
+                    <span style={{ fontWeight: 900, color: r.avance_fisico_pct >= 100 ? '#166534' : '#B45309' }}>{r.avance_fisico_pct}%</span>
+                    {r.hh_reales_acum != null && <span>HH: {num(r.hh_reales_acum)}</span>}
+                    <span style={{ color: '#9E9E9E', marginLeft: 'auto' }}>{r.reportado_por}</span>
+                    {r.observacion && <span style={{ color: '#757575' }}>· {r.observacion}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
