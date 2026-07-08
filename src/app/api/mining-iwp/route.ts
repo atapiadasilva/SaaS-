@@ -41,7 +41,11 @@ export async function GET(req: NextRequest) {
   if (iwpsRes.error) return NextResponse.json({ error: iwpsRes.error.message }, { status: 500 });
 
   const iwps = iwpsRes.data ?? [];
-  const constRes = await sb.from('mining_iwp_constraint').select('iwp_id, cleared').eq('project_id', pid).in('iwp_id', iwps.map((i: any) => i.iwp_id));
+  const ids = iwps.map((i: any) => i.iwp_id);
+  const [constRes, actAllRes] = await Promise.all([
+    sb.from('mining_iwp_constraint').select('iwp_id, cleared').eq('project_id', pid).in('iwp_id', ids),
+    sb.from('mining_iwp_actividad').select('iwp_id, programa_id').eq('project_id', pid).in('iwp_id', ids),
+  ]);
   const constByIwp = new Map<string, { total: number; despejados: number }>();
   for (const c of constRes.data ?? []) {
     const m = constByIwp.get(c.iwp_id) ?? { total: 0, despejados: 0 };
@@ -49,12 +53,19 @@ export async function GET(req: NextRequest) {
     if (c.cleared) m.despejados++;
     constByIwp.set(c.iwp_id, m);
   }
+  const actsByIwp = new Map<string, { programa_id: string }[]>();
+  for (const a of actAllRes.data ?? []) {
+    const arr = actsByIwp.get(a.iwp_id) ?? [];
+    arr.push({ programa_id: a.programa_id });
+    actsByIwp.set(a.iwp_id, arr);
+  }
 
   return NextResponse.json({
     cwp: cwpRes.data,
     iwps: iwps.map((i: any) => ({
       ...i,
       constraints: constByIwp.get(i.iwp_id) ?? { total: 0, despejados: 0 },
+      actividades: actsByIwp.get(i.iwp_id) ?? [],
     })),
   });
 }

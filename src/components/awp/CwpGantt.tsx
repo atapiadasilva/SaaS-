@@ -40,6 +40,9 @@ interface IwpRow {
   constraints: { total: number; despejados: number };
 }
 
+// Fila del gantt: actividad + a qué CWP pertenece (para color y chip en modo multi)
+interface GanttRow { task: MTask; cwp: MCwp; }
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 const toMs  = (s: string) => +new Date(s + 'T00:00:00');
@@ -118,27 +121,29 @@ function Tooltip({ info }: { info: TooltipInfo }) {
   );
 }
 
-// ─── Barra de actividad ───────────────────────────────────────────────────────
+// ─── Barra de actividad (fila compacta de una línea) ─────────────────────────
 function ActivityBar({
-  task, leftPct, widthPct, color, minWidthPx, relatedIwps, timelineStartMs, totalMs,
+  row, leftPct, widthPct, minWidthPx, relatedIwps, timelineStartMs, totalMs, multi,
 }: {
-  task: MTask;
+  row: GanttRow;
   leftPct: number;
   widthPct: number;
-  color: string;
   minWidthPx: number;
   relatedIwps: IwpRow[];
   timelineStartMs: number;
   totalMs: number;
+  multi: boolean;
 }) {
   const [tip, setTip] = useState<TooltipInfo | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const { task, cwp } = row;
 
   const showTip = (e: React.MouseEvent) => {
     setTip({
       x: e.clientX, y: e.clientY,
       title: task.n,
       rows: [
+        { l: 'CWP',     v: cwp.cwp },
         { l: 'Código',  v: task.code || '—' },
         { l: 'Inicio',  v: fd(task.s) },
         { l: 'Fin',     v: fd(task.e) },
@@ -149,45 +154,52 @@ function ActivityBar({
   };
 
   return (
-    <div className="mb-0.5">
-      {/* Fila de actividad */}
-      <div className="flex items-stretch" style={{ minHeight: 20 }}>
+    <div>
+      {/* Fila de actividad — una sola línea, compacta */}
+      <div className="flex items-stretch" style={{ minHeight: 16 }}>
         {/* Nombre */}
         <div
-          className="w-[38%] shrink-0 flex items-center gap-1.5 pr-3 cursor-pointer group"
+          className="w-[38%] shrink-0 flex items-center gap-1 pr-2 cursor-pointer group min-w-0"
           onClick={() => relatedIwps.length && setExpanded(v => !v)}
         >
           {relatedIwps.length > 0 ? (
             <span className="text-slate-400 group-hover:text-[#A00000] transition shrink-0">
-              {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              {expanded ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
             </span>
-          ) : <span className="w-3 shrink-0" />}
-          <div className="min-w-0">
-            <div className="text-[11px] text-[#33475B] truncate leading-tight" title={task.n}>{task.n}</div>
-            <div className="text-[9px] text-slate-400 font-mono leading-none mt-0.5">{task.code}</div>
-          </div>
+          ) : <span className="w-2.5 shrink-0" />}
+          {multi && (
+            <span
+              className="shrink-0 rounded-sm px-1 text-[8px] font-extrabold text-white leading-[13px]"
+              style={{ background: cwp.color }}
+              title={cwp.cwp}
+            >
+              {cwp.disc}
+            </span>
+          )}
+          <span className="text-[10px] text-[#33475B] truncate leading-tight" title={`${task.n} · ${task.code}`}>{task.n}</span>
+          <span className="text-[8.5px] text-slate-400 font-mono shrink-0 hidden xl:inline">{task.code.split('-').slice(-2).join('-')}</span>
         </div>
 
         {/* Timeline barra */}
-        <div className="flex-1 relative flex items-center py-0.5">
+        <div className="flex-1 relative flex items-center">
           <div
-            className="absolute inset-y-0.5 rounded-md cursor-pointer transition-opacity hover:opacity-85 flex items-center overflow-hidden"
+            className="absolute inset-y-[1.5px] rounded cursor-pointer transition-opacity hover:opacity-85 flex items-center overflow-hidden"
             style={{
               left: `${leftPct}%`,
               width: `max(${minWidthPx}px, ${widthPct}%)`,
-              backgroundColor: color,
+              backgroundColor: cwp.color,
             }}
             onMouseMove={showTip}
             onMouseLeave={() => setTip(null)}
           >
-            <span className="text-[9px] text-white font-bold whitespace-nowrap px-1.5 drop-shadow">
+            <span className="text-[8px] text-white font-bold whitespace-nowrap px-1 drop-shadow">
               {fn(task.hh)} HH
             </span>
           </div>
         </div>
 
-        {/* HH label derecha */}
-        <div className="w-16 shrink-0 flex items-center justify-end text-[10px] text-slate-400 font-mono pr-1">
+        {/* Fechas a la derecha */}
+        <div className="w-[100px] shrink-0 flex items-center justify-end text-[8.5px] text-slate-400 font-mono pr-1 whitespace-nowrap">
           {fd(task.s)} – {fd(task.e)}
         </div>
       </div>
@@ -230,19 +242,19 @@ function IwpBar({
   const blocked = iwp.constraints.total > 0 && iwp.constraints.despejados < iwp.constraints.total;
 
   return (
-    <div className="flex items-stretch mb-0.5 pl-6" style={{ minHeight: 17 }}>
-      <div className="w-[38%] shrink-0 flex items-center pr-3 pl-2 gap-1.5">
+    <div className="flex items-stretch pl-5" style={{ minHeight: 14 }}>
+      <div className="w-[38%] shrink-0 flex items-center pr-2 pl-2 gap-1">
         <Layers className="w-2.5 h-2.5 text-[#FF0000] shrink-0" />
-        <span className="text-[10px] text-slate-500 truncate font-mono">{iwp.iwp_id}</span>
+        <span className="text-[9px] text-slate-500 truncate font-mono">{iwp.iwp_id}</span>
         {blocked && (
           <span title="Tiene constraints activos">
             <AlertTriangle className="w-2.5 h-2.5 text-amber-400 shrink-0" />
           </span>
         )}
       </div>
-      <div className="flex-1 relative flex items-center py-0.5">
+      <div className="flex-1 relative flex items-center">
         <div
-          className={cn('absolute inset-y-0.5 rounded cursor-pointer opacity-80 hover:opacity-100 transition flex items-center overflow-hidden', colorCls)}
+          className={cn('absolute inset-y-[1.5px] rounded cursor-pointer opacity-80 hover:opacity-100 transition flex items-center overflow-hidden', colorCls)}
           style={{ left: `${leftPct}%`, width: `max(${minWidthPx * 0.6}px, ${widthPct}%)` }}
           onMouseMove={e => setTip({
             x: e.clientX, y: e.clientY,
@@ -261,25 +273,38 @@ function IwpBar({
           <span className="text-[8px] text-white font-bold px-1 whitespace-nowrap">{iwp.iwp_id}</span>
         </div>
       </div>
-      <div className="w-16 shrink-0" />
+      <div className="w-[100px] shrink-0" />
       {tip && <Tooltip info={tip} />}
     </div>
   );
 }
 
 // ─── Componente principal ─────────────────────────────────────────────────────
-export function CwpGantt({ c, projectId }: { c: MCwp; projectId: string }) {
+// c = CWP abierto en el panel; extras = otros CWP marcados con checkbox en la lista.
+// Con extras, el gantt combina las actividades de todos, coloreadas por CWP.
+export function CwpGantt({ c, extras = [], projectId }: { c: MCwp; extras?: MCwp[]; projectId: string }) {
   const [iwps, setIwps] = useState<IwpRow[] | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerW, setContainerW] = useState(600);
 
-  // Cargar IWPs del CWP
+  const cwps = [c, ...extras.filter(x => x.cwp !== c.cwp)];
+  const multi = cwps.length > 1;
+  const cwpsKey = cwps.map(x => x.cwp).join(',');
+
+  // Cargar IWPs de todos los CWP visibles
   useEffect(() => {
-    fetch(`/api/mining-iwp?project_id=${projectId}&cwp_id=${encodeURIComponent(c.cwp)}`)
-      .then(r => r.json())
-      .then(d => setIwps(d.rows ?? []))
-      .catch(() => setIwps([]));
-  }, [projectId, c.cwp]);
+    let alive = true;
+    setIwps(null);
+    Promise.all(
+      cwpsKey.split(',').map(id =>
+        fetch(`/api/mining-iwp?project_id=${projectId}&cwp_id=${encodeURIComponent(id)}`)
+          .then(r => r.json())
+          .then(d => (d.iwps ?? []) as IwpRow[])
+          .catch(() => [] as IwpRow[])
+      )
+    ).then(lists => { if (alive) setIwps(lists.flat()); });
+    return () => { alive = false; };
+  }, [projectId, cwpsKey]);
 
   // Medir ancho del contenedor para calcular el minWidthPx
   useEffect(() => {
@@ -289,22 +314,29 @@ export function CwpGantt({ c, projectId }: { c: MCwp; projectId: string }) {
     return () => ro.disconnect();
   }, []);
 
-  const p = c.prog;
-  if (!p) return (
+  const withProg = cwps.filter(x => x.prog);
+  if (!withProg.length) return (
     <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-[11.5px]">
-      ⚠ Este CWP no tiene actividades en el programa todavía.
+      ⚠ {multi ? 'Los CWP seleccionados no tienen' : 'Este CWP no tiene'} actividades en el programa todavía.
     </div>
   );
 
   // hh > 0 excluye filas "resumen" de P6 que tienen el mismo nombre que el CWP pero 0 HH
-  const tasks = p.tasks.filter(t => t.s && t.e && t.hh > 0).sort((a, b) => (a.s ?? '').localeCompare(b.s ?? ''));
-  if (!tasks.length) return (
+  const rows: GanttRow[] = withProg
+    .flatMap(x => x.prog!.tasks.filter(t => t.s && t.e && t.hh > 0).map(task => ({ task, cwp: x })))
+    .sort((a, b) => (a.task.s ?? '').localeCompare(b.task.s ?? ''));
+  if (!rows.length) return (
     <div className="text-slate-400 text-[12px] text-center py-6">Sin actividades con fechas asignadas.</div>
   );
 
+  const hhTotal = withProg.reduce((s, x) => s + x.prog!.hh, 0);
+  const actsTotal = withProg.reduce((s, x) => s + x.prog!.acts, 0);
+  const progStart = withProg.map(x => x.prog!.start).filter(Boolean).sort()[0] ?? null;
+  const progEnd = withProg.map(x => x.prog!.end).filter(Boolean).sort().slice(-1)[0] ?? null;
+
   // Calcular rango de tiempo
-  const allStartMs  = tasks.map(t => toMs(t.s!));
-  const allEndMs    = tasks.map(t => toMs(t.e!));
+  const allStartMs  = rows.map(r => toMs(r.task.s!));
+  const allEndMs    = rows.map(r => toMs(r.task.e!));
   // Incluir también IWPs en el rango si los hay
   const iwpStartMs  = (iwps ?? []).filter(i => i.fecha_inicio_plan).map(i => toMs(i.fecha_inicio_plan!));
   const iwpEndMs    = (iwps ?? []).filter(i => i.fecha_fin_plan).map(i => toMs(i.fecha_fin_plan!));
@@ -333,21 +365,35 @@ export function CwpGantt({ c, projectId }: { c: MCwp; projectId: string }) {
 
   const totalIwps = (iwps ?? []).length;
   const hhAsignadas = (iwps ?? []).reduce((s, i) => s + (i.hh_estimadas ?? 0), 0);
-  const hhPct = p.hh > 0 ? Math.round((hhAsignadas / p.hh) * 100) : 0;
+  const hhPct = hhTotal > 0 ? Math.round((hhAsignadas / hhTotal) * 100) : 0;
 
   return (
     <div className="space-y-3" ref={containerRef}>
       {/* KPIs */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <KpiCard icon={Clock}     label="HH Programa"  value={fn(p.hh) + ' HH'}  color="text-orange-600" />
-        <KpiCard icon={Calendar}  label="Duración"      value={fd(p.start) + ' → ' + fd(p.end)} color="text-slate-600" />
-        <KpiCard icon={Layers}    label={`${p.acts} actividades`} value={`${totalIwps} IWPs`} color="text-[#FF0000]" />
+        <KpiCard icon={Clock}     label={multi ? `HH Programa · ${withProg.length} CWP` : 'HH Programa'}  value={fn(hhTotal) + ' HH'}  color="text-orange-600" />
+        <KpiCard icon={Calendar}  label="Duración"      value={fd(progStart) + ' → ' + fd(progEnd)} color="text-slate-600" />
+        <KpiCard icon={Layers}    label={`${actsTotal} actividades`} value={`${totalIwps} IWPs`} color="text-[#FF0000]" />
         <KpiCard icon={Users}     label="HH en IWPs"
           value={hhPct + '%'}
-          sub={`${fn(hhAsignadas)} / ${fn(p.hh)} HH`}
+          sub={`${fn(hhAsignadas)} / ${fn(hhTotal)} HH`}
           color={hhPct >= 80 ? 'text-emerald-600' : hhPct >= 40 ? 'text-amber-600' : 'text-red-500'}
         />
       </div>
+
+      {/* Leyenda CWP (modo combinado) */}
+      {multi && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="text-[10px] text-slate-400 uppercase tracking-wider">CWP:</span>
+          {cwps.map(x => (
+            <span key={x.cwp} className="flex items-center gap-1.5 text-[10px] text-slate-600 font-mono">
+              <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: x.color }} />
+              {x.cwp}
+              <span className="text-slate-400 font-sans">{x.prog ? fn(x.prog.hh) + ' HH' : 'sin programa'}</span>
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Leyenda IWP status */}
       {totalIwps > 0 && (
@@ -367,21 +413,21 @@ export function CwpGantt({ c, projectId }: { c: MCwp; projectId: string }) {
 
         {/* Header meses */}
         <div className="flex border-b border-[#E2D3C4] bg-[#FDF7F2]">
-          <div className="w-[38%] shrink-0 px-3 py-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-r border-[#E2D3C4]">
+          <div className="w-[38%] shrink-0 px-3 py-1.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-r border-[#E2D3C4]">
             Actividad / IWP
           </div>
           <div className="flex-1 relative flex">
             {months.map((m, i) => (
               <div
                 key={i}
-                className="border-r border-[#E2D3C4] last:border-r-0 text-center py-2 text-[10px] font-bold text-[#5A3E28] overflow-hidden"
+                className="border-r border-[#E2D3C4] last:border-r-0 text-center py-1.5 text-[10px] font-bold text-[#5A3E28] overflow-hidden"
                 style={{ width: `${m.widthPct}%` }}
               >
                 <span className="truncate block px-1">{m.label}</span>
               </div>
             ))}
           </div>
-          <div className="w-16 shrink-0 border-l border-[#E2D3C4] py-2 text-center text-[10px] text-slate-400 font-bold">
+          <div className="w-[100px] shrink-0 border-l border-[#E2D3C4] py-1.5 text-center text-[10px] text-slate-400 font-bold">
             Fechas
           </div>
         </div>
@@ -389,7 +435,7 @@ export function CwpGantt({ c, projectId }: { c: MCwp; projectId: string }) {
         {/* Body */}
         <div className="relative">
           {/* Grid de semanas */}
-          <div className="absolute inset-0 pointer-events-none z-0" style={{ left: '38%', right: '4rem' }}>
+          <div className="absolute inset-0 pointer-events-none z-0" style={{ left: '38%', right: 100 }}>
             {weeks.map((pct, i) => (
               <div key={i} className="absolute top-0 bottom-0 border-l border-dashed border-[#E2D3C4]/60" style={{ left: `${pct}%` }} />
             ))}
@@ -408,22 +454,22 @@ export function CwpGantt({ c, projectId }: { c: MCwp; projectId: string }) {
           )}
 
           {/* Filas */}
-          <div className="relative z-1 divide-y divide-[#EFE3D5]/50 py-1">
-            {tasks.map((t) => {
-              const l = ((toMs(t.s!) - timelineStartMs) / totalMs) * 100;
-              const w = Math.max(0.5, ((toMs(t.e!) - toMs(t.s!)) / totalMs) * 100);
-              const related = iwpByProgramaId.get(t.id) ?? [];
+          <div className="relative z-1 divide-y divide-[#EFE3D5]/40 py-0.5">
+            {rows.map((r) => {
+              const l = ((toMs(r.task.s!) - timelineStartMs) / totalMs) * 100;
+              const w = Math.max(0.5, ((toMs(r.task.e!) - toMs(r.task.s!)) / totalMs) * 100);
+              const related = iwpByProgramaId.get(r.task.id) ?? [];
               return (
                 <ActivityBar
-                  key={t.id}
-                  task={t}
+                  key={`${r.cwp.cwp}:${r.task.id}`}
+                  row={r}
                   leftPct={l}
                   widthPct={w}
-                  color={c.color}
                   minWidthPx={minPx}
                   relatedIwps={related}
                   timelineStartMs={timelineStartMs}
                   totalMs={totalMs}
+                  multi={multi}
                 />
               );
             })}
@@ -431,10 +477,10 @@ export function CwpGantt({ c, projectId }: { c: MCwp; projectId: string }) {
         </div>
 
         {/* Footer summary */}
-        <div className="border-t border-[#E2D3C4] bg-[#FDF7F2] px-3 py-2 flex items-center gap-4 text-[10px] text-slate-500">
-          <span>{tasks.length} actividades</span>
+        <div className="border-t border-[#E2D3C4] bg-[#FDF7F2] px-3 py-1.5 flex items-center gap-4 text-[10px] text-slate-500">
+          <span>{rows.length} actividades{multi ? ` · ${withProg.length} CWP` : ''}</span>
           <span>·</span>
-          <span>{fn(p.hh)} HH totales en planner</span>
+          <span>{fn(hhTotal)} HH totales en planner</span>
           {totalIwps > 0 && (
             <>
               <span>·</span>
@@ -451,6 +497,7 @@ export function CwpGantt({ c, projectId }: { c: MCwp; projectId: string }) {
       <p className="text-[10px] text-slate-400">
         Haz click en el <ChevronRight className="inline w-3 h-3" /> de una actividad para ver los IWPs asociados.
         Crea IWPs en la pestaña <strong>IWP</strong>.
+        {!multi && ' Marca más CWP con el checkbox de la lista para combinarlos en esta vista.'}
       </p>
     </div>
   );
