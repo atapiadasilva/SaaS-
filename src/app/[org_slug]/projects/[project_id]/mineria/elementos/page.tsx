@@ -372,6 +372,14 @@ export default function ElementosEditorPage() {
   const [paintTarget, setPaintTarget] = useState<PaintTarget | null>(null);
   const [paintCount, setPaintCount] = useState(0);
 
+  // Asignación rápida de elementos SIN SP3D_MONIKER: click en el modelo → popup con CWP destino →
+  // guardado inmediato vía agregar-sin-moniker (sin armar pintura). Con "seguir asignando" activo,
+  // cada click siguiente asigna directo al mismo CWP — encadena elementos con un click cada uno.
+  const [quickAssign, setQuickAssign] = useState<{ items: { guid: string; name: string; dbId: number }[] } | null>(null);
+  const [quickCodigo, setQuickCodigo] = useState('');
+  const [quickSticky, setQuickSticky] = useState(false);
+  const [quickSaving, setQuickSaving] = useState(false);
+
   // dbIds que quedaron visibles tras el último showOnly (aislar/colorear) — permite que el toggle
   // Fantasma/Aislado reaplique de inmediato sobre lo que ya está en pantalla, en vez de quedar
   // "pendiente" hasta la próxima acción de aislar (eso era lo que obligaba a aislar varias veces).
@@ -885,6 +893,27 @@ export default function ElementosEditorPage() {
     }
   }, [paintTarget, project_id, loadBuckets, fetchRows, bumpRevisionRefresh]);
 
+  const assignSinMoniker = useCallback(async (items: { guid: string; name: string; dbId: number }[], codigo: string) => {
+    let ok = 0;
+    for (const it of items) {
+      try {
+        const res = await fetchWithRetry('/api/mining-elementos/agregar-sin-moniker', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id, nivel: 'cwp', codigo, guid: it.guid, name: it.name }),
+        });
+        await parseJsonOrThrow(res);
+        ok++;
+        viewerRef.current?.colorDbIds([it.dbId], 0.13, 0.59, 0.95, 1);
+      } catch { /* sigue con el resto aunque uno falle */ }
+    }
+    setToast(ok
+      ? `✓ ${ok} elemento(s) sin SP3D_MONIKER agregado(s) a ${codigo} — quedan para dar de alta en SmartPlant 3D (ver "Exportar cambios").`
+      : 'No se pudo agregar — revisa que el CWP exista.');
+    if (ok) { loadBuckets(); fetchRows(); bumpRevisionRefresh(); }
+    return ok;
+  }, [project_id, loadBuckets, fetchRows, bumpRevisionRefresh]);
+
   const onViewerSelectionChange = useCallback(async (dbIds: number[]) => {
     if (!viewerRef.current || !dbIds.length) return;
 
@@ -906,7 +935,22 @@ export default function ElementosEditorPage() {
       const props = await viewerRef.current.loadBulkElementProps(dbIds, [MONIKER_PROP]);
       const monikers = props.map(p => p.props[MONIKER_PROP]).filter(Boolean);
       if (!monikers.length) {
-        setToast('Este elemento no tiene SP3D_MONIKER — no se puede ubicar en la tabla. Si quieres clasificarlo igual, arma pintura (🖌️) en un CWA/CV/CWP y haz click en él de nuevo: quedará marcado para dar de alta en SmartPlant 3D.');
+        // Sin SP3D_MONIKER: asignación rápida por GUID del modelo, sin armar pintura.
+        const extMap = await viewerRef.current.getExternalIdMapping();
+        const dbIdToGuid = new Map<number, string>();
+        for (const [ext, id] of Object.entries(extMap)) dbIdToGuid.set(id as number, ext);
+        const items = props
+          .filter(p => !p.props[MONIKER_PROP] && dbIdToGuid.get(p.dbId))
+          .map(p => ({ guid: dbIdToGuid.get(p.dbId)!, name: p.name, dbId: p.dbId }));
+        if (!items.length) {
+          setToast('Este elemento no tiene SP3D_MONIKER ni GUID en el modelo — no se puede clasificar.');
+          return;
+        }
+        if (quickSticky && quickCodigo) {
+          await assignSinMoniker(items, quickCodigo);
+          return;
+        }
+        setQuickAssign({ items });
         return;
       }
       setExactMonikers(monikers);
@@ -914,7 +958,7 @@ export default function ElementosEditorPage() {
     } finally {
       setViewerStatus(null);
     }
-  }, [paintTarget]);
+  }, [paintTarget, quickSticky, quickCodigo, assignSinMoniker]);
 
   // Selecciona una rama del árbol nativo del modelo, la expande a dbIds HOJA (nunca el dbId de
   // ensamblaje crudo) y la aísla/colorea de previsualización — TODAVÍA no asigna nada en la BD.
@@ -1482,6 +1526,49 @@ export default function ElementosEditorPage() {
 
       {toast && (
         <div className="fixed bottom-5 right-5 bg-[#08203F] text-white text-[11.5px] font-semibold px-4 py-2.5 rounded-lg shadow-xl z-50">{toast}</div>
+      )}
+
+      {/* Asignación rápida de elementos sin SP3D_MONIKER */}
+      {quickAssign && (
+        <div className="fixed bottom-16 right-5 z-50 w-[350px] rounded-2xl border-2 border-slate-200 bg-white shadow-2xl p-4">
+          <div className="text-[11.5px] font-black text-[#1A1A1A]">Elemento sin SP3D_MONIKER</div>
+          <div className="text-[10px] text-slate-500 mb-2.5 truncate" title={quickAssign.items.map(i => i.name).join(', ')}>
+            {quickAssign.items.length === 1 ? (quickAssign.items[0].name || 'sin nombre') : `${quickAssign.items.length} elementos seleccionados`}
+            {' '}— se agrega por GUID del modelo y queda para dar de alta en SmartPlant 3D.
+          </div>
+          <input
+            list="quick-cwp-list" value={quickCodigo} onChange={e => setQuickCodigo(e.target.value)}
+            placeholder="CWP destino… (ej: 322101.C001)" autoFocus
+            className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-[11px] font-mono mb-2 outline-none focus:border-red-400"
+          />
+          <datalist id="quick-cwp-list">
+            {catalog.map(c => <option key={c.cwp_id} value={c.cwp_id}>{c.cwp_nombre}</option>)}
+          </datalist>
+          <label className="flex items-center gap-1.5 text-[10px] text-slate-500 mb-3 cursor-pointer">
+            <input type="checkbox" checked={quickSticky} onChange={e => setQuickSticky(e.target.checked)} className="accent-[#FF0000]" />
+            Seguir asignando a este CWP con cada click en el modelo
+          </label>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setQuickAssign(null)} className="px-3 py-1.5 text-[10.5px] font-bold rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">Cancelar</button>
+            <button
+              disabled={quickSaving || !catalog.some(c => c.cwp_id === quickCodigo)}
+              onClick={async () => {
+                setQuickSaving(true);
+                try { await assignSinMoniker(quickAssign.items, quickCodigo); setQuickAssign(null); }
+                finally { setQuickSaving(false); }
+              }}
+              className="px-3.5 py-1.5 text-[10.5px] font-black rounded-lg bg-[#FF0000] text-white disabled:opacity-40 hover:bg-[#D00000]"
+            >
+              {quickSaving ? 'Guardando…' : 'Asignar al CWP'}
+            </button>
+          </div>
+        </div>
+      )}
+      {quickSticky && quickCodigo && !quickAssign && (
+        <div className="fixed bottom-16 right-5 z-50 flex items-center gap-2 rounded-full bg-[#0a1628] text-white pl-4 pr-2 py-2 shadow-2xl text-[10.5px]">
+          <span>Asignación rápida sin-moniker → <b className="font-mono">{quickCodigo}</b> · haz click en el modelo</span>
+          <button onClick={() => setQuickSticky(false)} className="rounded-full bg-white/15 hover:bg-white/25 px-2.5 py-1 font-bold">Detener</button>
+        </div>
       )}
 
       {showPicker && (
