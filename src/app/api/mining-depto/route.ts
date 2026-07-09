@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { listLocalDocNums } from '@/lib/aconex-local';
 
 // Dashboard por departamento (Calidad, Medio Ambiente, SSO, Equipos, RRHH).
 // GET ?project_id=&depto= → { kpis, docs, consideraciones }
@@ -47,7 +48,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: (docsRes.error ?? consRes.error).message }, { status: 500 });
   }
 
-  const docs = (docsRes.data ?? []).filter((d: any) => perteneceDepto(depto, d));
+  const localDocs = listLocalDocNums();
+  const docs = (docsRes.data ?? [])
+    .filter((d: any) => perteneceDepto(depto, d))
+    .map((d: any) => ({ ...d, tieneArchivo: !!d.n_cmdic && localDocs.has(d.n_cmdic) }));
   const cons = consRes.data ?? [];
 
   const esAprobado = (e: string | null) => !!e && /aprobado/i.test(e) && !/para aprob/i.test(e);

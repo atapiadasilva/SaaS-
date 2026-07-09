@@ -24,7 +24,10 @@ interface Doc {
   id: string; n_cmdic: string; titulo: string | null; tipo_doc: string | null; rev: string | null;
   estado_aconex: string | null; fecha_modificacion: string | null; funcion: string | null;
   categoria: string | null; cwa_id: string | null; cwp_id_exacto: string | null; cwp_sugerido: string | null; ext: string | null;
+  tieneArchivo?: boolean;
 }
+
+const docFileUrl = (codigo: string) => `/api/mining-planos/file?codigo_documento=${encodeURIComponent(codigo)}`;
 
 const fecha = (s: string | null) => s ? new Date(s).toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—';
 
@@ -135,8 +138,10 @@ export default function DeptoDashboard({ projectId, depto, titulo, tituloAcento,
                   {c.n_cmdic && <span style={{ fontFamily: 'monospace' }}>{c.n_cmdic}</span>}
                   {c.responsable && <span>{c.responsable}</span>}
                   {Array.isArray(c.metadata?.documentos) && c.metadata.documentos.map((doc: any, di: number) => (
-                    <a key={di} href={doc.hipervinculo} target="_blank" rel="noreferrer" title={doc.archivo}
-                      onClick={e => { if (doc.hipervinculo?.startsWith('file:')) { e.preventDefault(); navigator.clipboard?.writeText(decodeURIComponent(doc.hipervinculo.replace('file:///', '')).replace(/\//g, '\\')); (e.currentTarget as HTMLElement).textContent = '✓ ruta copiada'; } }}
+                    <a key={di}
+                      href={doc.n_cmdic ? docFileUrl(doc.n_cmdic) : doc.hipervinculo}
+                      target="_blank" rel="noreferrer" title={doc.archivo ?? doc.n_cmdic}
+                      onClick={e => { const href = (e.currentTarget as HTMLAnchorElement).href; if (href.startsWith('file:')) { e.preventDefault(); navigator.clipboard?.writeText(decodeURIComponent(href.replace('file:///', '')).replace(/\//g, '\\')); (e.currentTarget as HTMLElement).textContent = '✓ ruta copiada'; } }}
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 9, fontWeight: 700, padding: '2px 8px', borderRadius: 999, backgroundColor: '#F5F5F5', color: '#33475B', border: '1px solid #E0E0E0', textDecoration: 'none', cursor: 'pointer' }}>
                       📄 {doc.n_cmdic ?? doc.archivo ?? 'documento'}
                     </a>
@@ -168,8 +173,22 @@ export default function DeptoDashboard({ projectId, depto, titulo, tituloAcento,
                 const cwp = d.cwp_id_exacto ?? d.cwp_sugerido;
                 return (
                   <tr key={d.id} style={{ borderBottom: '1px solid #F5F5F5' }}>
-                    <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 10, whiteSpace: 'nowrap' }}>{d.n_cmdic}</td>
-                    <td style={{ padding: '7px 10px', maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.titulo ?? ''}>{d.titulo}</td>
+                    <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 10, whiteSpace: 'nowrap' }}>
+                      {d.tieneArchivo ? (
+                        <a href={docFileUrl(d.n_cmdic)} target="_blank" rel="noreferrer" title="Abrir PDF local"
+                          style={{ color: '#A00000', fontWeight: 700, textDecoration: 'none', borderBottom: '1px dotted #A00000' }}>
+                          📄 {d.n_cmdic}
+                        </a>
+                      ) : d.n_cmdic}
+                    </td>
+                    <td style={{ padding: '7px 10px', maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.titulo ?? ''}>
+                      {d.tieneArchivo && d.titulo ? (
+                        <a href={docFileUrl(d.n_cmdic)} target="_blank" rel="noreferrer" title={`${d.titulo} — abrir PDF local`}
+                          style={{ color: '#1A1A1A', textDecoration: 'none' }}>
+                          {d.titulo}
+                        </a>
+                      ) : d.titulo}
+                    </td>
                     <td style={{ padding: '7px 10px', fontSize: 10, color: '#757575', whiteSpace: 'nowrap' }}>{d.tipo_doc}</td>
                     <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 10 }}>{d.rev ?? '—'}</td>
                     <td style={{ padding: '7px 10px' }}><span style={{ fontSize: 9, fontWeight: 700, padding: '2px 10px', borderRadius: 999, backgroundColor: eb.bg, color: eb.fg, whiteSpace: 'nowrap' }}>{eb.label}</span></td>
