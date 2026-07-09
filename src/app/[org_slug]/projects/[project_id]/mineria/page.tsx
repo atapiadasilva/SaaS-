@@ -427,7 +427,7 @@ export default function MineriaPage() {
               tab={tab} setTab={setTab} projectId={project_id}
               onIsolateMonikers={filterByMonikers}
               iwpViewerBridge={iwpViewerBridge}
-              extraCwps={data.cwp.filter(x => checked.has(x.cwp) && x.cwp !== selected.cwp)}
+              ganttCwps={checked.size > 0 ? data.cwp.filter(x => checked.has(x.cwp)) : [selected]}
             />
           ) : (
             <div className="p-10 text-center text-slate-400 italic">Selecciona un CWP de la lista.</div>
@@ -606,12 +606,14 @@ function SidebarList({ visible, cwa, selectedCwp, checked, onSelect, onToggleChe
   return <>{rows}</>;
 }
 
-function DetailPanel({ c, cwaName, tab, setTab, projectId, onIsolateMonikers, iwpViewerBridge, extraCwps = [] }: {
+function DetailPanel({ c, cwaName, tab, setTab, projectId, onIsolateMonikers, iwpViewerBridge, ganttCwps }: {
   c: MCwp; cwaName: string; tab: DetailTab; setTab: (t: DetailTab) => void; projectId: string;
   onIsolateMonikers: (monikers: string[]) => void;
   iwpViewerBridge?: IwpViewerBridge;
-  extraCwps?: MCwp[];
+  // CWP que grafica la pestaña Programa: los marcados con checkbox, o el abierto si no hay checks
+  ganttCwps?: MCwp[];
 }) {
+  const gantt = ganttCwps?.length ? ganttCwps : [c];
   return (
     <div>
       <div className="bg-white px-6 py-4 border-b border-slate-200 sticky top-0 z-10">
@@ -647,7 +649,7 @@ function DetailPanel({ c, cwaName, tab, setTab, projectId, onIsolateMonikers, iw
             {t.label}
             {t.id === 'itemizado' && <Badge n={c.items.length} active={tab === t.id} />}
             {t.id === 'planos' && <Badge n={c.planos.length} active={tab === t.id} />}
-            {t.id === 'programa' && <Badge n={(c.prog?.acts ?? 0) + extraCwps.reduce((s, x) => s + (x.prog?.acts ?? 0), 0)} active={tab === t.id} />}
+            {t.id === 'programa' && <Badge n={gantt.reduce((s, x) => s + (x.prog?.acts ?? 0), 0)} active={tab === t.id} />}
           </button>
         ))}
       </div>
@@ -655,7 +657,7 @@ function DetailPanel({ c, cwaName, tab, setTab, projectId, onIsolateMonikers, iw
         {tab === 'resumen' && <ResumenTab c={c} projectId={projectId} />}
         {tab === 'itemizado' && <ItemizadoTab c={c} projectId={projectId} onIsolateMonikers={onIsolateMonikers} />}
         {tab === 'planos' && <PlanosTab c={c} />}
-        {tab === 'programa' && <CwpGantt c={c} extras={extraCwps} projectId={projectId} />}
+        {tab === 'programa' && <CwpGantt cwps={gantt} projectId={projectId} />}
         {tab === 'iwp' && <IwpManager projectId={projectId} cwp={{ cwp: c.cwp, disc: c.disc, nombre: c.nombre, prog: c.prog }} viewer={iwpViewerBridge} />}
       </div>
     </div>

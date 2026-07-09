@@ -283,19 +283,19 @@ function IwpBar({
 }
 
 // ─── Componente principal ─────────────────────────────────────────────────────
-// c = CWP abierto en el panel; extras = otros CWP marcados con checkbox en la lista.
-// Con extras, el gantt combina las actividades de todos, coloreadas por CWP.
-export function CwpGantt({ c, extras = [], projectId }: { c: MCwp; extras?: MCwp[]; projectId: string }) {
+// cwps = los CWP a graficar: si hay checkboxes marcados en la lista, SOLO esos;
+// si no hay ninguno marcado, el CWP abierto en el panel. Las barras se colorean por CWP.
+export function CwpGantt({ cwps, projectId }: { cwps: MCwp[]; projectId: string }) {
   const [iwps, setIwps] = useState<IwpRow[] | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerW, setContainerW] = useState(600);
 
-  const cwps = [c, ...extras.filter(x => x.cwp !== c.cwp)];
   const multi = cwps.length > 1;
   const cwpsKey = cwps.map(x => x.cwp).join(',');
 
   // Cargar IWPs de todos los CWP visibles
   useEffect(() => {
+    if (!cwpsKey) return;
     let alive = true;
     setIwps(null);
     Promise.all(
@@ -316,6 +316,10 @@ export function CwpGantt({ c, extras = [], projectId }: { c: MCwp; extras?: MCwp
     ro.observe(containerRef.current);
     return () => ro.disconnect();
   }, []);
+
+  if (!cwps.length) return (
+    <div className="text-slate-400 text-[12px] text-center py-6">Marca al menos un CWP con el checkbox de la lista.</div>
+  );
 
   const withProg = cwps.filter(x => x.prog);
   if (!withProg.length) return (
