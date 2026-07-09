@@ -21,7 +21,7 @@ interface Consideracion {
   fecha_limite: string | null; responsable: string | null; metadata: any;
 }
 interface Doc {
-  id: string; n_cmdic: string; titulo: string | null; tipo_doc: string | null; rev: string | null;
+  id: string; n_cmdic: string; n_interno: string | null; titulo: string | null; tipo_doc: string | null; rev: string | null;
   estado_aconex: string | null; fecha_modificacion: string | null; funcion: string | null;
   categoria: string | null; cwa_id: string | null; cwp_id_exacto: string | null; cwp_sugerido: string | null; ext: string | null;
   tieneArchivo?: boolean;
@@ -54,7 +54,7 @@ export default function DeptoDashboard({ projectId, depto, titulo, tituloAcento,
     if (!data) return [];
     const q = search.trim().toUpperCase();
     if (!q) return data.docs;
-    return data.docs.filter(d => [d.n_cmdic, d.titulo, d.tipo_doc, d.estado_aconex, d.cwp_id_exacto, d.cwp_sugerido].some(v => v && String(v).toUpperCase().includes(q)));
+    return data.docs.filter(d => [d.n_cmdic, d.n_interno, d.titulo, d.tipo_doc, d.estado_aconex, d.cwp_id_exacto, d.cwp_sugerido].some(v => v && String(v).toUpperCase().includes(q)));
   }, [data, search]);
 
   const consFiltradas = useMemo(() => {
@@ -159,14 +159,14 @@ export default function DeptoDashboard({ projectId, depto, titulo, tituloAcento,
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
             <thead>
               <tr style={{ backgroundColor: '#FAFAFA', borderBottom: '2px solid #FF0000' }}>
-                {['N° CMDIC', 'Título', 'Tipo', 'Rev', 'Estado Aconex', 'CWP', 'Modificado'].map(h => (
+                {['N° CMDIC', 'N° Interno', 'Título', 'Tipo', 'Rev', 'Estado Aconex', 'CWP', 'Modificado'].map(h => (
                   <th key={h} style={{ padding: '9px 10px', textAlign: 'left', fontWeight: 900, fontSize: 9.5, color: '#33475B', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {docsFiltrados.length === 0 && (
-                <tr><td colSpan={7} style={{ padding: 48, textAlign: 'center', color: '#9E9E9E', fontStyle: 'italic' }}>Sin documentos clasificados en este departamento.</td></tr>
+                <tr><td colSpan={8} style={{ padding: 48, textAlign: 'center', color: '#9E9E9E', fontStyle: 'italic' }}>Sin documentos clasificados en este departamento.</td></tr>
               )}
               {docsFiltrados.map(d => {
                 const eb = estadoBadge(d.estado_aconex);
@@ -181,6 +181,7 @@ export default function DeptoDashboard({ projectId, depto, titulo, tituloAcento,
                         </a>
                       ) : d.n_cmdic}
                     </td>
+                    <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 10, whiteSpace: 'nowrap', color: d.n_interno ? '#33475B' : '#CCCCCC' }}>{d.n_interno ?? '—'}</td>
                     <td style={{ padding: '7px 10px', maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={d.titulo ?? ''}>
                       {d.tieneArchivo && d.titulo ? (
                         <a href={docFileUrl(d.n_cmdic)} target="_blank" rel="noreferrer" title={`${d.titulo} — abrir PDF local`}

@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
 
   const [docsRes, consRes] = await Promise.all([
     sb.from('mining_doc_aconex')
-      .select('id, n_cmdic, titulo, tipo_doc, rev, estado_aconex, fecha_modificacion, funcion, categoria, cwa_id, cwp_id_exacto, cwp_sugerido, ext')
+      .select('id, n_cmdic, n_interno, titulo, tipo_doc, rev, estado_aconex, fecha_modificacion, funcion, categoria, cwa_id, cwp_id_exacto, cwp_sugerido, ext')
       .eq('project_id', pid)
       .order('fecha_modificacion', { ascending: false, nullsFirst: false }),
     sb.from('mining_consideraciones')
