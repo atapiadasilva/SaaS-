@@ -46,19 +46,6 @@ const fn  = (v: number) => Math.round(v).toLocaleString('es-CL');
 const fq  = (v: number) => v % 1 === 0 ? v.toLocaleString('es-CL') : v.toLocaleString('es-CL', { maximumFractionDigits: 1 });
 const fd  = (s: string | null) => s ? s.slice(8, 10) + '-' + MESES[+s.slice(5, 7) - 1] + '-' + s.slice(2, 4) : '—';
 
-function extractTags(c: MCwp): string[] {
-  const txt = (c.alcance || '') + ' ' + c.items.map(i => (i.de || '') + ' ' + (i.ob || '')).join(' ');
-  const re = /\b(\d{3})-([A-Z]{1,3})-(\d{3,4})((?:\/\d{3,4})*)\b/g;
-  const set = new Set<string>();
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(txt))) {
-    const base = m[1] + '-' + m[2] + '-';
-    set.add(base + m[3]);
-    if (m[4]) m[4].split('/').filter(Boolean).forEach(n => set.add(base + n));
-  }
-  return [...set].sort();
-}
-
 export default function MineriaPage() {
   const params = useParams();
   const project_id = params.project_id as string;
@@ -692,34 +679,17 @@ interface CwpResumen {
 }
 
 function ResumenTab({ c, projectId }: { c: MCwp; projectId: string }) {
-  const tags = useMemo(() => extractTags(c), [c]);
-  const [modelTags, setModelTags] = useState<string[] | null>(null);
-  const [modelTagsTotal, setModelTagsTotal] = useState(0);
   const [ctx, setCtx] = useState<CwpResumen | null>(null);
 
   useEffect(() => {
     let active = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setModelTags(null); setCtx(null);
-    fetch(`/api/mining-elementos/tags?project_id=${projectId}&cwp=${encodeURIComponent(c.cwp)}`)
-      .then(r => r.json())
-      .then(d => {
-        if (!active) return;
-        setModelTags(d.tags ?? []);
-        setModelTagsTotal(d.total ?? 0);
-      });
+    setCtx(null);
     fetch(`/api/mining-cwp-resumen?project_id=${projectId}&cwp_id=${encodeURIComponent(c.cwp)}`)
       .then(r => r.json())
       .then(d => { if (active && !d.error) setCtx(d); });
     return () => { active = false; };
   }, [c.cwp, projectId]);
-
-  const cc = useMemo(() => {
-    const m: Record<string, number> = {};
-    c.items.forEach(i => { const k = i.ob ?? 'Otros'; m[k] = (m[k] ?? 0) + i.tot; });
-    return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [c]);
-  const tot = cc.reduce((s, x) => s + x[1], 0) || 1;
 
   // ── Narrativa ejecutiva generada desde la red de datos ──
   const hoy = new Date().toISOString().slice(0, 10);
@@ -864,52 +834,6 @@ function ResumenTab({ c, projectId }: { c: MCwp; projectId: string }) {
         </div>
       )}
 
-      {/* ── Tags y composición ── */}
-      <div className="flex gap-6 flex-wrap">
-        <div className="flex-1 min-w-[300px] space-y-4">
-          <div>
-            <div className="text-[12px] font-bold text-[#1A1A1A] mb-2">🏷️ Equipos / Tags del paquete</div>
-            <div className="flex flex-wrap gap-1.5">
-              {tags.length ? tags.map(t => (
-                <span key={t} className="font-mono text-[11px] font-bold bg-red-50 text-[#A00000] border border-red-200 rounded-md px-2 py-0.5">{t}</span>
-              )) : <span className="text-[10.5px] text-slate-400 italic">Sin tags de equipos detectados en el alcance.</span>}
-            </div>
-          </div>
-          <div>
-            <div className="text-[12px] font-bold text-[#1A1A1A] mb-2">
-              🧩 Tags de elementos del modelo {modelTagsTotal > 0 && `(${fn(modelTagsTotal)})`}
-            </div>
-            {modelTags === null ? (
-              <span className="text-[10.5px] text-slate-400 italic">Cargando…</span>
-            ) : modelTags.length ? (
-              <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
-                {modelTags.map(t => (
-                  <span key={t} className="font-mono text-[10.5px] font-semibold bg-slate-50 text-slate-600 border border-slate-200 rounded-md px-1.5 py-0.5">{t}</span>
-                ))}
-              </div>
-            ) : (
-              <span className="text-[10.5px] text-slate-400 italic">Este CWP todavía no tiene elementos vinculados en el modelo.</span>
-            )}
-          </div>
-        </div>
-        {cc.length > 0 && (
-          <div className="flex-1 min-w-[300px]">
-            <div className="text-[12px] font-bold text-[#1A1A1A] mb-2">📊 Composición por obra/ítem (costo de oferta)</div>
-            <div className="flex h-6 rounded-md overflow-hidden shadow-sm">
-              {cc.map(([k, v], i) => (
-                <div key={k} title={`${k}: ${fmm(v)}`} style={{ width: `${v / tot * 100}%`, background: PAL[i % PAL.length] }} />
-              ))}
-            </div>
-            <div className="flex flex-wrap gap-3 mt-2">
-              {cc.slice(0, 8).map(([k, v], i) => (
-                <span key={k} className="text-[10.5px] text-slate-600 flex items-center gap-1.5">
-                  <i className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: PAL[i % PAL.length] }} /> {k} · {fmm(v)}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
