@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# HILO Digital — Plataforma AWP Minería (Puerto Collahuasi)
 
-## Getting Started
+Plataforma de gestión Advanced Work Packaging para el proyecto EIMI00417 (PG210 Área Puerto, CMDIC):
+explorador CWP con visor 3D (Autodesk Forge), itemizado/MC, programa P333, módulo IWP, planos y
+documentos Aconex con apertura local, estado de pago, conciliación y dashboards por departamento.
 
-First, run the development server:
+Stack: **Next.js 16 + React 19 + Supabase** (BD en la nube compartida — todos los PC apuntan a la misma base).
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Cómo correrlo en un PC nuevo
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+1. **Requisitos**: [Node.js 20+](https://nodejs.org) y git.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+2. **Clonar e instalar**:
+   ```bash
+   git clone https://github.com/atapiadasilva/SaaS-.git
+   cd SaaS-
+   npm install
+   ```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+3. **Variables de entorno**: copiar `.env.example` como `.env.local` y completar los valores
+   (pedirlos al dueño del proyecto por canal privado — **nunca están en GitHub**).
+   Lo mínimo para partir es el bloque de Supabase.
 
-## Learn More
+4. **Arrancar**:
+   ```bash
+   npm run dev
+   ```
+   Abrir http://localhost:3000
 
-To learn more about Next.js, take a look at the following resources:
+5. **Acceso**: registrarse en la pantalla de login y pedir al administrador que te **invite a la
+   organización** (menú Miembros). Sin membresía, la app carga pero no muestra datos (RLS).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Notas
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **PDFs de planos/documentos**: los hipervínculos abren archivos locales de las carpetas definidas
+  en `ACONEX_DOCS_DIR` (varias rutas separadas por `;`). Sin esas carpetas la app funciona igual,
+  solo que sin el link de apertura.
+- **Visor 3D**: requiere las credenciales de Autodesk APS en `.env.local`.
+- **Bot WhatsApp**: opcional; requiere el bridge corriendo y la API key de Gemini.
 
-## Deploy on Vercel
+## Comandos útiles
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Comando | Qué hace |
+|---|---|
+| `npm run dev` | Servidor de desarrollo (limpia caché problemática de Windows antes de partir) |
+| `npm run typecheck` | Chequeo TypeScript completo (`tsc --noEmit`) |
+| `npm run smoke` | Smoke test de 11 rutas contra el servidor corriendo |
+| `npm run build` | Build de producción |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Scripts de datos (`scripts/`)
+
+Regla de oro: ninguna tabla se edita a mano — todo entra por fuente versionada y los cruces se recalculan.
+
+- `import-planos-aconex.mjs` — carga paquetización Aconex→CWP a `mining_planos` (con dedupe)
+- `check-docs-faltantes.mjs` — cruza documentos de la BD vs PDFs locales y lista faltantes
+- `extraer-codigos-eim.py` — extrae el código interno EIM de las carátulas de los PDF
+- Se corren con: `node --env-file=.env.local scripts/<script>.mjs`
