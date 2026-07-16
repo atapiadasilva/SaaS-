@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
 
   const [itemRes, pondRes, avanceRes] = await Promise.all([
     sb.from('mining_itemizado')
-      .select('id, item, n_partida, partida_bmp, area, cwa_id, commodity, descripcion, obra, unidad, cantidad, hh_item, pu_clp, p_total_clp, cwp_id')
+      .select('id, item, n_partida, partida_bmp, partida_mp, area, cwa_id, commodity, descripcion, obra, unidad, cantidad, hh_item, pu_clp, p_total_clp, cwp_id')
       .eq('project_id', pid).order('item'),
     sb.from('mining_ponderaciones')
       .select('id, commodity, item_code, item_nombre, subitem_code, subitem_nombre, tipo, hito, peso, orden')

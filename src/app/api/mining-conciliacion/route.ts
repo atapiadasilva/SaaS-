@@ -11,7 +11,7 @@ export type RelId = 'eco2_cwp' | 'item_bmp' | 'prog_cwp' | 'aconex_cwp';
 
 const REL_META: Record<RelId, { label: string; desc: string; origen: string; destino: string }> = {
   eco2_cwp:   { label: 'ECO-2 → Diccionario AWP',  desc: 'Cada ítem de cobro del Itemizado debe estar asignado a su paquete constructivo exacto en el Diccionario AWP (69 CWP, 7 CWA).', origen: 'mining_itemizado.cwp_id', destino: 'mining_cwp.cwp_id' },
-  item_bmp:   { label: 'ECO-2 → Bases de M&P',      desc: 'Cada ítem del Itemizado debe calzar con una partida de las Bases de Medición y Pago (ponderaciones de avance físico y financiero).', origen: 'mining_itemizado.partida_bmp', destino: 'mining_ponderaciones.partida' },
+  item_bmp:   { label: 'ECO-2 → Bases de M&P',      desc: 'Cada ítem del Itemizado debe calzar con una partida de las Bases de Medición y Pago (ponderaciones de avance físico y financiero).', origen: 'mining_itemizado.partida_mp', destino: 'mining_ponderaciones.partida' },
   prog_cwp:   { label: 'Programa → CWP',            desc: 'Cada actividad P333 vigente debe pertenecer a un CWP para poder abrirla en IWP y valorizarla.', origen: 'mining_programa.cwp_id', destino: 'mining_cwp.cwp_id' },
   aconex_cwp: { label: 'Aconex → CWP',              desc: 'Cada documento descargado de Aconex debe quedar asignado a su CWP exacto (hay sugerencia por área/disciplina).', origen: 'mining_doc_aconex.cwp_id_exacto', destino: 'mining_cwp.cwp_id' },
 };
@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
 
   if (!rel) {
     const [eco2Res, progRes, aconexRes, pondRes, cwaRes, cvRes, cwpRes, hitosRes, planosRes] = await Promise.all([
-      sb.from('mining_itemizado').select('item, cwp_id, partida_bmp').eq('project_id', pid),
+      sb.from('mining_itemizado').select('item, cwp_id, partida_mp').eq('project_id', pid),
       sb.from('mining_programa').select('id, cwp_id, tipo').eq('project_id', pid).eq('fuente', 'P333'),
       sb.from('mining_doc_aconex').select('id, cwp_id_exacto').eq('project_id', pid),
       sb.from('mining_ponderaciones').select('item_code, subitem_code').eq('project_id', pid),
@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
     const bmpCodes = new Set((pondRes.data ?? []).map((p: any) => p.subitem_code ?? p.item_code));
 
     const eco2Ok = eco2.filter((e: any) => e.cwp_id).length;
-    const bmpOk = eco2.filter((e: any) => e.partida_bmp && bmpCodes.has(e.partida_bmp)).length;
+    const bmpOk = eco2.filter((e: any) => e.partida_mp && bmpCodes.has(e.partida_mp)).length;
     const progOk = prog.filter((p: any) => p.cwp_id).length;
     const aconexOk = aconex.filter((d: any) => d.cwp_id_exacto).length;
     const planos = planosRes.data ?? [];
@@ -118,7 +118,7 @@ export async function GET(req: NextRequest) {
     try {
       const [eco2Res, cwpRes, partidas] = await Promise.all([
         sb.from('mining_itemizado')
-          .select('id, item, n_partida, partida_bmp, area, cwa_id, wbs, descripcion_codigo, commodity, descripcion, obra, unidad, cantidad, hh_unidad, hh_item, pu_clp, p_total_clp, tipo_partida, cwp_id')
+          .select('id, item, n_partida, partida_bmp, partida_mp, area, cwa_id, wbs, descripcion_codigo, commodity, descripcion, obra, unidad, cantidad, hh_unidad, hh_item, pu_clp, p_total_clp, tipo_partida, cwp_id')
           .eq('project_id', pid).order('item'),
         cwpPool(),
         bmpPool(),
@@ -143,12 +143,12 @@ export async function GET(req: NextRequest) {
   if (rel === 'item_bmp') {
     try {
       const [eco2Res, partidas] = await Promise.all([
-        sb.from('mining_itemizado').select('id, item, n_partida, partida_bmp, descripcion, commodity, area, unidad, cantidad').eq('project_id', pid).order('item'),
+        sb.from('mining_itemizado').select('id, item, n_partida, partida_bmp, partida_mp, descripcion, commodity, area, unidad, cantidad').eq('project_id', pid).order('item'),
         bmpPool(),
       ]);
       if (eco2Res.error) return NextResponse.json({ error: eco2Res.error.message }, { status: 500 });
       const codes = new Set(partidas.map((p: any) => p.partida));
-      const huerfanos = (eco2Res.data ?? []).filter((e: any) => !e.partida_bmp || !codes.has(e.partida_bmp));
+      const huerfanos = (eco2Res.data ?? []).filter((e: any) => !e.partida_mp || !codes.has(e.partida_mp));
       return NextResponse.json({ huerfanos, candidatos: partidas });
     } catch (e: any) {
       return NextResponse.json({ error: e.message }, { status: 500 });
@@ -190,7 +190,7 @@ export async function PATCH(req: NextRequest) {
   if (rel === 'eco2_cwp') {
     q = sb.from('mining_itemizado').update({ cwp_id: target ? String(target) : null });
   } else if (rel === 'item_bmp') {
-    q = sb.from('mining_itemizado').update({ partida_bmp: target ? String(target) : null });
+    q = sb.from('mining_itemizado').update({ partida_mp: target ? String(target) : null });
   } else if (rel === 'prog_cwp') {
     if (!target) return NextResponse.json({ error: 'target requerido' }, { status: 400 });
     q = sb.from('mining_programa').update({ cwp_id: String(target) });

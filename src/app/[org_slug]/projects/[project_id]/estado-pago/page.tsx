@@ -9,7 +9,7 @@ import { Loader2, Search, ChevronDown, ChevronRight, AlertTriangle } from 'lucid
 // ponderada de sus pasos (pesos de mining_ponderaciones).
 
 interface Item {
-  id: string; item: string; n_partida: string | null; partida_bmp: string | null;
+  id: string; item: string; n_partida: string | null; partida_mp: string | null;
   area: string | null; cwa_id: string | null; commodity: string | null; descripcion: string;
   obra: string | null; unidad: string | null; cantidad: number | null; hh_item: number | null;
   pu_clp: number | null; p_total_clp: number | null; cwp_id: string | null;
@@ -59,8 +59,8 @@ export default function EstadoPagoPage() {
 
   // avance de un item = Σ (peso_paso × pct_paso) / Σ pesos, por tipo
   const avanceItem = (it: Item, tipo: 'fisico' | 'financiero'): number | null => {
-    if (!it.partida_bmp) return null;
-    const pp = (pasosPorPartida.get(it.partida_bmp) ?? []).filter(p => p.tipo === tipo);
+    if (!it.partida_mp) return null;
+    const pp = (pasosPorPartida.get(it.partida_mp) ?? []).filter(p => p.tipo === tipo);
     if (!pp.length) return null;
     const totalPeso = pp.reduce((s, p) => s + p.peso, 0);
     if (!totalPeso) return null;
@@ -91,7 +91,7 @@ export default function EstadoPagoPage() {
       fisicoPct: base ? fisicoPond / base * 100 : 0,
       ganado,
       cobrable: total ? ganado / total * 100 : 0,
-      sinBmp: items.filter(it => !it.partida_bmp || !pasosPorPartida.has(it.partida_bmp)).length,
+      sinBmp: items.filter(it => !it.partida_mp || !pasosPorPartida.has(it.partida_mp)).length,
     };
   }, [items, avances, pasosPorPartida]);
 
@@ -181,7 +181,7 @@ export default function EstadoPagoPage() {
               const af = avanceItem(it, 'fisico');
               const afin = avanceItem(it, 'financiero');
               const abierto = openItem === it.item;
-              const pf = (pasosPorPartida.get(it.partida_bmp ?? '') ?? []);
+              const pf = (pasosPorPartida.get(it.partida_mp ?? '') ?? []);
               const sinReglas = !pf.length;
               return (
                 <Fragment key={it.id}>
@@ -190,10 +190,10 @@ export default function EstadoPagoPage() {
                     <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontWeight: 700 }}>{it.item}</td>
                     <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 10, color: '#757575' }}>{it.n_partida ?? '—'}</td>
                     <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>
-                      {it.partida_bmp && !sinReglas ? (
-                        <span style={{ display: 'inline-block', fontFamily: 'monospace', fontSize: 9.5, fontWeight: 900, padding: '2px 10px', borderRadius: 9999, border: '1.5px solid #22C55E', backgroundColor: '#DCFCE7', color: '#166534' }}>{it.partida_bmp}</span>
-                      ) : it.partida_bmp ? (
-                        <span style={{ display: 'inline-block', fontFamily: 'monospace', fontSize: 9.5, fontWeight: 900, padding: '2px 10px', borderRadius: 9999, border: '1.5px solid #FBBF24', backgroundColor: '#FEF3C7', color: '#B45309' }} title="Partida asignada pero sin reglas de ponderación">{it.partida_bmp}</span>
+                      {it.partida_mp && !sinReglas ? (
+                        <span style={{ display: 'inline-block', fontFamily: 'monospace', fontSize: 9.5, fontWeight: 900, padding: '2px 10px', borderRadius: 9999, border: '1.5px solid #22C55E', backgroundColor: '#DCFCE7', color: '#166534' }}>{it.partida_mp}</span>
+                      ) : it.partida_mp ? (
+                        <span style={{ display: 'inline-block', fontFamily: 'monospace', fontSize: 9.5, fontWeight: 900, padding: '2px 10px', borderRadius: 9999, border: '1.5px solid #FBBF24', backgroundColor: '#FEF3C7', color: '#B45309' }} title="Partida asignada pero sin reglas de ponderación">{it.partida_mp}</span>
                       ) : (
                         <span style={{ display: 'inline-block', fontSize: 9.5, fontWeight: 900, padding: '2px 10px', borderRadius: 9999, border: '1.5px dashed #FECACA', backgroundColor: '#FEE2E2', color: '#A00000' }}>sin BMP</span>
                       )}
@@ -211,7 +211,7 @@ export default function EstadoPagoPage() {
                     <tr>
                       <td colSpan={12} style={{ backgroundColor: '#FAFAFA', borderBottom: '2px solid #EEEEEE', padding: '12px 24px 16px' }}>
                         {sinReglas ? (
-                          <div style={{ fontSize: 11, color: '#B45309' }}>Este item no tiene partida BMP con reglas ({it.partida_bmp ?? 'sin asignar'}). Asígnala en Conciliación para reportar avance.</div>
+                          <div style={{ fontSize: 11, color: '#B45309' }}>Este item no tiene partida BMP con reglas ({it.partida_mp ?? 'sin asignar'}). Asígnala en Conciliación para reportar avance.</div>
                         ) : (
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
                             {(['fisico', 'financiero'] as const).map(tipo => {
@@ -220,7 +220,7 @@ export default function EstadoPagoPage() {
                               return (
                                 <div key={tipo}>
                                   <div style={{ fontSize: 9.5, fontWeight: 900, color: tipo === 'fisico' ? '#FF0000' : '#166534', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
-                                    {tipo === 'fisico' ? 'Pasos de avance físico' : 'Hitos de pago (financiero)'} · {it.partida_bmp}
+                                    {tipo === 'fisico' ? 'Pasos de avance físico' : 'Hitos de pago (financiero)'} · {it.partida_mp}
                                   </div>
                                   {grupo.map(p => {
                                     const pct = avances.get(`${it.item}|${p.id}`) ?? 0;
