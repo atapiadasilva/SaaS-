@@ -608,6 +608,13 @@ function DetailPanel({ c, cwaName, tab, setTab, projectId, onIsolateMonikers, iw
           <span className="min-w-[34px] text-center rounded-md px-2.5 py-1 text-white text-[13px] font-extrabold" style={{ background: c.color }}>{c.disc}</span>
           <span className="font-mono text-[20px] font-extrabold text-[#1A1A1A]">{c.cwp}</span>
           <span className="text-[14px] text-slate-600">{c.nombre}</span>
+          <a
+            href={`/api/mining-cwp-ficha?project_id=${projectId}&cwp_id=${encodeURIComponent(c.cwp)}`}
+            target="_blank" rel="noreferrer" title="Ficha del CWP lista para imprimir o guardar como PDF"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-full border-2 border-[#FF0000] px-3.5 py-1 text-[11px] font-extrabold text-[#FF0000] hover:bg-red-50 transition"
+          >
+            <FileText className="w-3.5 h-3.5" /> Ficha PDF
+          </a>
         </div>
         <div className="mt-2.5" title={`${cwaName} · ${c.cvName} · ${c.dn}`}>
           <HiloTrace nodes={[
