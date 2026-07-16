@@ -11,7 +11,7 @@ import IwpManager, { type IwpViewerBridge } from '@/components/awp/IwpManager';
 import IwpSkyline from '@/components/awp/IwpSkyline';
 import { HiloWave, HiloTrace } from '@/components/brand/Hilo';
 import { CwpGantt } from '@/components/awp/CwpGantt';
-import { Search, Loader2, Package, ListChecks, Layers, FileText, Bot, Box, X, ChevronRight, ChevronLeft, CheckSquare, Square, Eye, Ghost, ListTree, Calendar, Columns3, Crosshair, Settings, ChevronDown } from 'lucide-react';
+import { Search, Loader2, Package, ListChecks, Layers, FileText, Bot, Box, X, ChevronRight, ChevronLeft, CheckSquare, Square, Eye, Ghost, ListTree, Calendar, Columns3, Crosshair, Settings, ChevronDown, PenLine } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const ForgeViewer = dynamic(() => import('@/components/awp/ForgeViewer'), { ssr: false });
@@ -411,7 +411,7 @@ export default function MineriaPage() {
           {selected ? (
             <DetailPanel
               c={selected} cwaName={data.cwa.find(x => x.cwa === selected.cwa)?.name ?? ''}
-              tab={tab} setTab={setTab} projectId={project_id}
+              tab={tab} setTab={setTab} projectId={project_id} orgSlug={org_slug}
               onIsolateMonikers={filterByMonikers}
               iwpViewerBridge={iwpViewerBridge}
               ganttCwps={checked.size > 0 ? data.cwp.filter(x => checked.has(x.cwp)) : [selected]}
@@ -593,8 +593,8 @@ function SidebarList({ visible, cwa, selectedCwp, checked, onSelect, onToggleChe
   return <>{rows}</>;
 }
 
-function DetailPanel({ c, cwaName, tab, setTab, projectId, onIsolateMonikers, iwpViewerBridge, ganttCwps }: {
-  c: MCwp; cwaName: string; tab: DetailTab; setTab: (t: DetailTab) => void; projectId: string;
+function DetailPanel({ c, cwaName, tab, setTab, projectId, orgSlug, onIsolateMonikers, iwpViewerBridge, ganttCwps }: {
+  c: MCwp; cwaName: string; tab: DetailTab; setTab: (t: DetailTab) => void; projectId: string; orgSlug: string;
   onIsolateMonikers: (monikers: string[]) => void;
   iwpViewerBridge?: IwpViewerBridge;
   // CWP que grafica la pestaña Programa: los marcados con checkbox, o el abierto si no hay checks
@@ -608,13 +608,22 @@ function DetailPanel({ c, cwaName, tab, setTab, projectId, onIsolateMonikers, iw
           <span className="min-w-[34px] text-center rounded-md px-2.5 py-1 text-white text-[13px] font-extrabold" style={{ background: c.color }}>{c.disc}</span>
           <span className="font-mono text-[20px] font-extrabold text-[#1A1A1A]">{c.cwp}</span>
           <span className="text-[14px] text-slate-600">{c.nombre}</span>
-          <a
-            href={`/api/mining-cwp-ficha?project_id=${projectId}&cwp_id=${encodeURIComponent(c.cwp)}`}
-            target="_blank" rel="noreferrer" title="Ficha del CWP lista para imprimir o guardar como PDF"
-            className="ml-auto inline-flex items-center gap-1.5 rounded-full border-2 border-[#FF0000] px-3.5 py-1 text-[11px] font-extrabold text-[#FF0000] hover:bg-red-50 transition"
-          >
-            <FileText className="w-3.5 h-3.5" /> Ficha PDF
-          </a>
+          <div className="ml-auto flex items-center gap-2">
+            <Link
+              href={`/${orgSlug}/projects/${projectId}/mineria/cwp-ficha/${encodeURIComponent(c.cwp)}`}
+              title="Editar la ficha del CWP (texto, imágenes, secciones por departamento)"
+              className="inline-flex items-center gap-1.5 rounded-full border-2 border-slate-300 px-3 py-1 text-[11px] font-extrabold text-slate-600 hover:bg-slate-50 transition"
+            >
+              <PenLine className="w-3.5 h-3.5" /> Editar ficha
+            </Link>
+            <a
+              href={`/${orgSlug}/projects/${projectId}/mineria/cwp-ficha/${encodeURIComponent(c.cwp)}/print`}
+              target="_blank" rel="noreferrer" title="Ficha del CWP lista para imprimir o guardar como PDF"
+              className="inline-flex items-center gap-1.5 rounded-full border-2 border-[#FF0000] px-3.5 py-1 text-[11px] font-extrabold text-[#FF0000] hover:bg-red-50 transition"
+            >
+              <FileText className="w-3.5 h-3.5" /> Ficha PDF
+            </a>
+          </div>
         </div>
         <div className="mt-2.5" title={`${cwaName} · ${c.cvName} · ${c.dn}`}>
           <HiloTrace nodes={[
