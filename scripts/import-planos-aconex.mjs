@@ -23,6 +23,18 @@ if (!url || !key) { console.error('Faltan NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SE
 const sb = createClient(url, key);
 const TIPO = { DW: 'Plano', PR: 'Procedimiento' };
 
+// Asignación por ÁREA + DISCIPLINA del código de documento (NO por tag de equipo — el tag
+// mezcla disciplinas: un plano de piping del espesador NO va al CWP civil). Solo áreas con CV
+// único (312->312101, 322->322101, 720->720101); el resto (000/300/700/710 ambiguas) se omite.
+const DISC_LETRA = { '41': 'C', '42': 'D', '43': 'S', '44': 'A', '45': 'M', '46': 'P', '47': 'E', '48': 'J', '49': 'MB' };
+const CV_UNICO = { '312': '312101', '322': '322101', '720': '720101' };
+function cwpDesdeCodigo(code) {
+  const partes = code.split('-'); // 333-PRC23084-312-42-DW-8001
+  const area = partes[2], disc = partes[3];
+  const cv = CV_UNICO[area], letra = DISC_LETRA[disc];
+  return (cv && letra) ? `${cv}.${letra}001` : null;
+}
+
 const docs = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
 console.log(`Docs en paquetización: ${docs.length}`);
 
@@ -33,10 +45,13 @@ const have = new Set(existing.map(r => `${r.cwp_id}|${r.codigo_documento}`));
 console.log(`Ya en mining_planos: ${existing.length} filas`);
 
 const nuevos = [];
+let omitidos = 0;
 for (const d of docs) {
-  const cwp = d.CWP_ID?.trim();
   const code = d.Doc_Code?.trim();
-  if (!cwp || !code || have.has(`${cwp}|${code}`)) continue;
+  if (!code) continue;
+  const cwp = cwpDesdeCodigo(code); // por área+disciplina, NO por d.CWP_ID (tag)
+  if (!cwp) { omitidos++; continue; } // área ambigua o sin CV propio → no se ubica en un CWP
+  if (have.has(`${cwp}|${code}`)) continue;
   have.add(`${cwp}|${code}`);
   const desc = [d['Área_Nombre'], d.Disciplina, d.Tags_encontrados].filter(Boolean).join(' · ');
   nuevos.push({
@@ -46,9 +61,10 @@ for (const d of docs) {
     codigo_documento: code,
     descripcion: desc || null,
     tipo: TIPO[d.Tipo_Doc] ?? 'Documento',
-    confianza: d.Tags_encontrados ? 'tag' : 'area-disciplina',
+    confianza: 'area-disciplina',
   });
 }
+console.log(`Omitidos (área ambigua / sin CV propio): ${omitidos}`);
 
 console.log(`Nuevos a insertar: ${nuevos.length}`);
 if (nuevos.length === 0) { console.log('Nada que hacer.'); process.exit(0); }
