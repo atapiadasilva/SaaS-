@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { ProjectNavBar } from "@/components/layout/ProjectNavBar";
 import { HiloLogo, HiloWave } from "@/components/brand/Hilo";
 
-const MINING_MODULES = ['panel', 'mineria', 'planificacion', 'trisemanal', 'calidad', 'medio-ambiente', 'sso', 'equipos', 'rrhh', 'conciliacion', 'estado-pago'];
+const MINING_MODULES = ['panel', 'mineria', 'planificacion', 'trisemanal', 'recursos', 'calidad', 'medio-ambiente', 'sso', 'equipos', 'rrhh', 'conciliacion', 'estado-pago'];
 
 export default async function ProjectLayout({
   children,

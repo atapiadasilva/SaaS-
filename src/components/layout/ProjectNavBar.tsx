@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Pickaxe, Settings2, CalendarRange, CalendarClock, Link2, Receipt, ShieldCheck, Leaf, HardHat, Truck, Users, LayoutDashboard } from 'lucide-react';
+import { Pickaxe, Settings2, CalendarRange, CalendarClock, Link2, Receipt, ShieldCheck, Leaf, HardHat, Truck, Users, LayoutDashboard, BarChart3 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const MODULE_NAV = {
@@ -10,6 +10,7 @@ const MODULE_NAV = {
   mineria:          { label: 'AWP Minería',    icon: Pickaxe,       path: 'mineria' },
   planificacion:    { label: 'Planificación',  icon: CalendarRange, path: 'planificacion' },
   trisemanal:       { label: 'Trisemanal',     icon: CalendarClock, path: 'trisemanal' },
+  recursos:         { label: 'Recursos',       icon: BarChart3,     path: 'recursos' },
   calidad:          { label: 'Calidad',        icon: ShieldCheck,   path: 'calidad' },
   'medio-ambiente': { label: 'M. Ambiente',    icon: Leaf,          path: 'medio-ambiente' },
   sso:              { label: 'SSO',            icon: HardHat,       path: 'sso' },
