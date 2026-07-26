@@ -62,11 +62,39 @@ const pond = hoja('P4').map((r, i) => ({ project_id: PROJECT_ID, item_code: r.Pa
   item_nombre: r.Nombre_partida || null, commodity: r.Commodity || null, tipo: r.Tipo || null,
   hito: r.Paso_o_hito || null, peso: num(r.Peso), orden: num(r.Orden) ?? i })).filter(x => x.item_code);
 
-console.log(`CWA ${cwaMap.size} · CV ${cvMap.size} · CWP ${cwps.length} · Programa ${programa.length} · Itemizado ${items.length} · Ponderaciones ${pond.length}`);
+// P8 Personal
+const personal = hoja('P8').map(r => ({ project_id: PROJECT_ID, n: num(r.N), nombre: r.Nombre || null,
+  cargo: r.Cargo || null, tipo: r.Directo_Indirecto || null, cuadrilla: r.Cuadrilla || null,
+  fecha_compromiso: fecha(r.Fecha_compromiso), estado_acreditacion: r.Estado_acreditacion || null })).filter(x => x.nombre);
+
+// P9 Suministros
+const suministros = hoja('P9').map(r => ({ project_id: PROJECT_ID, cwp_id: null,
+  descripcion_material: r.Descripcion || null, proveedor: r.Responsable || null,
+  fecha_entrega_plan: fecha(r.Fecha_comprometida), liberado: false, numero_po: r.PEP_id || null,
+  observacion: [r.Criticidad, r.CWA && `CWA ${r.CWA}`].filter(Boolean).join(' · ') || null })).filter(x => x.descripcion_material);
+
+// P6 Documentos + P6b vínculos doc↔CWP
+const docs = hoja('P6');
+const docMeta = new Map(docs.map(d => [String(d.N_documento), d]));
+const docAconex = docs.map(d => ({ project_id: PROJECT_ID, n_cmdic: String(d.N_documento || '').trim() || null,
+  titulo: d.Titulo || null, tipo_doc: d.Tipo || null, rev: d.Revision != null ? String(d.Revision) : null,
+  estado_aconex: d.Estado_Aconex || null, disciplina_doc: d.Disciplina_aconex || null, cwa_id: d.CWA || null,
+  n_interno: d.Codigo_interno || null, archivo: d.Ruta_archivo || null, fecha_modificacion: fecha(d.Fecha_Aconex),
+  origen: d.Empresa || null, cwp_id_exacto: (String(d.CWP||'').includes('.') ? String(d.CWP) : null) })).filter(x => x.n_cmdic);
+const planos = hoja('P6b').map(r => { const m = docMeta.get(String(r.N_documento)) ?? {};
+  return { project_id: PROJECT_ID, cwp_id: String(r.CWP_hilo || r.CWP || '').trim() || null,
+    codigo_documento: String(r.N_documento || '').trim() || null, descripcion: m.Titulo || null,
+    tipo: m.Tipo || 'Documento', confianza: r.Origen_del_vinculo || 'pack' }; }).filter(x => x.cwp_id && x.codigo_documento);
+
+console.log(`CWA ${cwaMap.size} · CV ${cvMap.size} · CWP ${cwps.length} · Programa ${programa.length} · Itemizado ${items.length} · Ponderaciones ${pond.length} · Personal ${personal.length} · Suministros ${suministros.length} · Docs ${docAconex.length} · Planos ${planos.length}`);
 console.log('cwa:', await reemplazar('mining_cwa', [...cwaMap.values()]));
 console.log('cv:', await reemplazar('mining_cv', [...cvMap.values()]));
 console.log('cwp:', await reemplazar('mining_cwp', cwps));
 console.log('programa:', await reemplazar('mining_programa', programa));
 console.log('itemizado:', await reemplazar('mining_itemizado', items));
 console.log('ponderaciones:', await reemplazar('mining_ponderaciones', pond));
+console.log('personal:', await reemplazar('mining_personal', personal));
+console.log('suministros:', await reemplazar('mining_suministro', suministros));
+console.log('doc_aconex:', await reemplazar('mining_doc_aconex', docAconex));
+console.log('planos:', await reemplazar('mining_planos', planos));
 console.log('✓ listo');
