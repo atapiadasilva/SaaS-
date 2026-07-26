@@ -2,8 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { ProjectNavBar } from "@/components/layout/ProjectNavBar";
 import { HiloLogo, HiloWave } from "@/components/brand/Hilo";
-
-const MINING_MODULES = ['panel', 'mineria', 'planificacion', 'trisemanal', 'recursos', 'calidad', 'medio-ambiente', 'sso', 'equipos', 'rrhh', 'conciliacion', 'estado-pago'];
+import { resolverModulos } from "@/lib/modules";
 
 export default async function ProjectLayout({
   children,
@@ -20,7 +19,7 @@ export default async function ProjectLayout({
 
   const { data: project, error: pError } = await (supabase as any)
     .from("projects")
-    .select("id, name, stage, organizations(id, slug, name)")
+    .select("id, name, stage, active_modules, organizations(id, slug, name)")
     .eq("id", project_id)
     .single();
 
@@ -28,7 +27,8 @@ export default async function ProjectLayout({
     redirect("/organizaciones");
   }
 
-  const activeModules = [...MINING_MODULES, 'setup'];
+  // Módulos visibles según la configuración del proyecto (Panel y Setup siempre presentes).
+  const activeModules = resolverModulos(project.active_modules);
 
   return (
     <div className="h-screen bg-white flex flex-col overflow-hidden">
