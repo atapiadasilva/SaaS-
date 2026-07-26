@@ -2,14 +2,15 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
-import { Settings2, Save, Loader2, CheckCircle2, Circle, Database, Lock, Code2 } from 'lucide-react';
+import Link from 'next/link';
+import { Settings2, Save, Loader2, CheckCircle2, Circle, Database, Lock, Code2, Rocket } from 'lucide-react';
 import { MODULE_CATALOG, type ModuleKey, type ModuleCategory } from '@/lib/modules';
 
 interface Fuente { key: string; label: string; count: number; modulos: ModuleKey[] }
 const CAT_LABEL: Record<ModuleCategory, string> = { nucleo: 'Núcleo', awp: 'Gestión AWP', departamentos: 'Departamentos' };
 
 export default function SetupPage() {
-  const { project_id } = useParams<{ org_slug: string; project_id: string }>();
+  const { org_slug, project_id } = useParams<{ org_slug: string; project_id: string }>();
   const [active, setActive] = useState<Set<ModuleKey>>(new Set());
   const [externalCode, setExternalCode] = useState('');
   const [fuentes, setFuentes] = useState<Fuente[]>([]);
@@ -51,9 +52,14 @@ export default function SetupPage() {
           <h1 className="text-[22px] font-black text-[#1A1A1A] flex items-center gap-2"><Settings2 className="w-6 h-6 text-[#FF0000]" /> Configuración del proyecto</h1>
           <p className="text-[11.5px] text-slate-500">Activa los módulos, define el código externo y revisa qué datos están cargados.</p>
         </div>
-        <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-[#FF0000] text-white text-[12px] font-black disabled:opacity-50">
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar
-        </button>
+        <div className="flex items-center gap-2">
+          <Link href={`/${org_slug}/projects/${project_id}/onboarding`} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-[#FF0000] text-[#FF0000] text-[12px] font-black hover:bg-red-50">
+            <Rocket className="w-4 h-4" /> Cargar datos
+          </Link>
+          <button onClick={save} disabled={saving} className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-[#FF0000] text-white text-[12px] font-black disabled:opacity-50">
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Guardar
+          </button>
+        </div>
       </div>
 
       {/* Código externo */}
