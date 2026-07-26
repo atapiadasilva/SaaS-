@@ -65,9 +65,15 @@ export async function GET(req: NextRequest) {
     programaByCwp.set(t.cwp_id, arr);
   }
 
-  const discColor = new Map<string, string>();
+  // Disciplinas derivadas de los propios CWP (robusto: no depende de la tabla mining_disciplinas).
   const PAL = ['#1565C0', '#1E88E5', '#78909C', '#6A1B9A', '#8D6E63', '#E65100', '#00695C', '#AD1457', '#F9A825', '#FB8C00', '#5E35B1', '#C9A100', '#E53935', '#283593', '#546E7A'];
-  (discRes.data ?? []).forEach((d: any, i: number) => discColor.set(d.disciplina_cod, PAL[i % PAL.length]));
+  const discNombre = new Map<string, string>();
+  for (const d of (discRes.data ?? [])) discNombre.set(d.disciplina_cod, d.disciplina_nombre);
+  const discCodes: string[] = [];
+  for (const c of (cwpRes.data ?? [])) if (c.disciplina_cod && !discCodes.includes(c.disciplina_cod)) discCodes.push(c.disciplina_cod);
+  discCodes.sort();
+  const discColor = new Map<string, string>();
+  discCodes.forEach((code, i) => discColor.set(code, PAL[i % PAL.length]));
 
   const cwp = (cwpRes.data ?? []).map((c: any) => {
     const items = itemsByCwp.get(c.cwp_id) ?? [];
@@ -95,9 +101,10 @@ export async function GET(req: NextRequest) {
   });
 
   const cwa = (cwaRes.data ?? []).map((c: any) => ({ cwa: c.cwa_id, name: c.cwa_nombre }));
-  const disc = (discRes.data ?? []).map((d: any) => ({
-    code: d.disciplina_cod, name: d.disciplina_nombre, color: discColor.get(d.disciplina_cod) ?? '#1565C0',
-    n: cwp.filter((c: any) => c.disc === d.disciplina_cod).length,
+  const disc = discCodes.map((code) => ({
+    code, name: discNombre.get(code) ?? cwp.find((c: any) => c.disc === code)?.dn ?? code,
+    color: discColor.get(code) ?? '#1565C0',
+    n: cwp.filter((c: any) => c.disc === code).length,
   })).filter((d: any) => d.n > 0);
 
   const kpi = {
