@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
 
   const { data: proj } = await sb.from('projects').select('active_modules, module_config').eq('id', pid).single();
   const counts = await Promise.all(FUENTES.map(async f => {
-    const { count } = await sb.from(f.tabla).select('id', { count: 'exact', head: true }).eq('project_id', pid);
+    const { count } = await sb.from(f.tabla).select('*', { count: 'exact', head: true }).eq('project_id', pid);
     return { ...f, count: count ?? 0 };
   }));
 
