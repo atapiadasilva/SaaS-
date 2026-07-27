@@ -11,7 +11,7 @@ interface ItemRow {
   id: string;
   item: string;
   n_partida: string | null;
-  partida_bmp: string | null;
+  partida_mp: string | null;
   area: string | null;
   cwa_id: string | null;
   wbs: string | null;
@@ -100,9 +100,9 @@ export default function ItemizadoTable({ projectId }: { projectId: string }) {
   const filtered = useMemo(() => {
     const q = search.trim().toUpperCase();
     let rows = items;
-    if (q) rows = rows.filter(r => [r.item, r.n_partida, r.descripcion, r.obra, r.area, r.commodity, r.cwp_id, r.partida_bmp].some(v => v && String(v).toUpperCase().includes(q)));
+    if (q) rows = rows.filter(r => [r.item, r.n_partida, r.descripcion, r.obra, r.area, r.commodity, r.cwp_id, r.partida_mp].some(v => v && String(v).toUpperCase().includes(q)));
     if (soloSinCwp) rows = rows.filter(r => !r.cwp_id);
-    if (soloSinBmp) rows = rows.filter(r => !r.partida_bmp || !bmpCodes.has(r.partida_bmp));
+    if (soloSinBmp) rows = rows.filter(r => !r.partida_mp || !bmpCodes.has(r.partida_mp));
     const s = [...rows];
     s.sort((a: any, b: any) => {
       const av = a[sortBy]; const bv = b[sortBy];
@@ -127,7 +127,7 @@ export default function ItemizadoTable({ projectId }: { projectId: string }) {
       if (!d) return;
       setDrag(null);
       const [a, b] = [Math.min(d.from, d.to), Math.max(d.from, d.to)];
-      const campo = d.kind === 'cwp' ? 'cwp_id' : 'partida_bmp';
+      const campo = d.kind === 'cwp' ? 'cwp_id' : 'partida_mp';
       const rows = filteredRef.current.slice(a, b + 1).filter(r => (r as any)[campo] !== d.value);
       if (!rows.length) return;
       setSaving('bulk');
@@ -155,7 +155,7 @@ export default function ItemizadoTable({ projectId }: { projectId: string }) {
     hh: items.reduce((s, r) => s + (r.hh_item ?? 0), 0),
     clp: items.reduce((s, r) => s + (r.p_total_clp ?? 0), 0),
     cwpOk: items.filter(r => r.cwp_id).length,
-    bmpOk: items.filter(r => r.partida_bmp && bmpCodes.has(r.partida_bmp)).length,
+    bmpOk: items.filter(r => r.partida_mp && bmpCodes.has(r.partida_mp)).length,
   }), [items, bmpCodes]);
 
   const asignar = async (row: ItemRow, kind: 'cwp' | 'bmp', target: string | null) => {
@@ -167,7 +167,7 @@ export default function ItemizadoTable({ projectId }: { projectId: string }) {
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d?.error);
-      setItems(prev => prev.map(r => r.id === row.id ? { ...r, [kind === 'cwp' ? 'cwp_id' : 'partida_bmp']: target } : r));
+      setItems(prev => prev.map(r => r.id === row.id ? { ...r, [kind === 'cwp' ? 'cwp_id' : 'partida_mp']: target } : r));
       setPicker(null); setPickerSearch('');
     } catch (e: any) { setError(e.message); }
     setSaving(null);
@@ -201,7 +201,7 @@ export default function ItemizadoTable({ projectId }: { projectId: string }) {
       <div ref={pickerRef} style={{ position: 'absolute', top: '100%', right: 0, marginTop: 2, backgroundColor: 'white', border: '1px solid #BDBDBD', borderRadius: 6, boxShadow: '0 12px 28px rgba(0,0,0,0.18)', zIndex: 200, width: 320, maxHeight: 300, overflowY: 'auto', textAlign: 'left' }}>
         <div style={{ padding: 6, borderBottom: `1px solid ${GRID}`, position: 'sticky', top: 0, backgroundColor: 'white', display: 'flex', gap: 6 }}>
           <input autoFocus value={pickerSearch} onChange={e => setPickerSearch(e.target.value)} placeholder={kind === 'cwp' ? 'Buscar CWP…' : 'Buscar partida BMP…'} style={{ flex: 1, padding: '4px 8px', border: '1px solid #E0E0E0', borderRadius: 4, fontSize: 11, outline: 'none', fontFamily: fontFam }} />
-          {(kind === 'cwp' ? row.cwp_id : row.partida_bmp) && (
+          {(kind === 'cwp' ? row.cwp_id : row.partida_mp) && (
             <button onClick={() => asignar(row, kind, null)} style={{ fontSize: 10, color: '#A00000', background: 'none', border: '1px solid #FECACA', borderRadius: 4, padding: '2px 8px', cursor: 'pointer' }}>Quitar</button>
           )}
         </div>
@@ -301,7 +301,7 @@ export default function ItemizadoTable({ projectId }: { projectId: string }) {
             </thead>
             <tbody>
               {filtered.map((r, i) => {
-                const bmpOk = r.partida_bmp && bmpCodes.has(r.partida_bmp);
+                const bmpOk = r.partida_mp && bmpCodes.has(r.partida_mp);
                 const sel = selRow === r.id;
                 const enRango = (kind: 'cwp' | 'bmp') => !!drag && drag.kind === kind && i >= Math.min(drag.from, drag.to) && i <= Math.max(drag.from, drag.to);
                 const handle = (kind: 'cwp' | 'bmp', value: string | null) => value ? (
@@ -321,10 +321,10 @@ export default function ItemizadoTable({ projectId }: { projectId: string }) {
                         return (
                           <td key={c.key} style={{ ...cellStyle('center'), backgroundColor: rango ? '#FEE2E2' : sel ? '#EBF3FD' : undefined, position: 'relative', overflow: 'visible', outline: rango ? '2px dashed #FF0000' : undefined, outlineOffset: -2 }}>
                             <button onClick={e => { e.stopPropagation(); setPicker(picker?.rowId === r.id && picker.kind === 'bmp' ? null : { rowId: r.id, kind: 'bmp' }); setPickerSearch(''); }}
-                              style={{ width: '100%', border: 'none', cursor: 'pointer', fontSize: 10, fontFamily: 'monospace', fontWeight: 700, padding: '1px 4px', borderRadius: 3, backgroundColor: bmpOk ? '#DCFCE7' : r.partida_bmp ? '#FEF3C7' : '#FEE2E2', color: bmpOk ? '#166534' : r.partida_bmp ? '#B45309' : '#A00000' }}>
-                              {saving === r.id || (saving === 'bulk' && rango) ? '…' : (r.partida_bmp ?? '+ BMP')}
+                              style={{ width: '100%', border: 'none', cursor: 'pointer', fontSize: 10, fontFamily: 'monospace', fontWeight: 700, padding: '1px 4px', borderRadius: 3, backgroundColor: bmpOk ? '#DCFCE7' : r.partida_mp ? '#FEF3C7' : '#FEE2E2', color: bmpOk ? '#166534' : r.partida_mp ? '#B45309' : '#A00000' }}>
+                              {saving === r.id || (saving === 'bulk' && rango) ? '…' : (r.partida_mp ?? '+ BMP')}
                             </button>
-                            {handle('bmp', r.partida_bmp)}
+                            {handle('bmp', r.partida_mp)}
                             {picker?.rowId === r.id && picker.kind === 'bmp' && renderPicker(r, 'bmp')}
                           </td>
                         );

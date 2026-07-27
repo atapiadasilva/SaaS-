@@ -17,22 +17,22 @@ export async function GET(req: NextRequest) {
   const baseUrl = `${req.nextUrl.protocol}//${req.nextUrl.host}`;
 
   const sb = supabase as any;
-  const [cwaRes, cvRes, cwpRes, discRes, planosRes, pwpRes, partidasRes, programaRes, elementosRes] = await Promise.all([
+  const [cwaRes, cvRes, cwpRes, discRes, planosRes, itemizadoRes, programaRes, elementosRes] = await Promise.all([
     sb.from('mining_cwa').select('*').eq('project_id', projectId).order('cwa_id'),
     sb.from('mining_cv').select('*').eq('project_id', projectId).order('cv_id'),
     sb.from('mining_cwp').select('*').eq('project_id', projectId).order('cwa_id').order('cv_id').order('cwp_id'),
     sb.from('mining_disciplinas').select('*').eq('project_id', projectId),
     sb.from('mining_planos').select('*').eq('project_id', projectId),
-    sb.from('mining_pwp').select('*').eq('project_id', projectId),
-    sb.from('mining_partidas').select('*').eq('project_id', projectId),
+    // Ítems de cobro desde el itemizado (ECO-2), que es lo que llenan el onboarding y el
+    // data pack. El modelo antiguo (mining_pwp + mining_partidas) solo existía en Collahuasi.
+    sb.from('mining_itemizado')
+      .select('item, descripcion, obra, unidad, cantidad, pu_clp, p_total_clp, cwp_id')
+      .eq('project_id', projectId).order('item'),
     sb.from('mining_programa').select('*').eq('project_id', projectId).eq('fuente', 'P333'),
     sb.rpc('mining_cwp_element_counts', { p_project_id: projectId }),
   ]);
 
   const localDocs = listLocalDocNums();
-
-  const pwpToCwp = new Map<string, string>();
-  for (const p of pwpRes.data ?? []) pwpToCwp.set(p.pwp_id, p.cwp_id);
 
   const PAL = ['#1565C0','#1E88E5','#78909C','#6A1B9A','#8D6E63','#E65100','#00695C','#AD1457','#F9A825','#FB8C00','#5E35B1','#C9A100','#E53935','#283593','#546E7A'];
   const discColor = new Map<string, string>();
@@ -46,12 +46,11 @@ export async function GET(req: NextRequest) {
   }
 
   const itemsByCwp = new Map<string, any[]>();
-  for (const it of partidasRes.data ?? []) {
-    const cwpId = pwpToCwp.get(it.pwp_id);
-    if (!cwpId) continue;
-    const arr = itemsByCwp.get(cwpId) ?? [];
-    arr.push({ co: it.codigo, de: it.descripcion, ob: it.obra, un: it.unidad, qt: it.cantidad, pu: it.pu_clp, tot: it.total_clp });
-    itemsByCwp.set(cwpId, arr);
+  for (const it of itemizadoRes.data ?? []) {
+    if (!it.cwp_id) continue;
+    const arr = itemsByCwp.get(it.cwp_id) ?? [];
+    arr.push({ co: it.item, de: it.descripcion, ob: it.obra, un: it.unidad, qt: it.cantidad, pu: it.pu_clp, tot: it.p_total_clp });
+    itemsByCwp.set(it.cwp_id, arr);
   }
 
   const programaByCwp = new Map<string, any[]>();
@@ -90,7 +89,7 @@ export async function GET(req: NextRequest) {
   const totalCosto = cwpList.reduce((s: number, c: any) => s + c.costo, 0);
   const totalHH = programaRes.data?.reduce((s: number, t: any) => s + (t.hh ?? 0), 0) ?? 0;
   const totalPlanos = planosRes.data?.length ?? 0;
-  const totalPartidas = partidasRes.data?.length ?? 0;
+  const totalPartidas = itemizadoRes.data?.length ?? 0;
 
   const data = { cwp: cwpList, cwa: cwaList, cv: cvList, baseUrl, kpi: { costo: totalCosto, hh: totalHH, planos: totalPlanos, partidas: totalPartidas } };
   const html = buildHtml(data);

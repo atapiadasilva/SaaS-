@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { fetchAllPaged } from '@/lib/supabase/paginado';
 
 // Módulo de conciliación: salud de la red relacional AWP + banco de match manual.
 // GET  ?project_id=                 → resumen de relaciones (cobertura, huérfanos, salud) + stats para diagrama
@@ -54,10 +55,12 @@ export async function GET(req: NextRequest) {
   };
 
   if (!rel) {
+    // Paginado en las tres tablas que crecen con el proyecto: la cobertura que muestra
+    // este módulo sería falsa si PostgREST truncara en 1000 filas.
     const [eco2Res, progRes, aconexRes, pondRes, cwaRes, cvRes, cwpRes, hitosRes, planosRes] = await Promise.all([
-      sb.from('mining_itemizado').select('item, cwp_id, partida_mp').eq('project_id', pid),
-      sb.from('mining_programa').select('id, cwp_id, tipo').eq('project_id', pid).eq('fuente', 'P333'),
-      sb.from('mining_doc_aconex').select('id, cwp_id_exacto').eq('project_id', pid),
+      fetchAllPaged((from, to) => sb.from('mining_itemizado').select('item, cwp_id, partida_mp').eq('project_id', pid).range(from, to)),
+      fetchAllPaged((from, to) => sb.from('mining_programa').select('id, cwp_id, tipo').eq('project_id', pid).eq('fuente', 'P333').range(from, to)),
+      fetchAllPaged((from, to) => sb.from('mining_doc_aconex').select('id, cwp_id_exacto').eq('project_id', pid).range(from, to)),
       sb.from('mining_ponderaciones').select('item_code, subitem_code').eq('project_id', pid),
       sb.from('mining_cwa').select('cwa_id').eq('project_id', pid),
       sb.from('mining_cv').select('cv_id').eq('project_id', pid),
@@ -117,9 +120,9 @@ export async function GET(req: NextRequest) {
   if (rel === 'eco2_full') {
     try {
       const [eco2Res, cwpRes, partidas] = await Promise.all([
-        sb.from('mining_itemizado')
+        fetchAllPaged((from, to) => sb.from('mining_itemizado')
           .select('id, item, n_partida, partida_bmp, partida_mp, area, cwa_id, wbs, descripcion_codigo, commodity, descripcion, obra, unidad, cantidad, hh_unidad, hh_item, pu_clp, p_total_clp, tipo_partida, cwp_id')
-          .eq('project_id', pid).order('item'),
+          .eq('project_id', pid).order('item').range(from, to)),
         cwpPool(),
         bmpPool(),
       ]);

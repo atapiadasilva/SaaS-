@@ -1,18 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { deriveCwaCv, cwaDesdeCv } from '@/lib/awp-codigo';
 
 const PAGE_SIZE_DEFAULT = 100;
 const PAGE_SIZE_MAX = 500;
-
-// Deriva CWA/CV a partir del CWP usando la convención de codificación del diccionario AWP:
-// CWP_ID = {CV}.{DISC}{NNN} (ej. 312101.C001) → CV = "312101" → CWA = CV[:4] = "3121"
-// Si el CWP no calza con el patrón (ej. placeholders "SIN-CWP.*"), no se puede derivar → null.
-function deriveCwaCv(cwpId: string): { cwa_id: string | null; cv_id: string | null } {
-  const m = cwpId.match(/^(\d{6})\.[A-Za-z]+\d+/);
-  if (!m) return { cwa_id: null, cv_id: null };
-  const cv = m[1];
-  return { cwa_id: cv.slice(0, 4), cv_id: cv };
-}
 
 type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
 
@@ -30,7 +21,7 @@ function fieldsForNivel(nivel: Nivel, trimmed: string): Record<string, string | 
   if (nivel === 'swp') return { swp_id: trimmed === 'SIN-SWP' ? null : trimmed };
   if (trimmed === 'SIN-CWA' || trimmed === 'SIN-CV') return { cwa_id: null, cv_id: null, cwp_id: null };
   if (nivel === 'cwp') return { cwp_id: trimmed, ...deriveCwaCv(trimmed) };
-  if (nivel === 'cv') return { cv_id: trimmed, cwa_id: trimmed.slice(0, 4), cwp_id: `${trimmed}.SIN-CWP` };
+  if (nivel === 'cv') return { cv_id: trimmed, cwa_id: cwaDesdeCv(trimmed), cwp_id: `${trimmed}.SIN-CWP` };
   const cv = `${trimmed}.SIN-CV`;
   return { cwa_id: trimmed, cv_id: cv, cwp_id: `${cv}.SIN-CWP` }; // 'cwa'
 }

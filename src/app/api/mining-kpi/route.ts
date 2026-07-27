@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { fetchAllPaged } from '@/lib/supabase/paginado';
 
 // Panel KPI general del proyecto: consolida contrato, programa, conciliación,
 // avance físico/financiero, dotación, consideraciones, entregables clave y compromisos.
@@ -15,8 +16,14 @@ export async function GET(req: NextRequest) {
   const sb = supabase as any;
 
   const [itemRes, progRes, cwpRes, iwpRes, hitosRes, pondRes, avanceRes, consRes, docsRes, dotRes, eqRes, estRes] = await Promise.all([
-    sb.from('mining_itemizado').select('item, partida_bmp, cwp_id, hh_item, p_total_clp').eq('project_id', pid),
-    sb.from('mining_programa').select('id, cwp_id, hh, fecha_inicio, fecha_fin, tipo').eq('project_id', pid).eq('fuente', 'P333'),
+    // partida_mp = partida de las Bases de Medición y Pago (la que tiene reglas de avance).
+    // No confundir con partida_bmp, que guarda el código de la actividad de programa.
+    // Paginado: son las dos tablas que primero superan el tope de 1000 filas de PostgREST,
+    // y truncarlas dejaría los KPI silenciosamente bajos.
+    fetchAllPaged((from, to) => sb.from('mining_itemizado')
+      .select('item, partida_mp, cwp_id, hh_item, p_total_clp').eq('project_id', pid).range(from, to)),
+    fetchAllPaged((from, to) => sb.from('mining_programa')
+      .select('id, cwp_id, hh, fecha_inicio, fecha_fin, tipo').eq('project_id', pid).eq('fuente', 'P333').range(from, to)),
     sb.from('mining_cwp').select('cwp_id, hh_planner, costo_oferta_clp, ruta_critica').eq('project_id', pid).eq('es_oficial', true),
     sb.from('mining_iwp').select('iwp_id, status, avance_fisico_pct').eq('project_id', pid),
     sb.from('mining_hitos').select('numero, hito, plazo_dias, multa').eq('project_id', pid).order('numero'),
@@ -63,7 +70,7 @@ export async function GET(req: NextRequest) {
   let fisicoPond = 0, fisicoBase = 0, ganado = 0;
   for (const it of items) {
     const monto = Number(it.p_total_clp) || 0;
-    const pasos = pondByPartida.get(it.partida_bmp) ?? [];
+    const pasos = pondByPartida.get(it.partida_mp) ?? [];
     const avMap = avancePorItem.get(it.item);
     for (const tipo of ['fisico', 'financiero'] as const) {
       const grupo = pasos.filter((p: any) => p.tipo === tipo);
@@ -80,7 +87,7 @@ export async function GET(req: NextRequest) {
   const bmpCodes = new Set([...pondByPartida.keys()]);
   const conciliacion = {
     eco2_cwp: { ok: items.filter((i: any) => i.cwp_id).length, total: items.length },
-    eco2_bmp: { ok: items.filter((i: any) => i.partida_bmp && bmpCodes.has(i.partida_bmp)).length, total: items.length },
+    eco2_bmp: { ok: items.filter((i: any) => i.partida_mp && bmpCodes.has(i.partida_mp)).length, total: items.length },
     prog_cwp: { ok: prog.filter((a: any) => a.cwp_id).length, total: prog.length },
     aconex_cwp: { ok: 0, total: 0 }, // se completa abajo con query dedicada
   };
@@ -121,14 +128,25 @@ export async function GET(req: NextRequest) {
   const programaCons = get1('programa_construccion');
   const repSemanal = get1('reporte_semanal_001');
 
+  // Identidad del proyecto: el panel la usa en el encabezado en vez de un texto fijo.
+  const { data: proj } = await sb.from('projects').select('name, stage, module_config').eq('id', pid).single();
+
   return NextResponse.json({
+    proyecto: {
+      nombre: proj?.name ?? null,
+      etapa: proj?.stage ?? null,
+      codigo_externo: proj?.module_config?.external_code ?? null,
+      n_items: items.length,
+    },
     contrato: {
       valor_clp: contratoClp,
       anticipo_clp: estadoPago?.desglose?.find((d: any) => /Anticipo/i.test(d.concepto))?.monto_clp ?? null,
       ep1: estadoPago ? { n_cmdic: estadoPago.n_cmdic, periodo: estadoPago.periodo, liquido: estadoPago.monto_total_clp } : null,
-      inicio: programaCons?.inicio ?? '30-04-2026',
-      fin: programaCons?.fin ?? '15-09-2027',
-      duracion_dias: programaCons?.duracion_dias ?? 504,
+      // Sin defaults: si el proyecto no tiene programa de construcción cargado, el panel
+      // debe decir "sin datos", no heredar las fechas de otro proyecto.
+      inicio: programaCons?.inicio ?? null,
+      fin: programaCons?.fin ?? null,
+      duracion_dias: programaCons?.duracion_dias ?? null,
       hitos_programa: programaCons?.hitos ?? [],
       programa_nota: programaCons?.nota_aprobacion ?? null,
     },

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { fetchAllPaged } from '@/lib/supabase/paginado';
 
 // Estado de Pago: avance físico/financiero por item del ECO-2 según las
 // Bases de Medición y Pago (mining_ponderaciones), guardado paso a paso
@@ -17,16 +18,18 @@ export async function GET(req: NextRequest) {
   if (!pid) return NextResponse.json({ error: 'Missing project_id' }, { status: 400 });
   const sb = supabase as any;
 
+  // Todo paginado: el estado de pago debe cuadrar con el contrato completo, y PostgREST
+  // corta en 1000 filas sin avisar.
   const [itemRes, pondRes, avanceRes] = await Promise.all([
-    sb.from('mining_itemizado')
+    fetchAllPaged((from, to) => sb.from('mining_itemizado')
       .select('id, item, n_partida, partida_bmp, partida_mp, area, cwa_id, commodity, descripcion, obra, unidad, cantidad, hh_item, pu_clp, p_total_clp, cwp_id')
-      .eq('project_id', pid).order('item'),
-    sb.from('mining_ponderaciones')
+      .eq('project_id', pid).order('item').range(from, to)),
+    fetchAllPaged((from, to) => sb.from('mining_ponderaciones')
       .select('id, commodity, item_code, item_nombre, subitem_code, subitem_nombre, tipo, hito, peso, orden')
-      .eq('project_id', pid).order('orden'),
-    sb.from('mining_avance_pasos')
+      .eq('project_id', pid).order('orden').range(from, to)),
+    fetchAllPaged((from, to) => sb.from('mining_avance_pasos')
       .select('item, ponderacion_id, pct, updated_at')
-      .eq('project_id', pid),
+      .eq('project_id', pid).range(from, to)),
   ]);
   const err = [itemRes, pondRes, avanceRes].find(r => r.error);
   if (err?.error) return NextResponse.json({ error: err.error.message }, { status: 500 });

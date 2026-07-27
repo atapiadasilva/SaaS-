@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { fetchAllPaged } from '@/lib/supabase/paginado';
 import { listLocalDocNums } from '@/lib/aconex-local';
 
 // GET /api/mining-data?project_id=...
@@ -13,29 +14,32 @@ export async function GET(req: NextRequest) {
   if (!projectId) return NextResponse.json({ error: 'Missing project_id' }, { status: 400 });
 
   const sb = supabase as any;
-  const [cwaRes, cvRes, cwpRes, discRes, planosRes, pwpRes, partidasRes, programaRes, elementosRes] = await Promise.all([
+  const [cwaRes, cvRes, cwpRes, discRes, planosRes, itemizadoRes, programaRes, elementosRes] = await Promise.all([
     sb.from('mining_cwa').select('*').eq('project_id', projectId).order('cwa_id'),
     sb.from('mining_cv').select('*').eq('project_id', projectId),
     sb.from('mining_cwp').select('*').eq('project_id', projectId).order('cwa_id').order('cv_id').order('cwp_id'),
     sb.from('mining_disciplinas').select('*').eq('project_id', projectId),
     sb.from('mining_planos').select('*').eq('project_id', projectId),
-    sb.from('mining_pwp').select('*').eq('project_id', projectId),
-    sb.from('mining_partidas').select('*').eq('project_id', projectId),
+    // El itemizado (ECO-2) es la fuente única de los ítems de cobro: es lo que llenan el
+    // onboarding y el data pack. El modelo antiguo (mining_pwp + mining_partidas) solo lo
+    // poblaban scripts puntuales, así que en cualquier proyecto onboardeado venía vacío.
+    fetchAllPaged((from, to) =>
+      sb.from('mining_itemizado')
+        .select('item, descripcion, obra, unidad, cantidad, pu_clp, p_total_clp, hh_item, cwp_id')
+        .eq('project_id', projectId).order('item').range(from, to)),
     sb.from('mining_programa').select('*').eq('project_id', projectId).eq('fuente', 'P333'),
     sb.rpc('mining_cwp_element_counts', { p_project_id: projectId }),
   ]);
 
-  const firstError = [cwaRes, cvRes, cwpRes, discRes, planosRes, pwpRes, partidasRes, programaRes, elementosRes]
+  const firstError = [cwaRes, cvRes, cwpRes, discRes, planosRes, programaRes, elementosRes]
     .find(r => r.error);
   if (firstError) return NextResponse.json({ error: firstError.error.message }, { status: 500 });
+  if (itemizadoRes.error) return NextResponse.json({ error: itemizadoRes.error.message }, { status: 500 });
 
   const elementosCountByCwp = new Map<string, number>();
   for (const e of elementosRes.data ?? []) {
     elementosCountByCwp.set(e.cwp_id, Number(e.n));
   }
-
-  const pwpToCwp = new Map<string, string>();
-  for (const p of pwpRes.data ?? []) pwpToCwp.set(p.pwp_id, p.cwp_id);
 
   // Códigos con PDF disponible en la carpeta local de Aconex (ACONEX_DOCS_DIR) — para no mostrar
   // un link clickeable en planos que no tienen archivo (ej. "Procedimientos" que no vienen en el
@@ -50,12 +54,11 @@ export async function GET(req: NextRequest) {
   }
 
   const itemsByCwp = new Map<string, any[]>();
-  for (const it of partidasRes.data ?? []) {
-    const cwpId = pwpToCwp.get(it.pwp_id);
-    if (!cwpId) continue;
-    const arr = itemsByCwp.get(cwpId) ?? [];
-    arr.push({ co: it.codigo, de: it.descripcion, ob: it.obra, un: it.unidad, qt: it.cantidad, pu: it.pu_clp, tot: it.total_clp, guid: it.guid_elemento });
-    itemsByCwp.set(cwpId, arr);
+  for (const it of itemizadoRes.data ?? []) {
+    if (!it.cwp_id) continue;
+    const arr = itemsByCwp.get(it.cwp_id) ?? [];
+    arr.push({ co: it.item, de: it.descripcion, ob: it.obra, un: it.unidad, qt: it.cantidad, pu: it.pu_clp, tot: it.p_total_clp, hh: it.hh_item });
+    itemsByCwp.set(it.cwp_id, arr);
   }
 
   const programaByCwp = new Map<string, any[]>();
@@ -109,7 +112,7 @@ export async function GET(req: NextRequest) {
 
   const kpi = {
     costo: cwp.reduce((s: number, c: any) => s + (c.costo ?? 0), 0),
-    part: partidasRes.data?.length ?? 0,
+    part: itemizadoRes.data?.length ?? 0,
     plan: planosRes.data?.length ?? 0,
     hh: programaRes.data?.reduce((s: number, t: any) => s + (t.hh ?? 0), 0) ?? 0,
   };
