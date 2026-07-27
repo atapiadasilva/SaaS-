@@ -1,9 +1,10 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-// Rutas llamadas por servicios externos (no por un navegador con sesión) — tienen su
-// propia autenticación (secreto compartido) y deben quedar fuera del guard de sesión.
-const PUBLIC_WEBHOOK_PATHS = ['/api/whatsapp-incoming']
+// Rutas llamadas por servicios externos (no por un navegador con sesión). Deben traer su
+// propia autenticación (secreto compartido) para quedar fuera del guard de sesión.
+// Vacío hoy: toda ruta exige sesión.
+const PUBLIC_WEBHOOK_PATHS: string[] = []
 
 export async function proxy(request: NextRequest) {
   if (PUBLIC_WEBHOOK_PATHS.some(p => request.nextUrl.pathname.startsWith(p))) {

@@ -36,7 +36,6 @@ Stack: **Next.js 16 + React 19 + Supabase** (BD en la nube compartida — todos 
   en `ACONEX_DOCS_DIR` (varias rutas separadas por `;`). Sin esas carpetas la app funciona igual,
   solo que sin el link de apertura.
 - **Visor 3D**: requiere las credenciales de Autodesk APS en `.env.local`.
-- **Bot WhatsApp**: opcional; requiere el bridge corriendo y la API key de Gemini.
 
 ## Comandos útiles
 

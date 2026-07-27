@@ -10,7 +10,7 @@ Contexto para trabajar en este repo. Léelo completo antes de tocar código.
 ## Stack
 - **Frontend:** Next.js 16 + React 19 + TypeScript (App Router). UI blanco/rojo (`#FF0000`), estilos inline + Tailwind.
 - **Backend/CDE:** Supabase (PostgreSQL) — **project ref `lsoesbsrlfingfckozsq`**. ~75 tablas, prefijo `mining_*`. RLS multi-tenant.
-- **BIM viewer:** Autodesk Forge/APS. **IA:** Gemini (bot). **Docs:** Aconex (local + futura API).
+- **BIM viewer:** Autodesk Forge/APS. **Docs:** Aconex (local + futura API).
 - **Repo:** github.com/atapiadasilva/SaaS- (rama `master`).
 
 ## Comandos
@@ -20,7 +20,7 @@ Contexto para trabajar en este repo. Léelo completo antes de tocar código.
 - El dev server suele lanzarse detached con el `.bat` del Escritorio "HILO Digital - Servidor".
 
 ## Variables de entorno (`.env.local`, NO está en git)
-`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `AUTODESK_CLIENT_ID/SECRET/CALLBACK_URL`, `ACONEX_DOCS_DIR` (rutas locales de PDFs, separadas por `;`), `WA_BRIDGE_*`, `GEMINI_API_KEY/MODEL`. Ver `.env.example`. Pedir valores reales al dueño.
+`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `AUTODESK_CLIENT_ID/SECRET/CALLBACK_URL`, `ACONEX_DOCS_DIR` (rutas locales de PDFs, separadas por `;`). Ver `.env.example`. Pedir valores reales al dueño.
 
 ## Multi-tenant: organizaciones y proyectos
 Jerarquía: **organización (empresa/cliente) → proyecto (unidad de cobro y de datos) → miembros**. RLS: todas las `mining_*` usan la política *"Users can access mining data in their orgs"* (acceso vía `organization_members`).
@@ -69,7 +69,7 @@ Tablas centrales (todas con `project_id`): `mining_cwa`, `mining_cv`, `mining_cw
 ## Rutas principales (App Router)
 `src/app/[org_slug]/projects/[project_id]/`:
 - `panel` (KPIs), `mineria` (explorador CWP + visor 3D + fichas + IWP; el más grande), `planificacion`, `trisemanal` (3WLA), `recursos` (dotación por disciplina), `conciliacion` (salud de cruces), `estado-pago`, `calidad`/`medio-ambiente`/`sso`/`equipos`/`rrhh` (dashboards por depto vía `DeptoDashboard`), `setup`, `onboarding`.
-- Sub-rutas de mineria: `elementos` (editor BIM), `sistemas` (SWP), `documentos`, `bot` (IA), `cwp-ficha/[cwp_id]` (editor de ficha PDF) + `/print`.
+- Sub-rutas de mineria: `elementos` (editor BIM), `sistemas` (SWP), `documentos`, `cwp-ficha/[cwp_id]` (editor de ficha PDF) + `/print`.
 
 APIs en `src/app/api/mining-*` y `project-*`. Scripts de datos en `scripts/` (parsers Python + loaders Node, todos parametrizables por project_id).
 
