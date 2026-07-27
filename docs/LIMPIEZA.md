@@ -88,3 +88,66 @@ pero siguen accesibles por URL y se compilan en cada build.
 
 Borrarlas liberaría otras ~3.000 líneas, pero **cambia URLs** y puede que alguna se use como
 prototipo. Requiere decisión explícita del dueño.
+
+---
+
+## 2026-07-26 · Segunda limpieza — rutas legacy, scripts y dependencias
+
+**Resultado acumulado:** 187 → 152 archivos en `src` · el repo versionado baja de 24 MB a ~13 MB.
+`typecheck` 0 · `build` limpio (100 rutas) · `smoke` 11/11.
+
+**Respaldo previo:** tag `respaldo-antes-limpieza-profunda` y rama `respaldo/pre-limpieza-profunda`.
+
+```bash
+git checkout respaldo-antes-limpieza-profunda   # ver el estado anterior completo
+```
+
+### Rutas fuera del catálogo de módulos (4)
+
+No aparecían en la navegación ni las enlazaba nadie: solo eran alcanzables escribiendo la
+URL a mano. Se compilaban en cada build.
+
+| Ruta | Líneas | Qué era |
+|---|---|---|
+| `[project_id]/awp/` | 1.778 | explorador AWP de la generación anterior, reemplazado por `mineria/` |
+| `[project_id]/lps/` | 558 | Last Planner System |
+| `[project_id]/4d/` | 148 | simulación 4D |
+| `[project_id]/vistas/` | 5 | solo un `redirect` a `mineria` |
+
+En cascada murieron `FourDGanttPanel.tsx` (854) y `Bim4DPlayer.tsx` (593).
+
+### Scripts (27 archivos)
+
+- **19 exploraciones puntuales** — `check-fields.ts` … `check-fields5.ts`, `check-rpc` …
+  `check-rpc3.ts`, `read-excel-headers.ts`. Volcados de depuración de sesiones pasadas;
+  típicamente cinco filas por consola. `scripts/inspeccionar-excel.mjs` cubre ese uso.
+- **4 de Montemina** — importadores de un proyecto que no existe en la base.
+- **4 parches ya aplicados** — `fix_hormigones_shift.js`, `fix-cwp-costs.ts`,
+  `update-prices.ts`, `update-elements-cwa-cv.ts`. Corrigieron datos una vez; volver a
+  ejecutarlos hoy sería peligroso, no útil.
+
+### Otros
+
+- **`scripts/xer_sql/`** — 49 volcados SQL (9,2 MB) del proyecto EIMI00357, inexistente en la base.
+- **3 insumos de datos en la raíz** — `Programa Rev.1 Excel - Andina v2.xlsx`,
+  `Programa_Andina_WBS.xlsx`, `_programa_andina.json`. Son entradas de trabajo, no código.
+- **5 dependencias** sin un solo uso tras la limpieza: `@dnd-kit/core`, `@dnd-kit/sortable`,
+  `@dnd-kit/utilities`, `@tanstack/react-table`, `reactflow`.
+
+**Se mantienen** los `supabase_*.sql` de la raíz: documentan el esquema de la base.
+
+### Hallazgo pendiente: 16 APIs sin consumidor
+
+No se borraron. Una ruta de API puede llamarse desde fuera del front (integración, Postman,
+un script) y el grep no lo ve. Requieren confirmación antes de tocarlas:
+
+```
+4d-schedule · activity-tags · catalog/activate · ingest · mining-iwp-elemento
+mining-iwp-ficha · mining-reporte/html · model-data · model-versions/[id] · parse-mpp
+program · program-links · program/versions · project-column-mapping · project-health
+project-members
+```
+
+Verificado que ninguna la llamaba el front actual ni las rutas recién borradas — `awp/page.tsx`
+no usaba `fetch`, hablaba directo con el cliente de Supabase. `project-health` aparece en el
+smoke test, así que borrarla obliga a editar `scripts/smoke-api.mjs`.
