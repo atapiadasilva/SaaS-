@@ -1,18 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { resolverModulos, type ModuleKey } from '@/lib/modules';
+import { resolverModulos } from '@/lib/modules';
+import { FUENTES } from '@/lib/fuentes-datos';
 
 // GET  ?project_id=  → { active_modules, external_code, fuentes[] } (estado de onboarding)
 // PATCH { project_id, active_modules?, external_code? }
-const FUENTES: { key: string; label: string; tabla: string; modulos: ModuleKey[] }[] = [
-  { key: 'elementos',  label: 'Elementos BIM (modelo 3D)',       tabla: 'mining_elementos',  modulos: ['mineria'] },
-  { key: 'cwp',        label: 'Catálogo AWP (CWA/CV/CWP)',        tabla: 'mining_cwp',        modulos: ['mineria', 'planificacion'] },
-  { key: 'programa',   label: 'Programa (Primavera P6)',         tabla: 'mining_programa',   modulos: ['planificacion', 'recursos'] },
-  { key: 'itemizado',  label: 'Itemizado / Matriz (ECO-2)',      tabla: 'mining_itemizado',  modulos: ['estado-pago', 'conciliacion'] },
-  { key: 'planos',     label: 'Planos vinculados',               tabla: 'mining_planos',     modulos: ['mineria'] },
-  { key: 'documentos', label: 'Documentos Aconex',               tabla: 'mining_doc_aconex', modulos: ['calidad', 'sso', 'medio-ambiente'] },
-  { key: 'trisemanal', label: 'Programa trisemanal (3WLA)',      tabla: 'mining_3wla',       modulos: ['trisemanal'] },
-];
+// El catálogo de fuentes vive en `@/lib/fuentes-datos` — el mismo que usa la vista de
+// cartera, para que el checklist del proyecto y la matriz de la organización no se
+// desincronicen nunca.
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient();
@@ -25,7 +20,16 @@ export async function GET(req: NextRequest) {
   const { data: proj } = await sb.from('projects').select('active_modules, module_config').eq('id', pid).single();
   const counts = await Promise.all(FUENTES.map(async f => {
     const { count } = await sb.from(f.tabla).select('*', { count: 'exact', head: true }).eq('project_id', pid);
-    return { ...f, count: count ?? 0 };
+    const total = count ?? 0;
+    // Además del volumen, cuánta de esa data trae la llave CWP: una fuente cargada pero
+    // sin llave no conecta con el resto del proyecto.
+    let conLlave: number | null = null;
+    if (f.campoCwp && total) {
+      const { count: c2 } = await sb.from(f.tabla).select('*', { count: 'exact', head: true })
+        .eq('project_id', pid).not(f.campoCwp, 'is', null);
+      conLlave = c2 ?? 0;
+    } else if (f.campoCwp) conLlave = 0;
+    return { ...f, count: total, conLlave };
   }));
 
   return NextResponse.json({

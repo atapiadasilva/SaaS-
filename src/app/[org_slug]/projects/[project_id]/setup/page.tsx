@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { Settings2, Save, Loader2, CheckCircle2, Circle, Database, Lock, Code2, Rocket } from 'lucide-react';
 import { MODULE_CATALOG, type ModuleKey, type ModuleCategory } from '@/lib/modules';
 
-interface Fuente { key: string; label: string; count: number; modulos: ModuleKey[] }
+interface Fuente { key: string; label: string; count: number; modulos: ModuleKey[]; conLlave: number | null; campoCwp: string | null }
 const CAT_LABEL: Record<ModuleCategory, string> = { nucleo: 'Núcleo', awp: 'Gestión AWP', departamentos: 'Departamentos' };
 
 export default function SetupPage() {
@@ -103,16 +103,24 @@ export default function SetupPage() {
       {/* Estado de datos (onboarding) */}
       <div className="rounded-2xl border border-slate-200 bg-white p-5">
         <div className="text-[13px] font-black text-[#1A1A1A] flex items-center gap-2 mb-1"><Database className="w-4 h-4 text-slate-400" /> Datos cargados</div>
-        <p className="text-[10.5px] text-slate-400 mb-3">Fuentes que alimentan los módulos. Verde = cargada. Cárgalas con los importadores (scripts) parametrizados por proyecto.</p>
+        <p className="text-[10.5px] text-slate-400 mb-3">Fuentes que alimentan los módulos. La columna <b>llave CWP</b> indica cuánta de esa data está conectada al resto del proyecto: sin llave, la fuente existe pero no cruza con nada.</p>
         <div className="space-y-1.5">
-          {fuentes.map(f => (
-            <div key={f.key} className="flex items-center gap-2.5 py-1.5 border-b border-slate-50 last:border-0">
-              {f.count > 0 ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <Circle className="w-4 h-4 text-slate-300 shrink-0" />}
-              <span className="text-[12px] text-slate-700 flex-1">{f.label}</span>
-              <span className={`text-[11px] font-mono font-bold ${f.count > 0 ? 'text-emerald-700' : 'text-slate-300'}`}>{f.count.toLocaleString('es-CL')}</span>
-              <span className="text-[9px] text-slate-400 w-40 text-right truncate">{f.modulos.join(', ')}</span>
-            </div>
-          ))}
+          {fuentes.map(f => {
+            const pct = f.campoCwp && f.count ? Math.round(((f.conLlave ?? 0) / f.count) * 100) : null;
+            return (
+              <div key={f.key} className="flex items-center gap-2.5 py-1.5 border-b border-slate-50 last:border-0">
+                {f.count > 0 ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <Circle className="w-4 h-4 text-slate-300 shrink-0" />}
+                <span className="text-[12px] text-slate-700 flex-1">{f.label}</span>
+                <span className={`text-[11px] font-mono font-bold ${f.count > 0 ? 'text-emerald-700' : 'text-slate-300'}`}>{f.count.toLocaleString('es-CL')}</span>
+                <span className="w-24 text-right text-[10px] font-bold tabular-nums"
+                  title={f.campoCwp ? `Llave CWP en ${f.campoCwp}` : 'Esta fuente no transporta CWP'}>
+                  {pct == null ? <span className="text-slate-300">—</span>
+                    : <span className={pct >= 98 ? 'text-emerald-700' : pct >= 50 ? 'text-amber-600' : 'text-[#A00000]'}>{pct}% llave</span>}
+                </span>
+                <span className="text-[9px] text-slate-400 w-40 text-right truncate">{f.modulos.join(', ')}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 

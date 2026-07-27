@@ -1,6 +1,7 @@
 import { FolderOpen, Plus } from "lucide-react";
 import Link from "next/link";
 import ProjectsGrid from "@/components/organizations/ProjectsGrid";
+import CarteraMadurez from "@/components/organizations/CarteraMadurez";
 import { requireOrgAdmin } from "@/lib/guards";
 import { createClient } from "@/lib/supabase/server";
 
@@ -66,7 +67,10 @@ export default async function ProyectosPage({
           </Link>
         </div>
       ) : (
-        <ProjectsGrid projects={allProjects} orgSlug={org_slug} isOwner={isOwner} />
+        <>
+          <ProjectsGrid projects={allProjects} orgSlug={org_slug} isOwner={isOwner} />
+          <CarteraMadurez orgId={orgData.id} orgSlug={org_slug} />
+        </>
       )}
     </div>
   );
