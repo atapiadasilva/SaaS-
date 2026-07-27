@@ -47,3 +47,6 @@ next-env.d.ts
 
 # artefactos locales del bot
 qr_whatsapp.png
+
+# Grafo de conocimiento generado por graphify (regenerable con: graphify update .)
+graphify-out/

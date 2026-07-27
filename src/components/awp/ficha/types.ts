@@ -16,6 +16,8 @@ export type Bloque =
   | { id: string; tipo: 'divisor' };
 
 export interface FichaData {
+  /** Identidad del proyecto, para el pie de la ficha impresa. */
+  proyecto?: { nombre: string | null; codigo_externo: string | null };
   cwp: {
     cwp_id: string; cwp_nombre: string | null; disciplina_cod: string | null; disciplina: string | null;
     disciplina_grupo: string | null; cwa_id: string | null; cv_id: string | null; ewp_id: string | null;

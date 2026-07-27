@@ -12,6 +12,10 @@ const clp = (v: number | null | undefined) => v == null ? '—' : '$' + Math.rou
 const clpMM = (v: number | null | undefined) => v == null ? '—' : '$' + (v / 1e6).toLocaleString('es-CL', { maximumFractionDigits: 0 }) + ' MM';
 const num = (v: number | null | undefined) => v == null ? '—' : Math.round(v).toLocaleString('es-CL');
 const pct = (ok: number, total: number) => total ? Math.round(ok / total * 1000) / 10 : 0;
+// Porcentaje presentable: sin base no hay porcentaje, y mostrar "NaN%" en un panel
+// ejecutivo es peor que no mostrar nada.
+const pctDe = (parte: number | null | undefined, base: number | null | undefined) =>
+  base ? `${Math.round((Number(parte) / base) * 100)}%` : '—';
 
 function parseFecha(s: string | null): Date | null {
   if (!s) return null;
@@ -61,28 +65,31 @@ export default function PanelPage() {
     return { dia, total, pct: Math.min(100, Math.round(dia / total * 1000) / 10) };
   }, [d]);
 
+  // Observaciones abiertas del proyecto, derivadas de mining_consideraciones.
+  // Antes esta lista estaba escrita a mano con los entregables de Collahuasi, así que
+  // cualquier otro proyecto veía datos ajenos. Ahora sale de lo que está cargado.
   const entregables = useMemo(() => {
     if (!d) return [];
     const abiertas: any[] = d.consideraciones_abiertas ?? [];
-    const busca = (frag: string) => abiertas.find(c => c.titulo?.toUpperCase().includes(frag.toUpperCase()));
-    const out: { nombre: string; estado: string; nivel: 'ok' | 'warn' | 'crit'; nota?: string }[] = [];
-
-    out.push({ nombre: 'Programa de Construcción (33-PG-0001)', estado: busca('Programa de Construcción') ? 'Emitido p/aprobación — sin aprobación CMDIC' : 'Aprobado', nivel: busca('Programa de Construcción') ? 'warn' : 'ok', nota: 'Rev B · 504 días · 12 hitos' });
-    const itp = busca('ITP');
-    out.push({ nombre: 'ITP Montaje Estructuras Metálicas', estado: itp ? 'RECHAZADO — corregir 2 observaciones (grout)' : 'Aprobado', nivel: itp ? 'crit' : 'ok', nota: 'Afecta 312101.S001 · 322101.S001 · 710101.S001' });
-    const epr = busca('Entregables (EPR)');
-    out.push({ nombre: 'Listado de Entregables (EPR)', estado: epr ? 'Rechazado desde 16-06' : 'OK', nivel: epr ? 'warn' : 'ok' });
-    const rs = busca('Reporte Avance Semanal');
-    out.push({ nombre: 'Reporte Avance Semanal', estado: rs ? 'N°002 rechazado por Control Doc.' : 'Al día', nivel: rs ? 'warn' : 'ok', nota: d.avance.semanal ? `N°001: real ${d.avance.semanal.real}% vs plan ${d.avance.semanal.plan}%` : undefined });
-    out.push({ nombre: 'Estado de Pago N°1 (Anticipo)', estado: d.contrato.ep1 ? `Cursado — líquido ${clpMM(d.contrato.ep1.liquido)}` : 'Sin EP', nivel: d.contrato.ep1 ? 'ok' : 'warn', nota: d.contrato.ep1?.periodo });
-    const ncr = abiertas.find(c => c.tipo === 'NCR');
-    out.push({ nombre: 'NCR abiertas', estado: ncr ? ncr.titulo : 'Sin NCR abiertas', nivel: ncr ? 'crit' : 'ok' });
-    out.push({ nombre: 'Ingeniería IFC (resp. CMDIC)', estado: '~192 de 1.200 planos recibidos (16%)', nivel: 'crit', nota: 'Nota Sección 8 del Programa — riesgo de apertura de frentes' });
-    out.push({ nombre: 'Procedimientos CWP', estado: '33 de 36 recepcionados', nivel: 'warn' });
-    const ma = busca('Aspectos e Impactos');
-    out.push({ nombre: 'Matriz Aspectos e Impactos MA', estado: ma ? 'Aprobada con comentarios (Rev B)' : 'Aprobada', nivel: ma ? 'warn' : 'ok' });
-    out.push({ nombre: 'Reportes Diarios de terreno', estado: 'Casi diarios, con 4-5 días de atraso en Aconex', nivel: 'warn', nota: `${(d.dotacion ?? []).length} reportes procesados` });
-    return out;
+    const nivelDe = (sev: string): 'ok' | 'warn' | 'crit' =>
+      sev === 'BLOQUEANTE' ? 'crit' : sev === 'ADVERTENCIA' ? 'warn' : 'ok';
+    // mining_consideraciones trae la misma observación repetida (varias cargas del mismo
+    // hallazgo). Para el panel interesa el hecho, no cuántas veces se registró.
+    const vistas = new Set<string>();
+    return abiertas
+      .filter(c => {
+        const clave = `${c.titulo ?? ''}|${c.depto ?? ''}|${c.tipo ?? ''}`;
+        if (vistas.has(clave)) return false;
+        vistas.add(clave);
+        return true;
+      })
+      .sort((a, b) => (a.severidad === 'BLOQUEANTE' ? -1 : 1) - (b.severidad === 'BLOQUEANTE' ? -1 : 1))
+      .map(c => ({
+        nombre: c.titulo ?? '(sin título)',
+        estado: [c.tipo, c.estado].filter(Boolean).join(' · ') || 'Abierta',
+        nivel: nivelDe(c.severidad),
+        nota: [c.depto, c.cwp_id, c.fecha_limite && `límite ${c.fecha_limite}`].filter(Boolean).join(' · ') || undefined,
+      }));
   }, [d]);
 
   const proximosHitos = useMemo(() => {
@@ -115,18 +122,32 @@ export default function PanelPage() {
     <div style={{ maxWidth: 1500, margin: '0 auto', paddingBottom: 48 }}>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontWeight: 'bold', fontSize: 22, color: '#1A1A1A' }}>PANEL <span style={{ color: '#FF0000' }}>KPI</span></h1>
-        <p style={{ fontSize: 11.5, color: '#757575' }}>Contrato CC-06 Obras Civiles y Montaje Puerto Collahuasi — vista ejecutiva consolidada.</p>
+        <p style={{ fontSize: 11.5, color: '#757575' }}>
+          {(() => {
+            const { codigo_externo: cod, nombre } = d.proyecto ?? {};
+            // El nombre del proyecto suele venir ya con el código ("EIMI00413 - Andina"):
+            // no lo repetimos delante.
+            const titulo = nombre && cod && !nombre.includes(cod) ? `${cod} · ${nombre}` : (nombre || cod || 'Proyecto');
+            return `${titulo} — vista ejecutiva consolidada.`;
+          })()}
+        </p>
       </div>
 
       {/* ── FILA 1: héroe económico/plazo/avance ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
-        <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>VALOR CONTRATO</div><div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A' }}>{clpMM(d.contrato.valor_clp)}</div><div style={{ fontSize: 9.5, color: '#9E9E9E' }}>{num(it.eco2_hh)} HH · 486 items ECO-2</div></Card>
-        <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>PLAZO</div><div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A' }}>Día {plazo?.dia} <span style={{ fontSize: 12, color: '#757575' }}>/ {plazo?.total}</span></div>
-          <div style={{ height: 5, borderRadius: 999, backgroundColor: '#F0F0F0', overflow: 'hidden', marginTop: 5 }}><div style={{ height: '100%', width: `${plazo?.pct ?? 0}%`, backgroundColor: '#FF0000', borderRadius: 999 }} /></div>
-          <div style={{ fontSize: 9.5, color: '#9E9E9E', marginTop: 3 }}>{d.contrato.inicio} → {d.contrato.fin} ({plazo?.pct}%)</div></Card>
-        <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>AVANCE FÍSICO (BMP)</div><div style={{ fontSize: 21, fontWeight: 900, color: d.avance.fisico_pct > 0 ? '#166534' : '#1A1A1A' }}>{d.avance.fisico_pct.toFixed(1)}%</div><div style={{ fontSize: 9.5, color: '#9E9E9E' }}>Semanal N°001: {d.avance.semanal?.real ?? 0}% real / {d.avance.semanal?.plan ?? 0}% plan</div></Card>
+        <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>VALOR CONTRATO</div><div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A' }}>{clpMM(d.contrato.valor_clp)}</div><div style={{ fontSize: 9.5, color: '#9E9E9E' }}>{num(it.eco2_hh)} HH · {num(d.proyecto?.n_items)} items ECO-2</div></Card>
+        <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>PLAZO</div>
+          {plazo ? (<>
+            <div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A' }}>Día {plazo.dia} <span style={{ fontSize: 12, color: '#757575' }}>/ {plazo.total}</span></div>
+            <div style={{ height: 5, borderRadius: 999, backgroundColor: '#F0F0F0', overflow: 'hidden', marginTop: 5 }}><div style={{ height: '100%', width: `${plazo.pct}%`, backgroundColor: '#FF0000', borderRadius: 999 }} /></div>
+            <div style={{ fontSize: 9.5, color: '#9E9E9E', marginTop: 3 }}>{d.contrato.inicio} → {d.contrato.fin} ({plazo.pct}%)</div>
+          </>) : (<>
+            <div style={{ fontSize: 21, fontWeight: 900, color: '#BDBDBD' }}>—</div>
+            <div style={{ fontSize: 9.5, color: '#9E9E9E', marginTop: 8 }}>Sin programa de construcción cargado</div>
+          </>)}</Card>
+        <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>AVANCE FÍSICO (BMP)</div><div style={{ fontSize: 21, fontWeight: 900, color: d.avance.fisico_pct > 0 ? '#166534' : '#1A1A1A' }}>{d.avance.fisico_pct.toFixed(1)}%</div><div style={{ fontSize: 9.5, color: '#9E9E9E' }}>{d.avance.semanal ? `Semanal ${d.avance.semanal.corte ?? ''}: ${d.avance.semanal.real}% real / ${d.avance.semanal.plan}% plan` : 'Sin reporte semanal cargado'}</div></Card>
         <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>MONTO GANADO</div><div style={{ fontSize: 21, fontWeight: 900, color: '#166534' }}>{clpMM(d.avance.financiero_clp)}</div><div style={{ fontSize: 9.5, color: '#9E9E9E' }}>{d.avance.financiero_pct.toFixed(2)}% del contrato</div></Card>
-        <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>ANTICIPO CURSADO</div><div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A' }}>{clpMM(d.contrato.anticipo_clp)}</div><div style={{ fontSize: 9.5, color: '#9E9E9E' }}>EP N°1 · 10% del contrato</div></Card>
+        <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>ANTICIPO CURSADO</div><div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A' }}>{clpMM(d.contrato.anticipo_clp)}</div><div style={{ fontSize: 9.5, color: '#9E9E9E' }}>{d.contrato.ep1 ? `EP ${d.contrato.ep1.n_cmdic ?? ''} ${d.contrato.ep1.periodo ?? ''}`.trim() : 'Sin estado de pago cargado'}</div></Card>
         <Card style={{ border: (d.consideraciones_abiertas ?? []).some((c: any) => c.severidad === 'BLOQUEANTE') ? '2px solid #FF0000' : '2px solid #EEEEEE' }}>
           <div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>BLOQUEANTES ABIERTAS</div>
           <div style={{ fontSize: 21, fontWeight: 900, color: '#FF0000' }}>{(d.consideraciones_abiertas ?? []).filter((c: any) => c.severidad === 'BLOQUEANTE').length}</div>
@@ -148,8 +169,8 @@ export default function PanelPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}><Semaforo nivel="warn" /><span style={{ fontSize: 11, fontWeight: 900 }}>HH: tres fuentes, tres números</span></div>
           <div style={{ fontSize: 10.5, color: '#33475B', lineHeight: 1.7 }}>
             ECO-2 (contrato): <b>{num(it.eco2_hh)} HH</b><br />
-            Programa P333: <b>{num(it.prog_hh)} HH</b> ({Math.round((it.prog_hh / it.eco2_hh) * 100)}% del ECO-2)<br />
-            CWP planner: <b>{num(it.cwp_hh)} HH</b> ({Math.round((it.cwp_hh / it.eco2_hh) * 100)}% del ECO-2)
+            Programa P333: <b>{num(it.prog_hh)} HH</b> ({pctDe(it.prog_hh, it.eco2_hh)} del ECO-2)<br />
+            CWP planner: <b>{num(it.cwp_hh)} HH</b> ({pctDe(it.cwp_hh, it.eco2_hh)} del ECO-2)
           </div>
         </Card>
         <Card>
@@ -167,8 +188,13 @@ export default function PanelPage() {
       </div>
 
       {/* ── FILA 3: entregables clave ── */}
-      <SecTitle icon={FileText}>Entregables clave del contrato</SecTitle>
+      <SecTitle icon={FileText}>Observaciones abiertas{entregables.length ? ` (${entregables.length})` : ''}</SecTitle>
       <Card style={{ padding: 0, overflow: 'hidden' }}>
+        {!entregables.length && (
+          <div style={{ padding: '14px 16px', fontSize: 11.5, color: '#9E9E9E' }}>
+            Sin observaciones abiertas registradas para este proyecto.
+          </div>
+        )}
         {entregables.map((e, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 16px', borderBottom: i < entregables.length - 1 ? '1px solid #F5F5F5' : 'none', backgroundColor: e.nivel === 'crit' ? '#FFF5F5' : 'white' }}>
             <Semaforo nivel={e.nivel} />
@@ -198,7 +224,7 @@ export default function PanelPage() {
           </div>
         </div>
         <div>
-          <SecTitle icon={Link2}>Compromisos contractuales (de las 33 cartas)</SecTitle>
+          <SecTitle icon={Link2}>Compromisos contractuales{(d.compromisos ?? []).length ? ` (${d.compromisos.length})` : ''}</SecTitle>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {(d.compromisos ?? []).slice(0, 10).map((c: any, i: number) => (
               <Card key={i} style={{ padding: '10px 14px' }}>
@@ -239,12 +265,12 @@ export default function PanelPage() {
             <div style={{ display: 'flex', gap: 12, marginTop: 6, fontSize: 9, color: '#757575' }}>
               <span><span style={{ display: 'inline-block', width: 8, height: 8, backgroundColor: '#FF0000', borderRadius: 2 }} /> MOD (directos)</span>
               <span><span style={{ display: 'inline-block', width: 8, height: 8, backgroundColor: '#FCA5A5', borderRadius: 2 }} /> MOI (indirectos)</span>
-              <span style={{ marginLeft: 'auto' }}>HH acum: {num(Number(ultDot?.mod_hh_acum) + Number(ultDot?.moi_hh_acum))}</span>
+              <span style={{ marginLeft: 'auto' }}>HH acum: {ultDot ? num((Number(ultDot.mod_hh_acum) || 0) + (Number(ultDot.moi_hh_acum) || 0)) : '—'}</span>
             </div>
           </Card>
         </div>
         <div>
-          <SecTitle icon={CalendarClock}>Próximos hitos (multa 0,3%/día)</SecTitle>
+          <SecTitle icon={CalendarClock}>Próximos hitos del programa</SecTitle>
           <Card style={{ padding: 0, overflow: 'hidden' }}>
             {proximosHitos.filter((h: any) => h.f >= hoy).slice(0, 6).map((h: any, i: number) => {
               const dias = Math.round((h.f.getTime() - hoy.getTime()) / 86400000);

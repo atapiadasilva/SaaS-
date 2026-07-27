@@ -277,7 +277,7 @@ export default function FichaDocument({ data, orientacion, bloques }: { data: Fi
       <Cabecera d={data} />
       {bloques.map(b => <RenderBloque key={b.id} b={b} d={data} />)}
       <div className="foot">
-        <span>HILO Digital — EIMI00417 Puerto Collahuasi · Ficha generada desde la red de datos AWP</span>
+        <span>HILO Digital — {[data.proyecto?.codigo_externo, data.proyecto?.nombre].filter(Boolean).join(' ') || 'Proyecto'} · Ficha generada desde la red de datos AWP</span>
         <span>{data.cwp.cwp_id} · {new Date().toLocaleDateString('es-CL')}</span>
       </div>
     </div>

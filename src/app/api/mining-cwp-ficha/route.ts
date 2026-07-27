@@ -84,7 +84,14 @@ export async function GET(req: NextRequest) {
     };
   });
 
+  // Nombre real del proyecto para el pie de la ficha impresa (antes era fijo "EIMI00417").
+  const { data: projRow } = await sb.from('projects').select('name, module_config').eq('id', projectId).maybeSingle();
+
   return NextResponse.json({
+    proyecto: {
+      nombre: projRow?.name ?? null,
+      codigo_externo: projRow?.module_config?.external_code ?? null,
+    },
     cwp: {
       cwp_id: cwp.cwp_id, cwp_nombre: cwp.cwp_nombre, disciplina_cod: cwp.disciplina_cod,
       disciplina: cwp.disciplina, disciplina_grupo: cwp.disciplina_grupo,
