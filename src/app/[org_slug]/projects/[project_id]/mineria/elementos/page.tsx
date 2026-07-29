@@ -380,7 +380,7 @@ export default function ElementosEditorPage() {
   const [paintTarget, setPaintTarget] = useState<PaintTarget | null>(null);
   const [paintCount, setPaintCount] = useState(0);
 
-  // Asignación rápida de elementos SIN SP3D_MONIKER: click en el modelo → popup con CWP destino →
+  // Asignación rápida: clic en el modelo → popup con CWP destino →
   // guardado inmediato en lote por GUID del modelo (sin armar pintura). Con "seguir asignando" activo,
   // cada click siguiente asigna directo al mismo CWP — encadena elementos con un click cada uno.
   const [quickAssign, setQuickAssign] = useState<{ items: { guid: string; name: string; dbId: number }[] } | null>(null);
@@ -642,13 +642,13 @@ export default function ElementosEditorPage() {
     if (!viewerReady) return; // se aplicará en onReady si corresponde, o el usuario reintenta
     setViewerStatus('Aislando elementos…');
     try {
-      const itemProp = (bimConfig?.itemCategory && bimConfig?.itemPropName) ? `${bimConfig.itemCategory}/${bimConfig.itemPropName}` : (bimConfig?.itemPropName || 'SP3D_MONIKER');
+      const itemProp = llavesDelProyecto(bimConfig).join(',');
       const dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
       if (dbIds.length) {
         lastIsolatedDbIdsRef.current = dbIds;
         viewerRef.current.showOnly(dbIds, ghostMode);
         viewerRef.current.fitToView(dbIds);
-      } else setToast('No se encontraron esos elementos en el modelo (revisa el nombre de propiedad SP3D_MONIKER en DATA_EIMISA).');
+      } else setToast('No se encontraron esos elementos en el modelo. Revisa las llaves configuradas del proyecto en Setup.');
     } finally {
       setViewerStatus(null);
     }
@@ -748,9 +748,9 @@ export default function ElementosEditorPage() {
         const monikers = groups[codigos[i]];
         if (!monikers?.length) { perGroupDbIds.push([]); continue; }
         esperados += monikers.length;
-        const itemProp = (bimConfig?.itemCategory && bimConfig?.itemPropName) ? `${bimConfig.itemCategory}/${bimConfig.itemPropName}` : (bimConfig?.itemPropName || 'SP3D_MONIKER');
+        const itemProp = llavesDelProyecto(bimConfig).join(',');
         let dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
-        // resolveManyByProperty puede devolver dbIds de ENSAMBLAJE (donde vive la propiedad SP3D_MONIKER),
+        // resolveManyByProperty puede devolver dbIds de ENSAMBLAJE (donde vive la llave),
         // mientras que treeBranch.leafDbIds son dbIds HOJA — sin expandir a hojas antes de intersectar,
         // el restrictSet nunca calzaba y la restricción quedaba sin efecto (coloreaba todo el modelo).
         if (restrictSet) dbIds = viewerRef.current.getLeafDbIds(dbIds).filter(id => restrictSet.has(id));
@@ -787,7 +787,7 @@ export default function ElementosEditorPage() {
       const groups = await fetchMonikerGroups(nivel, [codigo]);
       const monikers = groups[codigo] ?? [];
       if (!monikers.length) { setToast(`Sin elementos para ${codigo} en el modelo.`); return; }
-      const itemProp = (bimConfig?.itemCategory && bimConfig?.itemPropName) ? `${bimConfig.itemCategory}/${bimConfig.itemPropName}` : (bimConfig?.itemPropName || 'SP3D_MONIKER');
+      const itemProp = llavesDelProyecto(bimConfig).join(',');
       const dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
       if (dbIds.length) viewerRef.current.fitToView(dbIds);
       else setToast(`Sin elementos para ${codigo} en el modelo.`);
@@ -809,7 +809,7 @@ export default function ElementosEditorPage() {
         const monikers = groups[sel.codigo] ?? [];
         esperados += monikers.length;
         if (!monikers.length) { perSelDbIds.push([]); continue; }
-        const itemProp = (bimConfig?.itemCategory && bimConfig?.itemPropName) ? `${bimConfig.itemCategory}/${bimConfig.itemPropName}` : (bimConfig?.itemPropName || 'SP3D_MONIKER');
+        const itemProp = llavesDelProyecto(bimConfig).join(',');
         const dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
         perSelDbIds.push(dbIds);
         allDbIds.push(...dbIds);
@@ -834,8 +834,11 @@ export default function ElementosEditorPage() {
 
   const armPaint = useCallback((nivel: Nivel, codigo: string, r: number, g: number, b: number, a: number) => {
     setShowViewer(true);
-    setPaintCount(0);
-    paintedDbIdsRef.current = new Set();
+    // La selección en curso NO se descarta al cambiar de paquete destino: se repinta con el
+    // color nuevo y queda lista para guardarse ahí. Así se puede seleccionar una vez y repartir
+    // entre varios CWP sin volver a elegir los elementos.
+    const pendientes = [...paintedDbIdsRef.current];
+    if (pendientes.length && viewerRef.current) viewerRef.current.colorDbIds(pendientes, r, g, b, a);
     setPaintTarget({ nivel, codigo, r, g, b, a });
   }, []);
 
@@ -907,10 +910,13 @@ export default function ElementosEditorPage() {
       const creados = results.reduce((a, r) => a + r.created, 0);
 
       ajustarConteoLocal(paintTarget.codigo, updated + creados);
-      setToast(`Guardado: ${updated} reasignado(s)`
-        + (creados ? ` · ${creados} nuevo(s) desde el modelo` : '')
-        + (porGuid ? ` · ${porGuid} identificado(s) por GUID del modelo` : '')
-        + '.');
+      // Un elemento pertenece a un solo CWP: se deja pintado con el color del destino para que
+      // la vista coincida con lo guardado, sin esperar a recargar. El modo pintura sigue
+      // activo, así se puede cambiar de paquete y seguir asignando sin rearmar nada.
+      viewerRef.current.colorDbIds(dbIds, paintTarget.r, paintTarget.g, paintTarget.b, paintTarget.a);
+      setToast(`✓ ${(updated + creados).toLocaleString('es-CL')} en ${paintTarget.codigo}`
+        + (porGuid ? ` · ${porGuid.toLocaleString('es-CL')} por GUID` : '')
+        + ' — elige otro CWP en la lista para seguir.');
       paintedDbIdsRef.current = new Set();
       setPaintCount(0);
       loadBuckets();
@@ -1463,7 +1469,7 @@ export default function ElementosEditorPage() {
                   <span className="text-[10.5px] font-bold truncate">
                     {paintTarget.a === 0
                       ? `Restaurando color original → sacando de ${NIVEL_LABEL[paintTarget.nivel]} · ${paintCount} seleccionado(s) sin guardar`
-                      : `Pintura activa → ${NIVEL_LABEL[paintTarget.nivel]} ${paintTarget.codigo} · ${paintCount} seleccionado(s) sin guardar`}
+                      : `Asignando a ${paintTarget.codigo} · ${paintCount} seleccionado(s) sin guardar — clic en otro CWP de la lista para cambiar de destino`}
                   </span>
                   <button
                     onClick={resetPaintSelection} disabled={!paintCount}
@@ -1555,11 +1561,14 @@ export default function ElementosEditorPage() {
                     onReady={() => {
                       viewerRef.current?.setMultiSelect(multiSelectOn);
                       setViewerReady(true);
-                      // Precarga el índice de SP3D_MONIKER apenas el modelo está listo (en vez de
-                      // esperar al primer click en "Colorear") — así el primer uso ya no se ve lento.
-                      // Se da un respiro de 1.5s antes de arrancar para que el resto del onReady
-                      // (árbol, paneles) termine de pintarse sin competir con este fetch pesado.
-                      setTimeout(() => { viewerRef.current?.buildPropertyMultiIndex(MONIKER_PROP).catch(() => {}); }, 1500);
+                      // Precarga el índice de la llave principal del proyecto apenas el modelo
+                      // está listo, en vez de esperar al primer clic en "Colorear": así el primer
+                      // uso no se siente lento. Espera 1,5 s para no competir con el resto del
+                      // onReady (árbol, paneles) mientras se pinta.
+                      setTimeout(() => {
+                        const principal = llavesDelProyecto(bimConfig)[0];
+                        if (principal) viewerRef.current?.buildPropertyMultiIndex(principal).catch(() => {});
+                      }, 1500);
                     }}
                     onSelectionChange={onViewerSelectionChange}
                   />
@@ -1592,17 +1601,16 @@ export default function ElementosEditorPage() {
         <div className="fixed bottom-5 right-5 bg-[#08203F] text-white text-[11.5px] font-semibold px-4 py-2.5 rounded-lg shadow-xl z-50">{toast}</div>
       )}
 
-      {/* Asignación rápida de elementos sin SP3D_MONIKER */}
+      {/* Asignación rápida: clic en el modelo → elegir paquete destino */}
       {quickAssign && (
         <div className="fixed bottom-16 right-5 z-50 w-[350px] rounded-2xl border-2 border-slate-200 bg-white shadow-2xl p-4">
-          <div className="text-[11.5px] font-black text-[#1A1A1A]">Elemento sin SP3D_MONIKER</div>
+          <div className="text-[11.5px] font-black text-[#1A1A1A]">Asignar a un CWP</div>
           <div className="text-[10px] text-slate-500 mb-2.5 truncate" title={quickAssign.items.map(i => i.name).join(', ')}>
-            {quickAssign.items.length === 1 ? (quickAssign.items[0].name || 'sin nombre') : `${quickAssign.items.length} elementos seleccionados`}
-            {' '}— se agrega por GUID del modelo y queda para dar de alta en SmartPlant 3D.
+            {quickAssign.items.length === 1 ? (quickAssign.items[0].name || 'sin nombre') : `${quickAssign.items.length.toLocaleString('es-CL')} elementos seleccionados`}
           </div>
           <input
             list="quick-cwp-list" value={quickCodigo} onChange={e => setQuickCodigo(e.target.value)}
-            placeholder="CWP destino… (ej: 322101.C001)" autoFocus
+            placeholder={catalog.length ? `CWP destino… (ej: ${catalog[0].cwp_id})` : 'CWP destino…'} autoFocus
             className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-[11px] font-mono mb-2 outline-none focus:border-red-400"
           />
           <datalist id="quick-cwp-list">
@@ -1610,7 +1618,7 @@ export default function ElementosEditorPage() {
           </datalist>
           <label className="flex items-center gap-1.5 text-[10px] text-slate-500 mb-3 cursor-pointer">
             <input type="checkbox" checked={quickSticky} onChange={e => setQuickSticky(e.target.checked)} className="accent-[#FF0000]" />
-            Seguir asignando a este CWP con cada click en el modelo
+            Seguir asignando a este CWP con cada clic en el modelo
           </label>
           <div className="flex gap-2 justify-end">
             <button onClick={() => setQuickAssign(null)} className="px-3 py-1.5 text-[10.5px] font-bold rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">Cancelar</button>
@@ -1630,7 +1638,7 @@ export default function ElementosEditorPage() {
       )}
       {quickSticky && quickCodigo && !quickAssign && (
         <div className="fixed bottom-16 right-5 z-50 flex items-center gap-2 rounded-full bg-[#0a1628] text-white pl-4 pr-2 py-2 shadow-2xl text-[10.5px]">
-          <span>Asignación rápida sin-moniker → <b className="font-mono">{quickCodigo}</b> · haz click en el modelo</span>
+          <span>Asignando a <b className="font-mono">{quickCodigo}</b> · haz clic en el modelo</span>
           <button onClick={() => setQuickSticky(false)} className="rounded-full bg-white/15 hover:bg-white/25 px-2.5 py-1 font-bold">Detener</button>
         </div>
       )}
@@ -1686,8 +1694,8 @@ function RowItem({ r, checked, onToggle, onApply, onIsolate, visibleCols, applyi
       <td className="px-2 py-1.5 font-mono text-[10px] text-slate-500 max-w-[160px] truncate">
         <span className="truncate" title={r.sp3d_moniker}>{r.sp3d_moniker}</span>
         {r.requiere_alta_sp3d && (
-          <span className="ml-1 px-1 py-0 rounded text-[8px] font-black uppercase bg-red-100 text-red-600" title={`Sin SP3D_MONIKER real — dar de alta en SmartPlant 3D (GUID: ${r.guid_modelo ?? '—'})`}>
-            Dar de alta
+          <span className="ml-1 px-1 py-0 rounded text-[8px] font-black uppercase bg-slate-100 text-slate-500" title={`Identificado por GUID del modelo: ${r.guid_modelo ?? '—'}`}>
+            GUID
           </span>
         )}
       </td>
