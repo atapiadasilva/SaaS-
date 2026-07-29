@@ -1148,6 +1148,12 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
       },
 
       resolveMonikers: async (monikers, propNameStr = 'SP3D_MONIKER') => {
+        // Un identificador puede ser el valor de una propiedad del modelo (SP3D_MONIKER, TAG,
+        // ASSEMBLY_POS…) o directamente el GUID nativo del elemento. Antes se distinguían por
+        // un prefijo "SIN-MONIKER::" que debía haber puesto quien guardó; si faltaba, el GUID
+        // se buscaba como si fuera un TAG y no aparecía nunca. Ahora se prueban las
+        // propiedades primero y TODO lo que quede sin resolver se busca contra el mapping de
+        // externalId, sin depender de ninguna marca previa.
         const real: string[] = [];
         const guids: string[] = [];
         const SYNTH_PREFIX = 'SIN-MONIKER::';
@@ -1157,6 +1163,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         }
         const seen = new Set<number>();
         const result: number[] = [];
+        const resueltosPorProp = new Set<string>();
         if (real.length) {
           const props = propNameStr.split(',').map(p => p.trim()).filter(Boolean);
           const keySet = new Set(real.map(v => v.trim().toLowerCase()));
@@ -1171,12 +1178,20 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
             }
 
             for (const key of keySet) {
-              for (const dbId of (ciIdx[key] ?? [])) {
+              const encontrados = ciIdx[key] ?? [];
+              if (encontrados.length) resueltosPorProp.add(key);
+              for (const dbId of encontrados) {
                 if (!seen.has(dbId)) { seen.add(dbId); result.push(dbId); }
               }
             }
           }
         }
+        // Todo lo que no calzó con ninguna propiedad se intenta como GUID nativo: en modelos
+        // que no vienen de SmartPlant (AutoCAD, Tekla, Revit) el identificador ES el externalId.
+        for (const m of real) {
+          if (!resueltosPorProp.has(m.trim().toLowerCase())) guids.push(m);
+        }
+
         if (guids.length && modelRef.current) {
           try {
             const mapping = await new Promise<Record<string, number>>((res, rej) => {
