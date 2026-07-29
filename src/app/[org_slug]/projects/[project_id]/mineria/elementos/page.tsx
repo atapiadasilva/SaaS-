@@ -20,6 +20,9 @@ const ForgeViewer = dynamic(() => import('@/components/awp/ForgeViewer'), { ssr:
 const CWP_PROP = 'CWP';
 // Clave real de enlace al modelo: la pestaña/categoría "DATA_EIMISA" escrita por el plugin
 // DataTools trae la propiedad SP3D_MONIKER (no la genérica "SP3d Moniker" de SmartPlant).
+import { llavesDelProyecto, valorDeLlave } from '@/lib/llaves-modelo';
+
+// Llave heredada de SmartPlant 3D. El catálogo completo vive en @/lib/llaves-modelo.
 const MONIKER_PROP = 'SP3D_MONIKER';
 const PAGE_SIZE = 100;
 
@@ -351,6 +354,10 @@ export default function ElementosEditorPage() {
 
   const [bimUrn, setBimUrn] = useState<string | null>(null);
   const [bimConfig, setBimConfig] = useState<BimConfig | null>(null);
+  // Espejo en ref: los callbacks del visor se crean una vez y no deben re-suscribirse solo
+  // porque llegó la configuración del modelo.
+  const bimConfigRef = useRef<BimConfig | null>(null);
+  useEffect(() => { bimConfigRef.current = bimConfig; }, [bimConfig]);
   const [showPicker, setShowPicker] = useState(false);
   const [showViewer, setShowViewer] = useState(true);
   const [viewerReady, setViewerReady] = useState(false);
@@ -828,59 +835,59 @@ export default function ElementosEditorPage() {
     const dbIds = [...paintedDbIdsRef.current];
     setViewerStatus(`Guardando ${dbIds.length} elemento(s) en ${NIVEL_LABEL[paintTarget.nivel]} ${paintTarget.codigo}…`);
     try {
-      const props = await viewerRef.current.loadBulkElementProps(dbIds, [MONIKER_PROP]);
-      const monikers = props.filter(p => p.props[MONIKER_PROP]).map(p => p.props[MONIKER_PROP]);
-      const sinMoniker = props.filter(p => !p.props[MONIKER_PROP]);
-      if (!monikers.length && !sinMoniker.length) { setToast('No se pudo leer los elementos seleccionados.'); return; }
+      // La llave que identifica un elemento depende de la herramienta que lo originó: moniker
+      // en SmartPlant, posición de ensamblaje en Tekla, ElementId en Revit, TAG en AutoCAD.
+      // Se prueban en orden y, si el elemento no publica ninguna, se usa su GUID nativo, que
+      // existe siempre. Todo va por el mismo camino y en lote: tratar el GUID como excepción
+      // obligaba a una petición por elemento y no terminaba nunca en modelos grandes.
+      const llaves = llavesDelProyecto(bimConfig);
+      const props = await viewerRef.current.loadBulkElementProps(dbIds, llaves);
 
-      // Moniker → nombre del elemento en el modelo — si el moniker no tiene fila todavía en
-      // mining_elementos (geometría agregada al modelo después del último import desde SmartPlant 3D),
-      // el PATCH la crea usando este nombre, en vez de bloquear la clasificación.
+      const monikers: string[] = [];
       const monikerNames: Record<string, string> = {};
-      for (const p of props) if (p.props[MONIKER_PROP]) monikerNames[p.props[MONIKER_PROP]] = p.name;
+      const sinLlave: { dbId: number; name: string }[] = [];
 
-      let updated = 0, creados = 0;
-      if (monikers.length) {
-        const results = await runWithConcurrency(chunkMonikersForUrl(monikers), 6, async chunk => {
-          const res = await fetchWithRetry('/api/mining-elementos', {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              project_id, nivel: paintTarget.nivel, newValue: paintTarget.codigo, monikers: chunk,
-              origen: `pintura_3d_${paintTarget.nivel}`, monikerNames,
-            }),
-          });
-          const d = await parseJsonOrThrow(res);
-          return { updated: d.updated ?? chunk.length, created: d.created ?? 0 };
-        });
-        updated = results.reduce((a, r) => a + r.updated, 0);
-        creados = results.reduce((a, r) => a + r.created, 0);
+      for (const p of props) {
+        const v = valorDeLlave(p.props as Record<string, string>, llaves);
+        if (v) { monikers.push(v); monikerNames[v] = p.name; }
+        else sinLlave.push({ dbId: p.dbId, name: p.name });
       }
 
-      // Elementos sin SP3D_MONIKER (nunca se exportaron bien desde SmartPlant 3D): en vez de bloquear,
-      // se agregan con un moniker sintético basado en su GUID nativo del modelo y quedan marcados
-      // `requiere_alta_sp3d=true` — aparecerán en "Exportar cambios" para darlos de alta en SmartPlant.
-      let agregados = 0;
-      if (sinMoniker.length) {
+      let porGuid = 0;
+      if (sinLlave.length) {
         const extMap = await viewerRef.current.getExternalIdMapping();
-        const dbIdToGuid = new Map<number, string>();
-        for (const [ext, id] of Object.entries(extMap)) dbIdToGuid.set(id, ext);
-        for (const p of sinMoniker) {
-          const guid = dbIdToGuid.get(p.dbId);
+        const guidPorDbId = new Map<number, string>();
+        for (const [ext, id] of Object.entries(extMap)) guidPorDbId.set(id as number, ext);
+        for (const p of sinLlave) {
+          const guid = guidPorDbId.get(p.dbId);
           if (!guid) continue;
-          try {
-            const res = await fetchWithRetry('/api/mining-elementos/agregar-sin-moniker', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ project_id, nivel: paintTarget.nivel, codigo: paintTarget.codigo, guid, name: p.name }),
-            });
-            await parseJsonOrThrow(res);
-            agregados++;
-          } catch { /* sigue con el resto aunque uno falle */ }
+          monikers.push(guid);
+          monikerNames[guid] = p.name;
+          porGuid++;
         }
       }
 
-      setToast(`Guardado: ${updated} reasignado(s)${creados ? ` · ${creados} nuevo(s) desde el modelo (no estaban en la base de datos, se agregaron con su SP3D_MONIKER real)` : ''}${agregados ? ` · ${agregados} agregado(s) SIN SP3D_MONIKER — quedan marcados para dar de alta en SmartPlant 3D (revisa "Exportar cambios")` : ''}.`);
+      if (!monikers.length) { setToast('No se pudo identificar ningún elemento del modelo.'); return; }
+
+      const results = await runWithConcurrency(chunkMonikersForUrl(monikers), 6, async chunk => {
+        const res = await fetchWithRetry('/api/mining-elementos', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            project_id, nivel: paintTarget.nivel, newValue: paintTarget.codigo, monikers: chunk,
+            origen: `pintura_3d_${paintTarget.nivel}`, monikerNames,
+          }),
+        });
+        const d = await parseJsonOrThrow(res);
+        return { updated: d.updated ?? chunk.length, created: d.created ?? 0 };
+      });
+      const updated = results.reduce((a, r) => a + r.updated, 0);
+      const creados = results.reduce((a, r) => a + r.created, 0);
+
+      setToast(`Guardado: ${updated} reasignado(s)`
+        + (creados ? ` · ${creados} nuevo(s) desde el modelo` : '')
+        + (porGuid ? ` · ${porGuid} identificado(s) por GUID del modelo` : '')
+        + '.');
       paintedDbIdsRef.current = new Set();
       setPaintCount(0);
       loadBuckets();
@@ -891,7 +898,7 @@ export default function ElementosEditorPage() {
     } finally {
       setViewerStatus(null);
     }
-  }, [paintTarget, project_id, loadBuckets, fetchRows, bumpRevisionRefresh]);
+  }, [paintTarget, project_id, bimConfig, loadBuckets, fetchRows, bumpRevisionRefresh]);
 
   const assignSinMoniker = useCallback(async (items: { guid: string; name: string; dbId: number }[], codigo: string) => {
     let ok = 0;
@@ -932,18 +939,19 @@ export default function ElementosEditorPage() {
 
     setViewerStatus('Buscando elemento…');
     try {
-      const props = await viewerRef.current.loadBulkElementProps(dbIds, [MONIKER_PROP]);
-      const monikers = props.map(p => p.props[MONIKER_PROP]).filter(Boolean);
+      const llavesClic = llavesDelProyecto(bimConfigRef.current);
+      const props = await viewerRef.current.loadBulkElementProps(dbIds, llavesClic);
+      const monikers = props.map(p => valorDeLlave(p.props as Record<string, string>, llavesClic)).filter(Boolean) as string[];
       if (!monikers.length) {
-        // Sin SP3D_MONIKER: asignación rápida por GUID del modelo, sin armar pintura.
+        // El elemento no publica ninguna llave conocida: se clasifica por su GUID del modelo.
         const extMap = await viewerRef.current.getExternalIdMapping();
         const dbIdToGuid = new Map<number, string>();
         for (const [ext, id] of Object.entries(extMap)) dbIdToGuid.set(id as number, ext);
         const items = props
-          .filter(p => !p.props[MONIKER_PROP] && dbIdToGuid.get(p.dbId))
+          .filter(p => !valorDeLlave(p.props as Record<string, string>, llavesClic) && dbIdToGuid.get(p.dbId))
           .map(p => ({ guid: dbIdToGuid.get(p.dbId)!, name: p.name, dbId: p.dbId }));
         if (!items.length) {
-          setToast('Este elemento no tiene SP3D_MONIKER ni GUID en el modelo — no se puede clasificar.');
+          setToast('Este elemento no publica ninguna llave conocida ni GUID en el modelo — no se puede clasificar.');
           return;
         }
         if (quickSticky && quickCodigo) {
@@ -990,13 +998,14 @@ export default function ElementosEditorPage() {
       const v = viewerRef.current;
       (async () => {
         const PROP_CHUNK = 2000;
+        const llaves = llavesDelProyecto(bimConfigRef.current);
         const monikers: string[] = [];
         const sinMoniker: { dbId: number; name: string }[] = [];
         for (let i = 0; i < leafDbIds.length; i += PROP_CHUNK) {
           const chunk = leafDbIds.slice(i, i + PROP_CHUNK);
-          const props = await v.loadBulkElementProps(chunk, [MONIKER_PROP]);
+          const props = await v.loadBulkElementProps(chunk, llaves);
           for (const p of props) {
-            const mk = p.props[MONIKER_PROP];
+            const mk = valorDeLlave(p.props as Record<string, string>, llaves);
             if (mk) monikers.push(mk); else sinMoniker.push({ dbId: p.dbId, name: p.name });
           }
         }
@@ -1163,6 +1172,7 @@ export default function ElementosEditorPage() {
               <ModelTreePanel
                 viewerRef={viewerRef} viewerReady={viewerReady} onPreviewBranch={previewTreeBranch} revealDbId={treeRevealDbId}
                 projectId={project_id} activeNivel={activeRevisionNivel} coverageApiRef={treeCoverageApiRef}
+                llaves={llavesDelProyecto(bimConfig)}
               />
             </div>
           </div>
@@ -1695,7 +1705,8 @@ const COVERAGE_QUEUE_DELAY_MS = 400;
 // este componente nunca escribe nada en la BD por sí mismo.
 type TreeCoverageApi = { refresh: (dbId: number) => void; refreshAll: () => void };
 
-function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId, projectId, activeNivel, coverageApiRef }: {
+function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId, projectId, activeNivel, coverageApiRef, llaves }: {
+  llaves: string[];
   viewerRef: { current: ForgeViewerHandle | null };
   viewerReady: boolean;
   onPreviewBranch: (dbId: number, name: string) => void;
@@ -1741,8 +1752,8 @@ function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId, p
           if (!leafDbIds.length) result = { vinculados: 0, total: 0 };
           else if (leafDbIds.length > COVERAGE_MAX_LEAVES) result = 'too-big';
           else {
-            const props = await v.loadBulkElementProps(leafDbIds, [MONIKER_PROP]);
-            const monikers = [...new Set(props.filter(p => p.props[MONIKER_PROP]).map(p => p.props[MONIKER_PROP]))];
+            const props = await v.loadBulkElementProps(leafDbIds, llaves);
+            const monikers = [...new Set(props.map(p => valorDeLlave(p.props as Record<string, string>, llaves)).filter(Boolean) as string[])];
             let vinculados = 0;
             if (monikers.length) {
               const r = await fetchWithRetry('/api/mining-elementos/cobertura', {
