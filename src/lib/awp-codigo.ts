@@ -21,6 +21,10 @@ const RE_CWP = /^(\d{4,8})\.([A-Za-z]+)(\d+)$/;
 // respeta tal cual en vez de traducirlo: CV = AREA+SECTOR, CWA = AREA.
 const RE_CWP_PREFIJADO = /^CWP-(\d{4})-(\d{2})-([A-Za-z]{2,3})-(\d{2,4})$/i;
 
+// Formato EPV1 (EIMI00416):  {ÁREA WBS}-{CV}-{DISC}{SEQ}   1222-D003-ME001
+// El CV es alfanumérico (A001, D003) y el área WBS de 4 dígitos.
+const RE_CWP_WBS = /^(\d{4})-([A-Za-z]\d{3})-([A-Za-z]{2})(\d{3})$/;
+
 export interface CwpPartes {
   cv_id: string;
   cwa_id: string;

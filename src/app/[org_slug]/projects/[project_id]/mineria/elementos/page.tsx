@@ -380,7 +380,7 @@ export default function ElementosEditorPage() {
   const [paintCount, setPaintCount] = useState(0);
 
   // Asignación rápida de elementos SIN SP3D_MONIKER: click en el modelo → popup con CWP destino →
-  // guardado inmediato vía agregar-sin-moniker (sin armar pintura). Con "seguir asignando" activo,
+  // guardado inmediato en lote por GUID del modelo (sin armar pintura). Con "seguir asignando" activo,
   // cada click siguiente asigna directo al mismo CWP — encadena elementos con un click cada uno.
   const [quickAssign, setQuickAssign] = useState<{ items: { guid: string; name: string; dbId: number }[] } | null>(null);
   const [quickCodigo, setQuickCodigo] = useState('');
@@ -900,22 +900,37 @@ export default function ElementosEditorPage() {
     }
   }, [paintTarget, project_id, bimConfig, loadBuckets, fetchRows, bumpRevisionRefresh]);
 
+  // Clasifica por GUID del modelo los elementos que no publican ninguna llave. Va en lote por
+  // el endpoint general: una petición por elemento tardaba ~1 s cada una, así que una
+  // selección de miles de piezas no llegaba a terminar.
   const assignSinMoniker = useCallback(async (items: { guid: string; name: string; dbId: number }[], codigo: string) => {
+    if (!items.length) return 0;
+    const nombres: Record<string, string> = {};
+    for (const it of items) nombres[it.guid] = it.name;
+
     let ok = 0;
-    for (const it of items) {
-      try {
-        const res = await fetchWithRetry('/api/mining-elementos/agregar-sin-moniker', {
-          method: 'POST',
+    try {
+      const results = await runWithConcurrency(chunkMonikersForUrl(items.map(i => i.guid)), 6, async chunk => {
+        const res = await fetchWithRetry('/api/mining-elementos', {
+          method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ project_id, nivel: 'cwp', codigo, guid: it.guid, name: it.name }),
+          body: JSON.stringify({
+            project_id, nivel: 'cwp', newValue: codigo, monikers: chunk,
+            origen: 'clic_3d_guid', monikerNames: nombres,
+          }),
         });
-        await parseJsonOrThrow(res);
-        ok++;
-        viewerRef.current?.colorDbIds([it.dbId], 0.13, 0.59, 0.95, 1);
-      } catch { /* sigue con el resto aunque uno falle */ }
+        const d = await parseJsonOrThrow(res);
+        return (d.updated ?? 0) + (d.created ?? chunk.length);
+      });
+      ok = results.reduce((a, b) => a + b, 0);
+      if (ok) viewerRef.current?.colorDbIds(items.map(i => i.dbId), 0.13, 0.59, 0.95, 1);
+    } catch (e: any) {
+      setToast(`Error al clasificar: ${e.message}`);
+      return 0;
     }
+
     setToast(ok
-      ? `✓ ${ok} elemento(s) sin SP3D_MONIKER agregado(s) a ${codigo} — quedan para dar de alta en SmartPlant 3D (ver "Exportar cambios").`
+      ? `✓ ${ok.toLocaleString('es-CL')} elemento(s) clasificado(s) en ${codigo} por GUID del modelo.`
       : 'No se pudo agregar — revisa que el CWP exista.');
     if (ok) { loadBuckets(); fetchRows(); bumpRevisionRefresh(); }
     return ok;
