@@ -91,36 +91,107 @@ for (const [cwp, g] of porCwp) {
   }
 }
 
-// ── B) Cruce itemizado: cantidades y precios del ECO-01A ────────────────────
+// ── B) Itemizado: hoja "Resumen ECO-01A" del itemizado codificado ───────────
+// Es la fuente completa: trae disciplina, clasificación y área POR ÍTEM, además del
+// desglose de costos y las HH. Las columnas van por posición porque el encabezado real
+// está en la segunda fila y varias columnas no tienen título.
 const wbC = leer(F_CRUCE);
-const filasC = XLSX.utils.sheet_to_json(wbC.Sheets['Cruce Itemizado'], { header: 1, defval: '', raw: false });
-const iHdr = filasC.findIndex(f => f.filter(c => String(c).trim()).length > 4);
-const hdrC = filasC[iHdr].map(c => String(c).trim());
-const col = (n) => hdrC.findIndex(h => h.toLowerCase() === n.toLowerCase());
-const cI = col('Ítem'), cDesc = col('Descripción ECO'), cUni = col('Uni.'), cCant = col('Cantidad'),
-      cPU = col('Precio unitario'), cDisc = col('Disciplina ECO'), cArea = col('Área ECO');
+const hojaEco = wbC.SheetNames.find(n => n.startsWith('Resumen ECO')) ?? wbC.SheetNames[0];
+const filasC = XLSX.utils.sheet_to_json(wbC.Sheets[hojaEco], { header: 1, defval: '', raw: false });
+const C = { disciplina: 0, clasif: 1, area: 2, item: 3, desc: 4, unidad: 5, cantidad: 6,
+            pu: 14, total: 15, hhUnidad: 16, hhTotal: 18 };
 
 const P3 = [];
-for (const f of filasC.slice(iHdr + 1)) {
-  const item = String(f[cI] ?? '').trim();
-  if (!item) continue;
-  const cant = num(f[cCant]), pu = num(f[cPU]);
+for (const f of filasC.slice(2)) {
+  const item = String(f[C.item] ?? '').trim();
+  // Solo ítems reales ("2.1.1"): los títulos de capítulo llevan el número en otra columna
+  // y no traen unidad ni cantidad, así que sumarlos duplicaría el contrato.
+  if (!item || !/^\d+(\.\d+)+$/.test(item)) continue;
   P3.push({
     Item: item,
-    Descripcion: String(f[cDesc] ?? '').trim(),
-    Unidad: String(f[cUni] ?? '').trim(),
-    Cantidad: cant ?? '',
-    HH: '',
+    Descripcion: String(f[C.desc] ?? '').trim(),
+    Unidad: String(f[C.unidad] ?? '').trim(),
+    Cantidad: num(f[C.cantidad]) ?? '',
+    HH: num(f[C.hhTotal]) ?? '',
     CWP_hilo: itemACwp.get(item) ?? '',
     Cod_programa: itemAActividad.get(item) ?? '',
-    Commodity: String(f[cDisc] ?? '').trim(),
+    Commodity: String(f[C.disciplina] ?? '').trim(),
     Partida_MyP: '',                  // Bases de M&P aún no entregadas
-    Area: String(f[cArea] ?? '').trim(),
-    WBS: '',
-    Rendimiento_HH_unidad: '',
-    Precio_unitario_CLP: pu ?? '',
-    Total_CLP: cant != null && pu != null ? Math.round(cant * pu) : '',
+    Area: String(f[C.area] ?? '').trim(),
+    WBS: String(f[C.clasif] ?? '').trim(),
+    Rendimiento_HH_unidad: num(f[C.hhUnidad]) ?? '',
+    Precio_unitario_CLP: num(f[C.pu]) ?? '',
+    Total_CLP: num(f[C.total]) ?? '',
   });
+}
+
+// ── C) Documentos de ingeniería (opcional: --documentos=<xlsx>) ─────────────
+// Código: {contrato}-{rev}-{área}-{TIPO?}{DISC}-{correlativo}
+//   4600022667-001-03350-100AR-00001  → plano de arquitectura, sector 100
+//   4600022667-001-03350-MDCEL-00003  → memoria de cálculo eléctrica
+// Las tres letras iniciales del cuarto bloque son el tipo; las dos finales, la disciplina.
+const arg = (n) => (process.argv.find(a => a.startsWith(`--${n}=`)) ?? '').split('=').slice(1).join('=');
+
+const TIPO_DOC = {
+  MDC: 'Memoria de cálculo', ESP: 'Especificación técnica', HDD: 'Hoja de datos',
+  LST: 'Listado', ADD: 'Addendum', CRD: 'Criterio de diseño', CUB: 'Cubicación',
+  INF: 'Informe', MEM: 'Memoria', MNL: 'Manual', EST: 'Estudio',
+};
+const DISC_DOC = {
+  AR: 'Arquitectura', CI: 'Civil', ES: 'Estructura', CA: 'Cañería', EL: 'Eléctrico',
+  AT: 'Automatización', ME: 'Mecánica', MD: 'Multidisciplina', CB: 'Constructibilidad', PR: 'Proceso',
+};
+// Disciplina del documento -> disciplina del CWP. Solo se sugiere cuando la equivalencia es
+// inequívoca y esa disciplina tiene un único paquete; el resto queda para Conciliación.
+// OJO: "CA" en los documentos es Cañería, pero en los CWP de Andina es fundación civil.
+const DOC_A_CWP = { CA: 'PA', AT: 'SA', EL: 'QJ' };
+
+const P6 = [], P6b = [];
+const fDocs = arg('documentos');
+if (fDocs && fs.existsSync(fDocs)) {
+  const wbD = leer(fDocs);
+  const filas = XLSX.utils.sheet_to_json(wbD.Sheets[wbD.SheetNames[0]], { defval: '', raw: false })
+    .filter(r => String(r['Tipo de elemento'] ?? '').trim() !== 'Carpeta');
+
+  // Un CWP por disciplina, solo si es el único de esa disciplina.
+  const cwpPorDisc = new Map();
+  for (const c of P1) {
+    const d = c.Disciplina;
+    cwpPorDisc.set(d, cwpPorDisc.has(d) ? null : c.CWP_hilo);   // null = ambiguo
+  }
+
+  for (const r of filas) {
+    const nombre = String(r.Nombre ?? '').trim();
+    const m = nombre.match(/^(\d{10})-(\d{3})-(\d{5})-(\w{2,6})-(\d{5})/);
+    if (!m) continue;
+    const [, , rev, area, bloque] = m;
+    const disc = bloque.slice(-2).toUpperCase();
+    const tipoCod = bloque.length > 2 ? bloque.slice(0, bloque.length - 2).replace(/^\d+$/, '') : '';
+    const esPlano = /^\d+$/.test(bloque.slice(0, bloque.length - 2));
+    const codigo = nombre.replace(/\.pdf$/i, '');
+    const cwpSugerido = cwpPorDisc.get(DOC_A_CWP[disc] ?? '') ?? '';
+
+    P6.push({
+      N_documento: codigo,
+      Titulo: nombre,
+      Tipo: esPlano ? 'Plano' : (TIPO_DOC[tipoCod] ?? 'Documento'),
+      Revision: rev,
+      CWP: cwpSugerido,
+      Estado_Aconex: '', Es_IFC: '', Codigo_interno: '',
+      CWA: area,
+      Disciplina_aconex: DISC_DOC[disc] ?? disc,
+      Empresa: String(r['Modificado por'] ?? '').trim(),
+      Fecha_Aconex: fechaMsProject(r.Modificado) ?? '',
+      Ruta_archivo: String(r['Ruta de acceso'] ?? '').trim(),
+    });
+
+    // Solo los planos propiamente tales van a la vista de planos del CWP, y solo cuando
+    // hay una sugerencia de paquete: un plano colgado del CWP equivocado confunde más
+    // que uno sin asignar.
+    if (esPlano && cwpSugerido) {
+      P6b.push({ N_documento: codigo, CWP_hilo: cwpSugerido, Origen_del_vinculo: 'sugerido-por-disciplina' });
+    }
+  }
 }
 
 // ── Salida ──────────────────────────────────────────────────────────────────
@@ -133,6 +204,8 @@ const hoja = (nombre, filas, cols) => {
 hoja('P1 Catálogo CWP', P1, ['CWP_hilo','Nombre','Disciplina','Disciplina_nombre','CWA','CWA_legible','CV','CV_legible','EWP','Alcance','Costo_oferta_CLP','HH_planner','Fecha_ini','Fecha_fin']);
 hoja('P2 Programa P6', P2, ['Cod_actividad','Nombre_actividad','HH','Fecha_inicio','Fecha_fin','CWP_hilo','Cantidad','Unidad','WBS','CWA','Tipo_actividad']);
 hoja('P3 Itemizado ECO-2', P3, ['Item','Descripcion','Unidad','Cantidad','HH','CWP_hilo','Cod_programa','Commodity','Partida_MyP','Area','WBS','Rendimiento_HH_unidad','Precio_unitario_CLP','Total_CLP']);
+if (P6.length) hoja('P6 Documentos', P6, ['N_documento','Titulo','Tipo','Revision','CWP','Estado_Aconex','Es_IFC','Codigo_interno','CWA','Disciplina_aconex','Empresa','Fecha_Aconex','Ruta_archivo']);
+if (P6b.length) hoja('P6b Documento-CWP', P6b, ['N_documento','CWP_hilo','Origen_del_vinculo']);
 XLSX.writeFile(wb, SALIDA);
 
 const conCwp = P2.filter(r => r.CWP_hilo).length;

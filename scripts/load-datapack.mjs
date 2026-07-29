@@ -43,7 +43,17 @@ const hoja = (pref) => {
 // en-US, y confundirlos produce cifras plausibles pero equivocadas).
 const CWP = r => String(r.CWP_hilo || r.CWP || '').trim() || null;
 // CWA = primeros 4 caracteres del CV; el CV es de largo variable (6 en Collahuasi, 7 en Spence).
-const partesCwp = (c) => { const m = String(c ?? '').match(/^(\d{4,8})\.([A-Za-z]+)(\d+)$/); return m ? { cv: m[1], cwa: m[1].slice(0, 4), disc: m[2].toUpperCase() } : null; };
+// Formatos de CWP admitidos (espejo de src/lib/awp-codigo.ts):
+//   canónico   312101.C001            CV + disciplina + secuencia
+//   prefijado  CWP-3351-10-BA-010     área + sector + disciplina + secuencia (Andina)
+const partesCwp = (c) => {
+  const s = String(c ?? '').trim();
+  const p = s.match(/^CWP-(\d{4})-(\d{2})-([A-Za-z]{2,3})-(\d{2,4})$/i);
+  if (p) return { cv: p[1] + p[2], cwa: p[1], disc: p[3].toUpperCase() };
+  const m = s.match(/^(\d{4,8})\.([A-Za-z]+)(\d+)$/);
+  return m ? { cv: m[1], cwa: m[1].slice(0, 4), disc: m[2].toUpperCase() } : null;
+};
+const esCwpValido = (c) => partesCwp(c) !== null;
 
 async function reemplazar(tabla, rows) {
   if (SECO) return `${rows.length} (simulado)`;
@@ -194,7 +204,10 @@ const docAconex = docs.map(d => ({ project_id: PROJECT_ID, n_cmdic: String(d.N_d
   titulo: d.Titulo || null, tipo_doc: d.Tipo || null, rev: d.Revision != null ? String(d.Revision) : null,
   estado_aconex: d.Estado_Aconex || null, disciplina_doc: d.Disciplina_aconex || null, cwa_id: d.CWA || null,
   n_interno: d.Codigo_interno || null, archivo: d.Ruta_archivo || null, fecha_modificacion: fecha(d.Fecha_Aconex),
-  origen: d.Empresa || null, cwp_id_exacto: (String(d.CWP||'').includes('.') ? String(d.CWP) : null) })).filter(x => x.n_cmdic);
+  // El CWP del documento se acepta si respeta alguno de los formatos válidos. Antes se
+  // exigía que contuviera un punto, lo que descartaba en silencio el formato prefijado
+  // (CWP-3351-10-PA-220) y dejaba toda la capa documental sin llave.
+  origen: d.Empresa || null, cwp_id_exacto: (esCwpValido(d.CWP) ? String(d.CWP).trim() : null) })).filter(x => x.n_cmdic);
 const planos = hoja('P6b').map(r => { const m = docMeta.get(String(r.N_documento)) ?? {};
   return { project_id: PROJECT_ID, cwp_id: CWP(r),
     codigo_documento: String(r.N_documento || '').trim() || null, descripcion: m.Titulo || null,
