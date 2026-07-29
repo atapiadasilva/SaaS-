@@ -21,6 +21,7 @@ const CWP_PROP = 'CWP';
 // Clave real de enlace al modelo: la pestaña/categoría "DATA_EIMISA" escrita por el plugin
 // DataTools trae la propiedad SP3D_MONIKER (no la genérica "SP3d Moniker" de SmartPlant).
 import { llavesDelProyecto, valorDeLlave } from '@/lib/llaves-modelo';
+import { parseCwp } from '@/lib/awp-codigo';
 
 // Llave heredada de SmartPlant 3D. El catálogo completo vive en @/lib/llaves-modelo.
 const MONIKER_PROP = 'SP3D_MONIKER';
@@ -433,6 +434,27 @@ export default function ElementosEditorPage() {
     monikerCacheRef.current.clear();
     fetch(`/api/mining-elementos/buckets?project_id=${project_id}`).then(parseJsonOrThrow).then(d => setBuckets(d.buckets ?? [])).catch(() => {});
   }, [project_id]);
+
+  /**
+   * Ajusta los contadores en pantalla sin esperar al servidor.
+   * Recontar 23.000 elementos toma su tiempo y, mientras tanto, la cifra quedaba en el valor
+   * viejo y parecía que no se había guardado nada. Se corrige de inmediato y el fetch real
+   * llega después a confirmar.
+   */
+  const ajustarConteoLocal = useCallback((codigoDestino: string, cuantos: number, codigoOrigen?: string | null) => {
+    if (!cuantos) return;
+    setBuckets(prev => {
+      const copia = prev.map(b => ({ ...b }));
+      const destino = copia.find(b => b.cwpId === codigoDestino);
+      if (destino) destino.n += cuantos;
+      else copia.push({ cwpId: codigoDestino, n: cuantos, enCatalogo: true });
+      if (codigoOrigen) {
+        const origen = copia.find(b => b.cwpId === codigoOrigen);
+        if (origen) origen.n = Math.max(0, origen.n - cuantos);
+      }
+      return copia;
+    });
+  }, []);
 
   // Catálogos usados por los datalists/selects de "reasignar a…" (CWA/CV/CWP) en toda la página —
   // se refrescan tras crear una categoría nueva para que aparezca de inmediato como opción elegible.
@@ -884,6 +906,7 @@ export default function ElementosEditorPage() {
       const updated = results.reduce((a, r) => a + r.updated, 0);
       const creados = results.reduce((a, r) => a + r.created, 0);
 
+      ajustarConteoLocal(paintTarget.codigo, updated + creados);
       setToast(`Guardado: ${updated} reasignado(s)`
         + (creados ? ` · ${creados} nuevo(s) desde el modelo` : '')
         + (porGuid ? ` · ${porGuid} identificado(s) por GUID del modelo` : '')
@@ -898,7 +921,7 @@ export default function ElementosEditorPage() {
     } finally {
       setViewerStatus(null);
     }
-  }, [paintTarget, project_id, bimConfig, loadBuckets, fetchRows, bumpRevisionRefresh]);
+  }, [paintTarget, project_id, bimConfig, loadBuckets, fetchRows, bumpRevisionRefresh, ajustarConteoLocal]);
 
   // Clasifica por GUID del modelo los elementos que no publican ninguna llave. Va en lote por
   // el endpoint general: una petición por elemento tardaba ~1 s cada una, así que una
@@ -929,12 +952,13 @@ export default function ElementosEditorPage() {
       return 0;
     }
 
+    ajustarConteoLocal(codigo, ok);
     setToast(ok
       ? `✓ ${ok.toLocaleString('es-CL')} elemento(s) clasificado(s) en ${codigo} por GUID del modelo.`
       : 'No se pudo agregar — revisa que el CWP exista.');
     if (ok) { loadBuckets(); fetchRows(); bumpRevisionRefresh(); }
     return ok;
-  }, [project_id, loadBuckets, fetchRows, bumpRevisionRefresh]);
+  }, [project_id, loadBuckets, fetchRows, bumpRevisionRefresh, ajustarConteoLocal]);
 
   const onViewerSelectionChange = useCallback(async (dbIds: number[]) => {
     if (!viewerRef.current || !dbIds.length) return;
@@ -1105,6 +1129,7 @@ export default function ElementosEditorPage() {
         setTreeBranchProgress({ done, total: totalSteps });
       }
 
+      ajustarConteoLocal(codigo, updated + agregados);
       const partes: string[] = [];
       if (updated) partes.push(`${updated.toLocaleString('es-CL')} reasignado(s)`);
       if (agregados) partes.push(`${agregados.toLocaleString("es-CL")} clasificado(s) por GUID del modelo`);
@@ -1687,8 +1712,12 @@ interface RevisionItem {
 // CWP_ID = {CV}.{DISC}{NNN} (ej. 312101.D001) → CV = "312101" → CWA = CV[:4] = "3121"
 // (misma convención que deriveCwaCv en /api/mining-elementos) — usado para armar el árbol CWA→CV→CWP.
 function deriveCwaCvFromCwp(cwpId: string): { cwa: string | null; cv: string | null } {
-  const m = cwpId.match(/^(\d{6})\.[A-Za-z]+\d+/);
-  if (m) { const cv = m[1]; return { cwa: cv.slice(0, 4), cv }; }
+  // El formato del CWP cambia por proyecto (CV.DiscSeq, CWP-área-sector-disc-seq,
+  // WBS-CV-DiscSeq…), así que la derivación va contra el parser central. Antes se exigía
+  // aquí un patrón de 6 dígitos y un punto: cualquier otro proyecto veía TODOS sus paquetes
+  // caer en "sin clasificar", sin árbol CWA → CV.
+  const p = parseCwp(cwpId);
+  if (p) return { cwa: p.cwa_id, cv: p.cv_id };
   // "{CV}.SIN-CWP" → un CWP se asignó al revés (CV sin CWP todavía): anidar bajo su CV/CWA real.
   const mCv = cwpId.match(/^(\d{6})\.SIN-CWP$/);
   if (mCv) { const cv = mCv[1]; return { cwa: cv.slice(0, 4), cv }; }
@@ -2516,7 +2545,7 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
             {cwpTree.sueltos.length > 0 && (
               <div>
                 <div className="px-2 py-1.5 bg-slate-100 border-b border-slate-200">
-                  <span className="text-[10px] font-black uppercase text-slate-500">Sin clasificar / fuera de los 69 CWP</span>
+                  <span className="text-[10px] font-black uppercase text-slate-500">Sin clasificar (sin CWA/CV derivable)</span>
                 </div>
                 {cwpTree.sueltos.map(renderItem)}
               </div>
