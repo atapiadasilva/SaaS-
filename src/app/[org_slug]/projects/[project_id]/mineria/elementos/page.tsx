@@ -11,7 +11,7 @@ import ExportDataModal, { type ExportColumnDef } from '@/components/awp/ExportDa
 import {
   Search, Box, Settings, Loader2, X, ArrowLeft, ChevronLeft, ChevronRight, ChevronDown,
   CheckSquare, Square, ArrowRightCircle, Crosshair, Palette, ListTree, SlidersHorizontal, Columns3, Eraser, Save, Plus, GitBranch,
-  Paintbrush, Ghost, Eye, MousePointerClick, StopCircle, Download, RotateCcw, Layers, RefreshCw,
+  Paintbrush, Ghost, Eye, MousePointerClick, StopCircle, Download, RotateCcw, Layers, RefreshCw, AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -796,6 +796,40 @@ export default function ElementosEditorPage() {
     }
   }, [viewerReady, fetchMonikerGroups]);
 
+  /**
+   * Aísla en el visor la geometría que todavía no pertenece a ningún paquete.
+   * Es la pregunta que importa al cerrar un CWP: "¿qué me falta?". Se calcula contra el
+   * modelo, no contra la tabla: los elementos que nunca se clasificaron no tienen fila.
+   */
+  const verSinAsignar = useCallback(async (nivel: Nivel) => {
+    if (!viewerRef.current || !viewerReady) return;
+    setViewerStatus('Buscando geometría sin asignar…');
+    try {
+      const mapping = await viewerRef.current.getExternalIdMapping();
+      const todos = Object.values(mapping) as number[];
+      if (!todos.length) { setToast('No se pudo leer la geometría del modelo.'); return; }
+
+      const groups = await fetchMonikerGroups(nivel);
+      const asignados = Object.values(groups).flat();
+      const dbIdsAsignados = asignados.length
+        ? await viewerRef.current.resolveMonikers(asignados, llavesDelProyecto(bimConfig).join(','))
+        : [];
+
+      const yaEstan = new Set(dbIdsAsignados);
+      const faltan = todos.filter(id => !yaEstan.has(id));
+      if (!faltan.length) { setToast('Todo el modelo está asignado a un paquete.'); return; }
+
+      lastIsolatedDbIdsRef.current = faltan;
+      viewerRef.current.showOnly(faltan, ghostMode);
+      viewerRef.current.colorDbIds(faltan, 1, 0.25, 0.25, 1);
+      if (autoZoom) viewerRef.current.fitToView(faltan);
+      const pct = ((faltan.length / todos.length) * 100).toFixed(0);
+      setToast(`${faltan.length.toLocaleString('es-CL')} elementos sin ${NIVEL_LABEL[nivel]} (${pct}% del modelo) — en rojo.`);
+    } finally {
+      setViewerStatus(null);
+    }
+  }, [viewerReady, ghostMode, autoZoom, bimConfig, fetchMonikerGroups]);
+
   // Aísla, COLOREA (cada grupo con su color de la lista) y enfoca varios códigos a la vez
   const viewSelectedInViewer = useCallback(async (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => {
     if (!viewerRef.current || !viewerReady || !selections.length) return;
@@ -1216,7 +1250,7 @@ export default function ElementosEditorPage() {
               </div>
               <RevisionPanel
                 projectId={project_id} viewerReady={viewerReady}
-                onColorByLevel={colorByLevel} onFocus={focusOnCodigo}
+                onColorByLevel={colorByLevel} onFocus={focusOnCodigo} onVerSinAsignar={verSinAsignar}
                 onViewSelected={viewSelectedInViewer}
                 paintTarget={paintTarget} onArmPaint={armPaint} onStopPaint={stopPaint}
                 onCatalogChanged={loadCatalogs}
@@ -2069,7 +2103,8 @@ function TreeNodeRow({ node, depth, expanded, childrenCache, highlightDbId, onTo
   );
 }
 
-function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onViewSelected, paintTarget, onArmPaint, onStopPaint, onCatalogChanged, onNivelChange, refreshSignal }: {
+function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onViewSelected, onVerSinAsignar, paintTarget, onArmPaint, onStopPaint, onCatalogChanged, onNivelChange, refreshSignal }: {
+  onVerSinAsignar: (nivel: Nivel) => void;
   projectId: string; viewerReady: boolean;
   onColorByLevel: (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => void;
   onFocus: (nivel: Nivel, codigo: string) => void;
@@ -2456,19 +2491,29 @@ function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onView
         >
           <Palette className="w-3.5 h-3.5" /> Colorear modelo por {NIVEL_LABEL[nivel]}
         </button>
-        {checked.size > 0 && (
-          <p className="text-[9.5px] text-blue-600 font-bold text-center">{checked.size} marcado(s) — ya aislado(s) en el visor al marcarlos</p>
-        )}
+        {/* Las dos preguntas del día a día: dónde termina un paquete y qué queda sin asignar. */}
         <button
           onClick={handleVistaContraste}
-          disabled={!viewerReady || loading}
+          disabled={!viewerReady || loading || checked.size < 2}
           className="w-full inline-flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-black disabled:opacity-40 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
-          title={checked.size > 0
-            ? `Cada uno de los ${checked.size} ${NIVEL_LABEL[nivel]} marcados queda con un color bien distinto entre sí (no por disciplina), el resto en negro — para ver el límite entre ellos`
-            : 'Oficiales con su color de paleta, todo lo demás (creadas + sin asignar) en negro — para revisar el límite de batería AWP'}
+          title={checked.size < 2
+            ? 'Marca 2 paquetes contiguos para ver dónde está el límite entre ellos'
+            : `Los ${checked.size} marcados con colores bien distintos entre sí y el resto en negro`}
         >
-          <Eye className="w-3.5 h-3.5" /> {checked.size > 0 ? `Límite entre ${checked.size} marcado(s)` : 'Vista de contraste (límite de batería)'}
+          <Eye className="w-3.5 h-3.5" />
+          {checked.size < 2 ? 'Límite de batería — marca 2' : `Límite de batería (${checked.size})`}
         </button>
+        <button
+          onClick={() => onVerSinAsignar(nivel)}
+          disabled={!viewerReady || loading}
+          className="w-full inline-flex items-center justify-center gap-1.5 border-2 border-red-200 bg-red-50 hover:bg-red-100 disabled:opacity-40 text-[#A00000] rounded px-2 py-1.5 text-[10.5px] font-black"
+          title={`Aísla en rojo la geometría del modelo que todavía no pertenece a ningún ${NIVEL_LABEL[nivel]}`}
+        >
+          <AlertTriangle className="w-3.5 h-3.5" /> Ver lo que falta por asignar
+        </button>
+        {checked.size > 0 && (
+          <p className="text-[9.5px] text-blue-600 font-bold text-center">{checked.size} marcado(s) — aislado(s) en el visor</p>
+        )}
         <p className="text-[9.5px] text-slate-400 leading-snug">
           Cada {NIVEL_LABEL[nivel]} queda con un color. Click en uno para ubicarlo en el visor. Si ves elementos
           del color equivocado, click en 🖌️ del {NIVEL_LABEL[nivel]} correcto y luego click en esos elementos en el modelo para moverlos ahí.
