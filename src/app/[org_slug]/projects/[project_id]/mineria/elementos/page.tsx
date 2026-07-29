@@ -1053,32 +1053,46 @@ export default function ElementosEditorPage() {
         updated = results.reduce((a, b) => a + b, 0);
       }
 
-      // Elementos sin SP3D_MONIKER en esta rama: se agregan con un moniker sintético basado en su
-      // GUID nativo del modelo y quedan marcados requiere_alta_sp3d=true para "Exportar cambios".
+      // Elementos que no publican ninguna llave: se clasifican por su GUID del modelo, que es
+      // estable entre traducciones. Van por el MISMO endpoint en lote — una petición por
+      // elemento hacía que una rama de 5.000 piezas no terminara nunca.
       let agregados = 0;
       if (sinMoniker.length && viewerRef.current) {
         const extMap = await viewerRef.current.getExternalIdMapping();
         const dbIdToGuid = new Map<number, string>();
-        for (const [ext, id] of Object.entries(extMap)) dbIdToGuid.set(id, ext);
-        const results = await runWithConcurrency(sinMoniker, 6, async ({ dbId, name }): Promise<number> => {
+        for (const [ext, id] of Object.entries(extMap)) dbIdToGuid.set(id as number, ext);
+
+        const guids: string[] = [];
+        const nombresPorGuid: Record<string, string> = {};
+        for (const { dbId, name } of sinMoniker) {
           const guid = dbIdToGuid.get(dbId);
-          if (!guid) return 0;
-          const res = await fetchWithRetry('/api/mining-elementos/agregar-sin-moniker', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ project_id, nivel: treeBranchNivel, codigo, guid, name }),
+          if (!guid) continue;
+          guids.push(guid);
+          nombresPorGuid[guid] = name;
+        }
+
+        if (guids.length) {
+          const results = await runWithConcurrency(chunkMonikersForUrl(guids), 6, async chunk => {
+            const res = await fetchWithRetry('/api/mining-elementos', {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                project_id, nivel: treeBranchNivel, newValue: codigo, monikers: chunk,
+                origen: 'arbol_modelo_guid', monikerNames: nombresPorGuid,
+              }),
+            });
+            const d = await parseJsonOrThrow(res);
+            return (d.updated ?? 0) + (d.created ?? chunk.length);
           });
-          await parseJsonOrThrow(res);
-          return 1;
-        });
-        agregados = results.reduce((a, b) => a + b, 0);
+          agregados = results.reduce((a, b) => a + b, 0);
+        }
         done += 1;
         setTreeBranchProgress({ done, total: totalSteps });
       }
 
       const partes: string[] = [];
       if (updated) partes.push(`${updated.toLocaleString('es-CL')} reasignado(s)`);
-      if (agregados) partes.push(`${agregados.toLocaleString('es-CL')} agregado(s) sin SP3D_MONIKER (quedan para dar de alta en SmartPlant 3D)`);
+      if (agregados) partes.push(`${agregados.toLocaleString("es-CL")} clasificado(s) por GUID del modelo`);
       setToast(`${partes.join(' · ')} de "${treeBranch.name}" → ${codigo}.`);
       treeCoverageApiRef.current?.refresh(treeBranch.dbId);
       setTreeBranch(null);
@@ -1438,18 +1452,18 @@ export default function ElementosEditorPage() {
                     <button onClick={cancelTreeBranch} className="ml-auto text-slate-400 hover:text-white shrink-0"><X className="w-3.5 h-3.5" /></button>
                   </div>
                   {treeBranch.monikers === null ? (
-                    <p className="text-[10.5px] text-blue-200 flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> Verificando cuántos elementos se pueden clasificar (SP3D_MONIKER)…</p>
+                    <p className="text-[10.5px] text-blue-200 flex items-center gap-1.5"><Loader2 className="w-3 h-3 animate-spin" /> Verificando cuántos elementos se pueden clasificar…</p>
                   ) : treeBranch.monikers.length === 0 && treeBranch.sinMoniker.length === 0 ? (
                     <p className="text-[10.5px] text-red-300 font-bold">Esta rama no tiene geometría clasificable.</p>
                   ) : (
                     <>
                       {treeBranch.monikers.length === 0 ? (
                         <p className="text-[10.5px] text-amber-300 font-bold">
-                          0 de {treeBranch.leafDbIds.length.toLocaleString('es-CL')} elementos tienen SP3D_MONIKER (DATA_EIMISA) — probablemente nunca se exportaron bien desde SmartPlant 3D. Se agregarán igual usando su GUID del modelo; quedarán marcados para dar de alta en SmartPlant 3D al exportar.
+                          Ninguno de los {treeBranch.leafDbIds.length.toLocaleString('es-CL')} elementos publica una llave de las configuradas ({llavesDelProyecto(bimConfig).slice(0, 3).join(', ')}…). Se clasifican por su GUID del modelo, que es estable entre versiones.
                         </p>
                       ) : treeBranch.sinMoniker.length > 0 && (
                         <p className="text-[10.5px] text-amber-300 font-bold">
-                          {treeBranch.monikers.length.toLocaleString('es-CL')} con SP3D_MONIKER se reasignarán normal · {treeBranch.sinMoniker.length.toLocaleString('es-CL')} sin SP3D_MONIKER se agregarán por GUID (dar de alta en SmartPlant 3D).
+                          {treeBranch.monikers.length.toLocaleString('es-CL')} se identifican por su llave · {treeBranch.sinMoniker.length.toLocaleString('es-CL')} por GUID del modelo.
                         </p>
                       )}
                       <div className="flex items-center gap-2 flex-wrap">
