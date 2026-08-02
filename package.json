@@ -14,7 +14,6 @@
   "dependencies": {
     "@supabase/ssr": "^0.10.0",
     "@supabase/supabase-js": "^2.101.1",
-    "cfb": "^1.2.2",
     "clsx": "^2.1.1",
     "framer-motion": "^12.38.0",
     "idb-keyval": "^6.2.2",

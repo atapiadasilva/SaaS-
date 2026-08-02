@@ -151,3 +151,88 @@ project-members
 Verificado que ninguna la llamaba el front actual ni las rutas recién borradas — `awp/page.tsx`
 no usaba `fetch`, hablaba directo con el cliente de Supabase. `project-health` aparece en el
 smoke test, así que borrarla obliga a editar `scripts/smoke-api.mjs`.
+
+---
+
+## 2026-08-02 · Tercera limpieza — el sistema pre-`mining_*`, código y base de datos
+
+**Resultado:** 18 archivos y 3.778 líneas menos en `src` · 20 tablas eliminadas de la base ·
+la dependencia `cfb` fuera. `typecheck` 0.
+
+Cierra el "hallazgo pendiente" de la segunda limpieza: 10 de aquellas 16 APIs sin consumidor
+resultaron ser la capa entera anterior al modelo minero, y ahora hay evidencia dura de que
+estaban muertas.
+
+### Cómo se confirmó: cruzar el código con los datos, no solo con los imports
+
+El método anterior (cierre transitivo de imports) no alcanza para las rutas de API: Next las
+sirve por convención de carpetas, así que ninguna tiene imports entrantes y todas parecen
+huérfanas. La prueba que sí decide es **contra qué tabla hablan y qué hay en esa tabla**:
+
+1. Extraer todas las llamadas `fetch('/api/...')` del front → qué rutas se usan de verdad.
+2. Extraer todos los `.from('tabla')` de cada ruta → qué toca cada una.
+3. Contar filas de esas tablas en Supabase.
+
+Una ruta que nadie llama y cuya tabla tiene 0 filas está muerta sin ambigüedad. Dos de ellas
+—`activity-tags` y `program-links`— apuntaban a tablas que **ya no existían en la base**:
+habrían devuelto error 500 el día que alguien las invocara.
+
+### Código eliminado (3.778 líneas)
+
+| Qué | Evidencia |
+|---|---|
+| `api/ingest` + `lib/ingestion-utils.ts` | tabla `nodes`, 0 filas |
+| `api/activity-tags`, `api/program-links` | sus tablas ya no existían |
+| `api/program` + `api/program/versions` | `program_activities`, 0 filas |
+| `api/model-data` + `api/model-versions/[id]` | `model_elements`, 0 filas |
+| `api/catalog/activate` | `tidps`/`deliverables`/`task_teams`, 0 filas |
+| `api/parse-mpp` (467) | parser binario .MPP; el onboarding usa XER/Excel |
+| `GanttChart.tsx` (1.082) + `PlanCharts.tsx` (412) | **se importaban solo entre ellos** |
+| `api/invite` ×3 + `/invite/[token]` + `api/project-members` | flujo de tokens sin origen |
+
+El par `GanttChart` ↔ `PlanCharts` es el caso que el cierre transitivo no detecta solo: dos
+archivos que se importan mutuamente forman un ciclo con aristas entrantes, así que ninguno
+aparece como huérfano aunque el ciclo completo esté desconectado del resto.
+
+Las invitaciones se borraron porque `/api/org-members` ya usa
+`supabase.auth.admin.inviteUserByEmail` — el mecanismo nativo de Supabase, con email real.
+El flujo de tokens propios era una reimplementación que nadie disparaba: `project_invitations`
+tenía 0 filas.
+
+### Base de datos: 20 tablas (`scripts/sql/01-limpieza-tablas-legado.sql`)
+
+El plan eran 9. La consulta de llaves foráneas entrantes reveló **7 satélites** más
+(`edges`, `sot_mappings`, `custom_views`, `deliverable_versions`, `constraint_history`,
+`activity_bim_links`, `activity_requirements`) y una revisión del esquema, 4 tablas vacías
+sin código (`cwp_master`, `departments`, `milestones`, `tidp_notification_settings`).
+
+**Verificar dependencias antes de borrar no es opcional.** Sin esa consulta el `DROP` habría
+fallado a mitad de transacción; con `CASCADE` habría arrastrado tablas sin mirar cuáles.
+
+`nodes` y `edges` eran el grafo ReactFlow de la primera generación. La dependencia `reactflow`
+ya se había desinstalado en la segunda limpieza: el esquema llevaba semanas sin su motor.
+
+La base queda con 50 tablas `mining_*` + 4 de plataforma + `bot_tools_dinamicas`.
+
+### Lo que NO se tocó
+
+- **`bot_tools_dinamicas`** (6 filas), **`mining_bot_*`** — hay un bot en alguna parte; sin
+  entender qué lo consume, no se toca.
+- **Las 6 APIs restantes del hallazgo anterior** — `4d-schedule`, `project-column-mapping`,
+  `project-health`, `mining-reporte/html`, `mining-iwp-ficha`, `mining-iwp-elemento`.
+  Funcionan y hablan con tablas vivas; parecen features a medio conectar, no basura.
+- **`admin-sync`** — página oculta que siembra proyectos hardcodeados desde
+  `project-constants.ts`. Contradice el multi-tenant, pero es decisión del dueño.
+
+### Pendientes detectados de paso
+
+- **`mining_cambios_log`: 178.469 filas**, casi el doble que `mining_elementos` (94.657).
+  Log de auditoría inflado por las cargas masivas por script. Se puede purgar por fecha.
+- **`projects/[project_id]/page.tsx` redirige siempre a `/mineria`**, aunque un proyecto en
+  etapa licitación arranca sin ese módulo activo (`modulosPorDefecto`). Debería ir a `/panel`.
+- **`src/lib/supabase/types.ts`** no lo importa nadie. Es el tipado generado; sirve de
+  referencia, pero conviene saber que está desconectado.
+- **~16 tablas `mining_*` sin `.from()` en el código** (`mining_epr` con 836 filas,
+  `mining_pwp`, `mining_swp`, `mining_obras_crosswalk`…). A diferencia del caso de arriba,
+  **varias tienen datos reales**: pueden ser cargas esperando su interfaz, no basura.
+  Requieren revisión caso a caso.
