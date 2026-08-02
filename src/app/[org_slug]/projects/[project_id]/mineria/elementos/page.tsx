@@ -7,287 +7,27 @@ import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase/client';
 import type { ForgeViewerHandle } from '@/components/awp/ForgeViewer';
 import BimConfigModal, { type BimConfig } from '@/components/modules/BimConfigModal';
-import ExportDataModal, { type ExportColumnDef } from '@/components/awp/ExportDataModal';
+import ExportDataModal from '@/components/awp/ExportDataModal';
 import {
-  Search, Box, Settings, Loader2, X, ArrowLeft, ChevronLeft, ChevronRight, ChevronDown,
-  CheckSquare, Square, ArrowRightCircle, Crosshair, Palette, ListTree, SlidersHorizontal, Columns3, Eraser, Save, Plus, GitBranch,
-  Paintbrush, Ghost, Eye, MousePointerClick, StopCircle, Download, RotateCcw, Layers, RefreshCw, AlertTriangle,
+  Search, Box, Settings, Loader2, X, ArrowLeft, ChevronLeft, ChevronRight,
+  CheckSquare, Square, ArrowRightCircle, Crosshair, ListTree, SlidersHorizontal, Columns3, Eraser, Save, GitBranch,
+  Paintbrush, Ghost, Eye, MousePointerClick, StopCircle, Download, RotateCcw, Layers, SquareDashedMousePointer,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { llavesDelProyecto, valorDeLlave } from '@/lib/llaves-modelo';
+
+import RevisionPanel from './RevisionPanel';
+import ModelTreePanel from './ModelTreePanel';
+import RowItem from './RowItem';
+import { chunkMonikersForUrl, fetchWithRetry, parseJsonOrThrow, runWithConcurrency } from './elementos-red';
+import {
+  COLS_STORAGE_KEY, COLUMN_DEFS, DEFAULT_COLS, EMPTY_FILTERS, EXPORT_LOCKED_DEFS, EXPORT_LOCKED_KEYS,
+  FILTER_FIELDS, NIVELES, NIVEL_LABEL, PAGE_SIZE,
+  type Bucket, type CatalogRow, type Elemento, type Filtros, type FiltrosState, type Nivel,
+  type PaintTarget, type TreeCoverageApi,
+} from './elementos-tipos';
 
 const ForgeViewer = dynamic(() => import('@/components/awp/ForgeViewer'), { ssr: false });
-
-const CWP_PROP = 'CWP';
-// Clave real de enlace al modelo: la pestaña/categoría "DATA_EIMISA" escrita por el plugin
-// DataTools trae la propiedad SP3D_MONIKER (no la genérica "SP3d Moniker" de SmartPlant).
-import { llavesDelProyecto, valorDeLlave } from '@/lib/llaves-modelo';
-import { parseCwp } from '@/lib/awp-codigo';
-
-// Llave heredada de SmartPlant 3D. El catálogo completo vive en @/lib/llaves-modelo.
-const MONIKER_PROP = 'SP3D_MONIKER';
-const PAGE_SIZE = 100;
-
-// Reintenta solo fallas de RED transitorias (fetch() lanzando, ej. "TypeError: fetch failed" por un
-// hiccup de conexión o un hot-reload del dev server) — las respuestas HTTP de error (4xx/5xx) NO
-// reintentan aquí, esas ya se manejan en el código que llama según res.ok.
-async function fetchWithRetry(url: string, init: RequestInit = {}, retries = 2, delayMs = 350): Promise<Response> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fetch(url, init);
-    } catch (e) {
-      if (attempt >= retries) throw e;
-      await new Promise(r => setTimeout(r, delayMs));
-    }
-  }
-}
-
-// Lee el body UNA vez y lo intenta parsear como JSON. Si la respuesta no fue ok, lanza con el mensaje
-// más informativo posible — el `error` de nuestra API si vino, o status+body crudo si la respuesta
-// no es de nuestro código (ej. un 400 genérico de infraestructura/dev-server) — así un toast nunca
-// muestra solo "Bad Request" sin ninguna pista de qué lo causó.
-async function parseJsonOrThrow(res: Response): Promise<any> {
-  const text = await res.text();
-  let d: any = {};
-  try { d = JSON.parse(text); } catch { /* respuesta no-JSON */ }
-  if (!res.ok) throw new Error(d?.error ?? `HTTP ${res.status} ${res.statusText}${text ? ` — ${text.slice(0, 200)}` : ''}`);
-  return d;
-}
-
-// Supabase/PostgREST codifica los filtros `.in('col', [...])` en el QUERY STRING de la URL (no en el
-// body) — con monikers que llevan caracteres especiales (=, !, #) cada uno se expande a %XX al
-// codificarlo. Una lista de varios cientos de monikers fácilmente supera el límite de largo de URL
-// del proxy/gateway y la request falla en silencio con 400/500 sin ningún detalle útil — la causa real
-// de los "Bad Request" intermitentes al pintar/reasignar. Por eso agrupamos por PRESUPUESTO DE
-// CARACTERES YA CODIFICADOS, no por una cantidad fija de elementos (que no protege si los monikers son largos).
-function chunkMonikersForUrl(monikers: string[], maxEncodedChars = 6000): string[][] {
-  const chunks: string[][] = [];
-  let current: string[] = [];
-  let len = 0;
-  for (const m of monikers) {
-    const encLen = encodeURIComponent(m).length + 1;
-    if (current.length && len + encLen > maxEncodedChars) {
-      chunks.push(current);
-      current = [];
-      len = 0;
-    }
-    current.push(m);
-    len += encLen;
-  }
-  if (current.length) chunks.push(current);
-  return chunks;
-}
-
-// Corre `fn` sobre `items` con un máximo de `limit` en vuelo a la vez — los PATCH por chunk son
-// independientes entre sí (cada uno toca un subconjunto de monikers distinto), así que lanzarlos en
-// paralelo (en vez de uno por uno, esperando cada respuesta antes de mandar la siguiente) reduce mucho
-// el tiempo total en ramas grandes, sin abrir una conexión por cada chunk a la vez (saturaría Supabase).
-async function runWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
-type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
-const NIVEL_LABEL: Record<Nivel, string> = { cwa: 'CWA', cv: 'CV', cwp: 'CWP', swp: 'SWP' };
-// Paleta cíclica para distinguir grupos al colorear (rota cada ~16 valores)
-const COLOR_PAL = [
-  [21,101,192],[230,81,0],[0,105,92],[173,20,87],[94,53,177],[201,161,0],[46,125,50],[141,110,99],
-  [197,17,98],[0,131,143],[40,53,147],[251,140,0],[97,97,97],[156,39,176],[33,150,243],[121,85,72],
-];
-function colorForIndex(i: number): { r: number; g: number; b: number } {
-  const [r, g, b] = COLOR_PAL[i % COLOR_PAL.length];
-  return { r: r / 255, g: g / 255, b: b / 255 };
-}
-// Códigos "sin asignar"/contexto (SIN-CWA, SIN-CV, y los placeholders anidados "{padre}.SIN-CV"/".SIN-CWP")
-// no se pintan con un color de la paleta: se pintan con alpha=0 (sin tinte) para RESTAURAR el color nativo
-// del CAD — así "mover un elemento a Sin asignar" se ve y se siente como "sacarlo de la categoría", no
-// como pintarlo de otro color más.
-function isSinAsignar(codigo: string): boolean {
-  return codigo.includes('SIN-');
-}
-// `colorearCreadas=false` deja las categorías NO oficiales (creadas desde la app, fuera del
-// itemizado/DevPack original) con su color nativo del CAD (alpha=0) en vez de un color de la
-// paleta — así se distinguen visualmente las áreas nuevas de las oficiales sin tener que adivinar.
-function paintColorFor(codigo: string, idx: number, esOficial = true, colorearCreadas = true): { r: number; g: number; b: number; a: number } {
-  if (isSinAsignar(codigo)) return { r: 0.6, g: 0.6, b: 0.6, a: 0 };
-  if (!esOficial && !colorearCreadas) return { r: 0.6, g: 0.6, b: 0.6, a: 0 };
-  return { ...colorForIndex(idx), a: 1 };
-}
-// Color único, casi negro, para "Vista de contraste": todo lo que NO es oficial (creadas + sin
-// asignar) queda con este mismo tono para que las categorías oficiales (con su color de paleta)
-// resalten con máximo contraste — pensado para revisar visualmente el límite de batería AWP.
-const CONTRASTE_COLOR = { r: 0.04, g: 0.04, b: 0.04, a: 1 };
-function rgbToHex(r: number, g: number, b: number): string {
-  const c = (v: number) => Math.round(v * 255).toString(16).padStart(2, '0');
-  return `#${c(r)}${c(g)}${c(b)}`;
-}
-function hexToRgb(hex: string): { r: number; g: number; b: number } {
-  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
-  if (!m) return { r: 0, g: 0, b: 0 };
-  return { r: parseInt(m[1], 16) / 255, g: parseInt(m[2], 16) / 255, b: parseInt(m[3], 16) / 255 };
-}
-interface PaintTarget { nivel: Nivel; codigo: string; r: number; g: number; b: number; a: number; }
-
-interface Elemento {
-  sp3d_moniker: string; name: string | null; tag_equipo: string | null; disciplina: string | null; descripcion: string | null;
-  tipo_elemento: string | null; sector: string | null; area_unidad: string | null; cwp_id: string | null;
-  cwa_id: string | null; cv_id: string | null; swp_id: string | null;
-  especialidad_cod: string | null; especialidad_nombre: string | null; categoria_constructiva: string | null;
-  sitio: string | null; sistema_servicio: string | null; obra_tipo: string | null; obra_target: string | null;
-  cwp_fuente: string | null; categoria_enlace: string | null; avance_pct: number | null; estado: string | null;
-  alcance: string | null; item_o_adicional: string | null; vinculo_nivel: string | null;
-  validado: string | null; motivo_no_valido: string | null; disciplina_modelo: string | null;
-  disciplina_arbol: string | null; codigo_bmp: string | null; bmp_nombre: string | null; material: string | null;
-  tag_unificado: string | null; iwp_id: string | null; ewp_id: string | null; comwp_id: string | null; wbs: string | null;
-  pwp_elemento: string | null; obra_raw: string | null; cwp_arbol: string | null; vinculo_fuente: string | null;
-  diametro_in: number | null; longitud_m: number | null; peso_kg: number | null; volumen_m3: number | null;
-  especificacion: string | null; pipeline_linea: string | null; spool: string | null; pid: string | null; isometrico: string | null;
-  este: number | null; norte: number | null; elevacion: number | null; valid_espacial: string | null;
-  tiene_itemizado: string | null; tiene_bmp: string | null;
-  requiere_alta_sp3d: boolean; guid_modelo: string | null;
-}
-interface Bucket { cwpId: string | null; n: number; enCatalogo: boolean; }
-interface CatalogRow { cwp_id: string; cwp_nombre: string; disciplina_cod: string; }
-interface FiltroOpcion { valor: string; n: number; }
-type Filtros = Record<string, FiltroOpcion[]>;
-
-// Mantener en sync con SIMPLE_EQ_FIELDS de /api/mining-elementos/route.ts y con las columnas
-// cubiertas por la función SQL mining_elementos_filtros().
-const FILTER_FIELDS: { key: keyof FiltrosState; columna: string; label: string }[] = [
-  { key: 'alcance', columna: 'alcance', label: 'Alcance' },
-  { key: 'itemOAdicional', columna: 'item_o_adicional', label: 'Item/Adicional' },
-  { key: 'especialidad', columna: 'especialidad_cod', label: 'Especialidad' },
-  { key: 'categoria', columna: 'categoria_constructiva', label: 'Categoría' },
-  { key: 'sistema', columna: 'sistema_servicio', label: 'Sistema' },
-  { key: 'obraTipo', columna: 'obra_tipo', label: 'Obra' },
-  { key: 'estado', columna: 'estado', label: 'Estado' },
-  { key: 'sitio', columna: 'sitio', label: 'Sitio' },
-  { key: 'sector', columna: 'sector', label: 'Sector' },
-  { key: 'areaUnidad', columna: 'area_unidad', label: 'Unidad' },
-  { key: 'validado', columna: 'validado', label: 'Validado' },
-  { key: 'motivoNoValido', columna: 'motivo_no_valido', label: 'Motivo no válido' },
-  { key: 'disciplinaModelo', columna: 'disciplina_modelo', label: 'Disciplina modelo' },
-  { key: 'disciplinaArbol', columna: 'disciplina_arbol', label: 'Disciplina árbol' },
-  { key: 'obraTarget', columna: 'obra_target', label: 'Obra target' },
-  { key: 'cwpFuente', columna: 'cwp_fuente', label: 'CWP fuente' },
-  { key: 'vinculoNivel', columna: 'vinculo_nivel', label: 'Vínculo nivel' },
-  { key: 'categoriaEnlace', columna: 'categoria_enlace', label: 'Categoría enlace' },
-  { key: 'codigoBmp', columna: 'codigo_bmp', label: 'Código BMP' },
-];
-interface FiltrosState {
-  alcance: string; itemOAdicional: string; especialidad: string; categoria: string; sistema: string; obraTipo: string; estado: string;
-  sitio: string; sector: string; areaUnidad: string; validado: string; motivoNoValido: string; disciplinaModelo: string;
-  disciplinaArbol: string; obraTarget: string; cwpFuente: string; vinculoNivel: string; categoriaEnlace: string; codigoBmp: string;
-}
-const EMPTY_FILTERS: FiltrosState = {
-  alcance: '', itemOAdicional: '', especialidad: '', categoria: '', sistema: '', obraTipo: '', estado: '',
-  sitio: '', sector: '', areaUnidad: '', validado: '', motivoNoValido: '', disciplinaModelo: '',
-  disciplinaArbol: '', obraTarget: '', cwpFuente: '', vinculoNivel: '', categoriaEnlace: '', codigoBmp: '',
-};
-
-// Columnas opcionales de la tabla (moniker + CWA/CV/CWP + reasignar son siempre visibles, no están aquí).
-// "Por asignar"/SIN-* se detecta por contener "SIN-" en el valor — sirve tanto para los baldes globales
-// (SIN-CWA, SIN-CWP.*) como para los placeholders anidados ("{padre}.SIN-CV", "{padre}.SIN-CWP").
-const COLUMN_DEFS: { key: string; label: string; get: (e: Elemento) => string | number | null }[] = [
-  { key: 'nombre', label: 'Nombre', get: e => e.name },
-  { key: 'disciplina', label: 'Disciplina', get: e => e.disciplina },
-  { key: 'categoria', label: 'Categoría', get: e => e.categoria_constructiva },
-  { key: 'descripcion', label: 'Descripción', get: e => e.descripcion },
-  { key: 'sector', label: 'Sector', get: e => e.sector },
-  { key: 'obra', label: 'Obra', get: e => e.obra_tipo },
-  { key: 'avance', label: 'Avance', get: e => e.avance_pct != null ? `${e.avance_pct}%` : '—' },
-  { key: 'tagEquipo', label: 'Tag equipo', get: e => e.tag_equipo },
-  { key: 'tipoElemento', label: 'Tipo elemento', get: e => e.tipo_elemento },
-  { key: 'especialidad', label: 'Especialidad', get: e => e.especialidad_nombre ?? e.especialidad_cod },
-  { key: 'sitio', label: 'Sitio', get: e => e.sitio },
-  { key: 'areaUnidad', label: 'Unidad', get: e => e.area_unidad },
-  { key: 'sistema', label: 'Sistema', get: e => e.sistema_servicio },
-  { key: 'obraTarget', label: 'Obra target', get: e => e.obra_target },
-  { key: 'estado', label: 'Estado', get: e => e.estado },
-  { key: 'alcance', label: 'Alcance', get: e => e.alcance },
-  { key: 'itemOAdicional', label: 'Item/Adicional', get: e => e.item_o_adicional },
-  { key: 'validado', label: 'Validado', get: e => e.validado },
-  { key: 'motivoNoValido', label: 'Motivo no válido', get: e => e.motivo_no_valido },
-  { key: 'disciplinaModelo', label: 'Disciplina modelo', get: e => e.disciplina_modelo },
-  { key: 'disciplinaArbol', label: 'Disciplina árbol', get: e => e.disciplina_arbol },
-  { key: 'cwpFuente', label: 'CWP fuente', get: e => e.cwp_fuente },
-  { key: 'vinculoNivel', label: 'Vínculo nivel', get: e => e.vinculo_nivel },
-  { key: 'categoriaEnlace', label: 'Categoría enlace', get: e => e.categoria_enlace },
-  { key: 'codigoBmp', label: 'Código BMP', get: e => e.codigo_bmp },
-  { key: 'bmpNombre', label: 'BMP nombre', get: e => e.bmp_nombre },
-  { key: 'material', label: 'Material', get: e => e.material },
-  { key: 'tagUnificado', label: 'Tag (BD_DataTools)', get: e => e.tag_unificado },
-  { key: 'iwpId', label: 'IWP', get: e => e.iwp_id },
-  { key: 'ewpId', label: 'EWP', get: e => e.ewp_id },
-  { key: 'comwpId', label: 'COMWP', get: e => e.comwp_id },
-  { key: 'wbs', label: 'WBS', get: e => e.wbs },
-  { key: 'pwpElemento', label: 'PWP', get: e => e.pwp_elemento },
-  { key: 'obraRaw', label: 'Obra (raw)', get: e => e.obra_raw },
-  { key: 'cwpArbol', label: 'CWP árbol', get: e => e.cwp_arbol },
-  { key: 'vinculoFuente', label: 'Vínculo fuente', get: e => e.vinculo_fuente },
-  { key: 'tieneItemizado', label: 'Tiene itemizado', get: e => e.tiene_itemizado },
-  { key: 'tieneBmp', label: 'Tiene BMP', get: e => e.tiene_bmp },
-  { key: 'especificacion', label: 'Especificación', get: e => e.especificacion },
-  { key: 'pipelineLinea', label: 'Línea', get: e => e.pipeline_linea },
-  { key: 'spool', label: 'Spool', get: e => e.spool },
-  { key: 'pid', label: 'P&ID', get: e => e.pid },
-  { key: 'isometrico', label: 'Isométrico', get: e => e.isometrico },
-  { key: 'diametroIn', label: 'Diámetro (in)', get: e => e.diametro_in },
-  { key: 'longitudM', label: 'Longitud (m)', get: e => e.longitud_m },
-  { key: 'pesoKg', label: 'Peso (kg)', get: e => e.peso_kg },
-  { key: 'volumenM3', label: 'Volumen (m³)', get: e => e.volumen_m3 },
-  { key: 'este', label: 'Este', get: e => e.este },
-  { key: 'norte', label: 'Norte', get: e => e.norte },
-  { key: 'elevacion', label: 'Elevación', get: e => e.elevacion },
-  { key: 'validEspacial', label: 'Válido espacial', get: e => e.valid_espacial },
-  { key: 'requiereAltaSp3d', label: 'Requiere alta SmartPlant', get: e => e.requiere_alta_sp3d ? 'SI' : 'NO' },
-  { key: 'guidModelo', label: 'GUID modelo', get: e => e.guid_modelo },
-];
-const DEFAULT_COLS = ['nombre', 'disciplina', 'categoria', 'descripcion', 'sector', 'obra', 'avance'];
-const COLS_STORAGE_KEY = 'mineria-elementos-columnas-v1';
-
-// Moniker/CWA/CV/CWP no están en COLUMN_DEFS porque se renderizan hardcodeados en la tabla (siempre
-// visibles) — para el export se agregan como columnas "locked" (siempre incluidas, no se pueden destildar).
-const EXPORT_LOCKED_KEYS = ['moniker', 'cwa', 'cv', 'cwp'];
-const EXPORT_LOCKED_DEFS: ExportColumnDef[] = [
-  { key: 'moniker', label: 'SP3D Moniker', get: e => e.sp3d_moniker },
-  { key: 'cwa', label: 'CWA', get: e => e.cwa_id },
-  { key: 'cv', label: 'CV', get: e => e.cv_id },
-  { key: 'cwp', label: 'CWP', get: e => e.cwp_id },
-];
-
-// Preferencias del panel de Revisión (pestaña CWA/CV/CWP, filtro oficiales/creadas, etc.) — se
-// guardan por proyecto para no tener que reconfigurarlas cada vez que se entra a la página.
-interface RevisionPrefs {
-  nivel: Nivel;
-  mostrarFiltro: 'todas' | 'oficiales' | 'creadas';
-  colorearCreadas: boolean;
-}
-function revisionPrefsKey(projectId: string): string { return `mineria-revision-prefs-v1:${projectId}`; }
-function loadRevisionPrefs(projectId: string): Partial<RevisionPrefs> {
-  if (typeof window === 'undefined') return {};
-  try { return JSON.parse(window.localStorage.getItem(revisionPrefsKey(projectId)) ?? '{}'); } catch { return {}; }
-}
-// Lee-combina-escribe: el panel de Revisión y la página principal guardan campos distintos del mismo
-// objeto de preferencias — un overwrite directo haría que uno le pisara los campos al otro.
-function saveRevisionPrefs(projectId: string, partial: Partial<RevisionPrefs>) {
-  if (typeof window === 'undefined') return;
-  const current = loadRevisionPrefs(projectId);
-  window.localStorage.setItem(revisionPrefsKey(projectId), JSON.stringify({ ...current, ...partial }));
-}
-
-function levelBadge(value: string | null): { texto: string; cls: string } {
-  if (!value) return { texto: '—', cls: 'bg-red-50 text-red-500' };
-  if (value.includes('SIN-')) return { texto: value, cls: 'bg-amber-50 text-amber-700' };
-  return { texto: value, cls: 'bg-emerald-50 text-emerald-700' };
-}
 
 export default function ElementosEditorPage() {
   const { org_slug, project_id } = useParams<{ org_slug: string; project_id: string }>();
@@ -322,7 +62,7 @@ export default function ElementosEditorPage() {
   // Puente hacia las funciones de refresco de cobertura que vive dentro de ModelTreePanel — se llena
   // solo (vía useEffect) apenas el panel monta; confirmTreeBranchAssign lo usa para refrescar el %
   // de la rama recién clasificada sin esperar a que el usuario apriete "Actualizar %".
-  const treeCoverageApiRef = useRef<{ refresh: (dbId: number) => void; refreshAll: () => void } | null>(null);
+  const treeCoverageApiRef = useRef<TreeCoverageApi | null>(null);
   const [search, setSearch] = useState('');
   const [exactMonikers, setExactMonikers] = useState<string[] | null>(null);
   const [filtros, setFiltros] = useState<Filtros>({});
@@ -377,6 +117,10 @@ export default function ElementosEditorPage() {
   const [ghostMode, setGhostMode] = useState(true);
   const [autoZoom, setAutoZoom] = useState(true);
   const [multiSelectOn, setMultiSelectOn] = useState(false);
+  // Barrido por cuadro: arrastrar un rectángulo sobre el modelo selecciona TODA la geometría que
+  // cae dentro. Es la herramienta del límite de batería — un paquete se define por dónde termina en
+  // el espacio, y a clic por elemento un área de miles de piezas no se alcanza a recorrer nunca.
+  const [sweepOn, setSweepOn] = useState(false);
   const [paintTarget, setPaintTarget] = useState<PaintTarget | null>(null);
   const [paintCount, setPaintCount] = useState(0);
 
@@ -410,6 +154,20 @@ export default function ElementosEditorPage() {
     });
   }, []);
 
+  // El barrido suma sobre lo ya seleccionado, así que se enciende junto con la multi-selección:
+  // sin eso, cada rectángulo nuevo reemplazaba al anterior y no se podía armar un área en varias pasadas.
+  const toggleSweep = useCallback(() => {
+    setSweepOn(prev => {
+      const next = !prev;
+      viewerRef.current?.setDeepSelection(next);
+      if (next && !multiSelectOn) {
+        setMultiSelectOn(true);
+        viewerRef.current?.setMultiSelect(true);
+      }
+      return next;
+    });
+  }, [multiSelectOn]);
+
   const onResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     resizingRef.current = true;
@@ -433,6 +191,13 @@ export default function ElementosEditorPage() {
     // loadBuckets se llama tras cada reasignación — el cache de monikers por nivel queda obsoleto.
     monikerCacheRef.current.clear();
     fetch(`/api/mining-elementos/buckets?project_id=${project_id}`).then(parseJsonOrThrow).then(d => setBuckets(d.buckets ?? [])).catch(() => {});
+  }, [project_id]);
+
+  // Los conteos por categoría de enlace (los chips de "qué falta y por qué") salen del mismo endpoint
+  // de filtros, así que hay que recargarlo después de reasignar o los chips quedan con cifras viejas.
+  const loadFiltros = useCallback(() => {
+    if (!project_id) return;
+    fetch(`/api/mining-elementos/filtros?project_id=${project_id}`).then(parseJsonOrThrow).then(d => setFiltros(d.filtros ?? {})).catch(() => {});
   }, [project_id]);
 
   /**
@@ -473,8 +238,8 @@ export default function ElementosEditorPage() {
     if (!project_id) return;
     loadBuckets();
     loadCatalogs();
-    fetch(`/api/mining-elementos/filtros?project_id=${project_id}`).then(parseJsonOrThrow).then(d => setFiltros(d.filtros ?? {})).catch(() => {});
-  }, [project_id, loadBuckets, loadCatalogs]);
+    loadFiltros();
+  }, [project_id, loadBuckets, loadCatalogs, loadFiltros]);
 
   useEffect(() => {
     if (!project_id) return;
@@ -514,6 +279,33 @@ export default function ElementosEditorPage() {
 
   const totalSinCwp = useMemo(() => buckets.find(b => b.cwpId === null)?.n ?? 0, [buckets]);
   const totalElementos = useMemo(() => buckets.reduce((s, b) => s + b.n, 0), [buckets]);
+
+  // ── Chips "qué falta y por qué" ───────────────────────────────────────────
+  // El estado del vínculo ya viene guardado por elemento (categoria_enlace) y el motivo también
+  // (motivo_no_valido), pero hasta ahora vivían escondidos en el desplegable de filtros y en una
+  // columna apagada por defecto. Sacarlos a la cabecera convierte "5.583 sin CWP" —un número muerto—
+  // en la cola de trabajo del día, con un click para filtrar la tabla y aislar en 3D.
+  const chipsEnlace = useMemo(
+    () => [...(filtros['categoria_enlace'] ?? [])].sort((a, b) => b.n - a.n),
+    [filtros],
+  );
+  const chipsMotivo = useMemo(
+    () => [...(filtros['motivo_no_valido'] ?? [])].sort((a, b) => b.n - a.n).slice(0, 6),
+    [filtros],
+  );
+  // Los chips de motivo solo se ven cuando hay un estado elegido, así que al soltar el estado hay que
+  // soltar también el motivo: si no, queda un filtro activo que ya no se ve en ninguna parte y la
+  // tabla muestra menos de lo que el usuario cree haber pedido.
+  const toggleChipEnlace = useCallback((valor: string) => {
+    const quitando = activeFilters.categoriaEnlace === valor;
+    setExactMonikers(null);
+    setActiveFilters(prev => ({
+      ...prev,
+      categoriaEnlace: quitando ? '' : valor,
+      motivoNoValido: quitando ? '' : prev.motivoNoValido,
+    }));
+    setPage(0);
+  }, [activeFilters.categoriaEnlace]);
 
   const onSearchChange = useCallback((v: string) => {
     setExactMonikers(null);
@@ -557,13 +349,14 @@ export default function ElementosEditorPage() {
       setSelected(new Set());
       fetchRows();
       loadBuckets();
+      loadFiltros();
       bumpRevisionRefresh();
     } catch (e: any) {
       setToast(`Error: ${e.message}`);
     } finally {
       setApplying(false);
     }
-  }, [bulkTarget, selected, project_id, fetchRows, loadBuckets, bumpRevisionRefresh]);
+  }, [bulkTarget, selected, project_id, fetchRows, loadBuckets, loadFiltros, bumpRevisionRefresh]);
 
   // Filtro activo en la tabla (búsqueda + dropdowns) expresado como `match` para el PATCH
   // server-side — permite reasignar TODOS los resultados que coinciden (no solo los 100 de la página).
@@ -601,13 +394,14 @@ export default function ElementosEditorPage() {
       setBulkAllTarget('');
       fetchRows();
       loadBuckets();
+      loadFiltros();
       bumpRevisionRefresh();
     } catch (e: any) {
       setToast(`Error: ${e.message}`);
     } finally {
       setApplying(false);
     }
-  }, [currentMatch, bulkAllTarget, bulkAllNivel, project_id, fetchRows, loadBuckets, bumpRevisionRefresh]);
+  }, [currentMatch, bulkAllTarget, bulkAllNivel, project_id, fetchRows, loadBuckets, loadFiltros, bumpRevisionRefresh]);
 
   const applyToRow = useCallback(async (moniker: string, target: string) => {
     if (!target.trim()) return;
@@ -618,17 +412,18 @@ export default function ElementosEditorPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project_id, newCwpId: target.trim(), monikers: [moniker] }),
       });
-      const d = await parseJsonOrThrow(res);
+      await parseJsonOrThrow(res);
       setToast(`Reasignado a ${target.trim()}`);
       fetchRows();
       loadBuckets();
+      loadFiltros();
       bumpRevisionRefresh();
     } catch (e: any) {
       setToast(`Error: ${e.message}`);
     } finally {
       setApplying(false);
     }
-  }, [project_id, fetchRows, loadBuckets, bumpRevisionRefresh]);
+  }, [project_id, fetchRows, loadBuckets, loadFiltros, bumpRevisionRefresh]);
 
   useEffect(() => {
     if (!toast) return;
@@ -642,7 +437,7 @@ export default function ElementosEditorPage() {
     if (!viewerReady) return; // se aplicará en onReady si corresponde, o el usuario reintenta
     setViewerStatus('Aislando elementos…');
     try {
-      const itemProp = llavesDelProyecto(bimConfig).join(',');
+      const itemProp = llavesDelProyecto(bimConfigRef.current).join(',');
       const dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
       if (dbIds.length) {
         lastIsolatedDbIdsRef.current = dbIds;
@@ -748,7 +543,7 @@ export default function ElementosEditorPage() {
         const monikers = groups[codigos[i]];
         if (!monikers?.length) { perGroupDbIds.push([]); continue; }
         esperados += monikers.length;
-        const itemProp = llavesDelProyecto(bimConfig).join(',');
+        const itemProp = llavesDelProyecto(bimConfigRef.current).join(',');
         let dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
         // resolveManyByProperty puede devolver dbIds de ENSAMBLAJE (donde vive la llave),
         // mientras que treeBranch.leafDbIds son dbIds HOJA — sin expandir a hojas antes de intersectar,
@@ -787,7 +582,7 @@ export default function ElementosEditorPage() {
       const groups = await fetchMonikerGroups(nivel, [codigo]);
       const monikers = groups[codigo] ?? [];
       if (!monikers.length) { setToast(`Sin elementos para ${codigo} en el modelo.`); return; }
-      const itemProp = llavesDelProyecto(bimConfig).join(',');
+      const itemProp = llavesDelProyecto(bimConfigRef.current).join(',');
       const dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
       if (dbIds.length) viewerRef.current.fitToView(dbIds);
       else setToast(`Sin elementos para ${codigo} en el modelo.`);
@@ -806,29 +601,51 @@ export default function ElementosEditorPage() {
     setViewerStatus('Buscando geometría sin asignar…');
     try {
       const mapping = await viewerRef.current.getExternalIdMapping();
-      const todos = Object.values(mapping) as number[];
-      if (!todos.length) { setToast('No se pudo leer la geometría del modelo.'); return; }
+      const entradas = Object.entries(mapping) as [string, number][];
+      if (!entradas.length) { setToast('No se pudo leer la geometría del modelo.'); return; }
+
+      // Solo la geometría cuenta: el mapping incluye también los nodos padre del árbol
+      // (ensamblajes, categorías), que no se asignan a ningún paquete y aparecerían siempre
+      // como "faltantes".
+      const hojas = new Set(viewerRef.current.getLeafDbIds(entradas.map(([, dbId]) => dbId)));
+      const conGeometria = entradas.filter(([, dbId]) => hojas.has(dbId));
+      const universo = conGeometria.length ? conGeometria : entradas;
 
       const groups = await fetchMonikerGroups(nivel);
-      const asignados = Object.values(groups).flat();
-      const dbIdsAsignados = asignados.length
-        ? await viewerRef.current.resolveMonikers(asignados, llavesDelProyecto(bimConfig).join(','))
-        : [];
+      const asignados = new Set(Object.values(groups).flat().map(m => String(m).trim()));
 
-      const yaEstan = new Set(dbIdsAsignados);
-      const faltan = todos.filter(id => !yaEstan.has(id));
+      // Primer descarte, directo y sin costo: cuando el identificador guardado ES el GUID del
+      // modelo basta comparar strings. Evita construir un índice por cada llave sobre 114.000
+      // elementos — que además, si todavía se está construyendo, no resuelve nada y haría
+      // aparecer el modelo entero como sin asignar.
+      const pendientes = universo.filter(([extId]) => !asignados.has(extId));
+
+      // Lo que quede se resuelve por propiedad, pero solo con los identificadores que NO son
+      // GUID (proyectos donde la llave es un TAG o un moniker).
+      const porPropiedad = [...asignados].filter(m => !(m in mapping));
+      let faltan = pendientes.map(([, dbId]) => dbId);
+      if (porPropiedad.length) {
+        const dbIdsProp = await viewerRef.current.resolveMonikers(porPropiedad, llavesDelProyecto(bimConfigRef.current).join(','));
+        const yaEstan = new Set(dbIdsProp);
+        faltan = faltan.filter(id => !yaEstan.has(id));
+      }
+      console.info(
+        `[BIM][SIN-ASIGNAR] modelo: ${entradas.length} nodos → ${universo.length} con geometría | ` +
+        `asignados en BD: ${asignados.size} (${asignados.size - porPropiedad.length} por GUID, ${porPropiedad.length} por propiedad) | ` +
+        `faltan: ${faltan.length}`
+      );
       if (!faltan.length) { setToast('Todo el modelo está asignado a un paquete.'); return; }
 
       lastIsolatedDbIdsRef.current = faltan;
       viewerRef.current.showOnly(faltan, ghostMode);
       viewerRef.current.colorDbIds(faltan, 1, 0.25, 0.25, 1);
       if (autoZoom) viewerRef.current.fitToView(faltan);
-      const pct = ((faltan.length / todos.length) * 100).toFixed(0);
+      const pct = ((faltan.length / universo.length) * 100).toFixed(0);
       setToast(`${faltan.length.toLocaleString('es-CL')} elementos sin ${NIVEL_LABEL[nivel]} (${pct}% del modelo) — en rojo.`);
     } finally {
       setViewerStatus(null);
     }
-  }, [viewerReady, ghostMode, autoZoom, bimConfig, fetchMonikerGroups]);
+  }, [viewerReady, ghostMode, autoZoom, fetchMonikerGroups]);
 
   // Aísla, COLOREA (cada grupo con su color de la lista) y enfoca varios códigos a la vez
   const viewSelectedInViewer = useCallback(async (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => {
@@ -843,7 +660,7 @@ export default function ElementosEditorPage() {
         const monikers = groups[sel.codigo] ?? [];
         esperados += monikers.length;
         if (!monikers.length) { perSelDbIds.push([]); continue; }
-        const itemProp = llavesDelProyecto(bimConfig).join(',');
+        const itemProp = llavesDelProyecto(bimConfigRef.current).join(',');
         const dbIds = await viewerRef.current.resolveMonikers(monikers, itemProp);
         perSelDbIds.push(dbIds);
         allDbIds.push(...dbIds);
@@ -899,7 +716,7 @@ export default function ElementosEditorPage() {
       // Se prueban en orden y, si el elemento no publica ninguna, se usa su GUID nativo, que
       // existe siempre. Todo va por el mismo camino y en lote: tratar el GUID como excepción
       // obligaba a una petición por elemento y no terminaba nunca en modelos grandes.
-      const llaves = llavesDelProyecto(bimConfig);
+      const llaves = llavesDelProyecto(bimConfigRef.current);
       const props = await viewerRef.current.loadBulkElementProps(dbIds, llaves);
 
       const monikers: string[] = [];
@@ -954,6 +771,7 @@ export default function ElementosEditorPage() {
       paintedDbIdsRef.current = new Set();
       setPaintCount(0);
       loadBuckets();
+      loadFiltros();
       fetchRows();
       bumpRevisionRefresh();
     } catch (e: any) {
@@ -961,7 +779,7 @@ export default function ElementosEditorPage() {
     } finally {
       setViewerStatus(null);
     }
-  }, [paintTarget, project_id, bimConfig, loadBuckets, fetchRows, bumpRevisionRefresh, ajustarConteoLocal]);
+  }, [paintTarget, project_id, loadBuckets, loadFiltros, fetchRows, bumpRevisionRefresh, ajustarConteoLocal]);
 
   // Clasifica por GUID del modelo los elementos que no publican ninguna llave. Va en lote por
   // el endpoint general: una petición por elemento tardaba ~1 s cada una, así que una
@@ -996,9 +814,9 @@ export default function ElementosEditorPage() {
     setToast(ok
       ? `✓ ${ok.toLocaleString('es-CL')} elemento(s) clasificado(s) en ${codigo} por GUID del modelo.`
       : 'No se pudo agregar — revisa que el CWP exista.');
-    if (ok) { loadBuckets(); fetchRows(); bumpRevisionRefresh(); }
+    if (ok) { loadBuckets(); loadFiltros(); fetchRows(); bumpRevisionRefresh(); }
     return ok;
-  }, [project_id, loadBuckets, fetchRows, bumpRevisionRefresh, ajustarConteoLocal]);
+  }, [project_id, loadBuckets, loadFiltros, fetchRows, bumpRevisionRefresh, ajustarConteoLocal]);
 
   const onViewerSelectionChange = useCallback(async (dbIds: number[]) => {
     if (!viewerRef.current || !dbIds.length) return;
@@ -1177,6 +995,7 @@ export default function ElementosEditorPage() {
       treeCoverageApiRef.current?.refresh(treeBranch.dbId);
       setTreeBranch(null);
       loadBuckets();
+      loadFiltros();
       fetchRows();
       bumpRevisionRefresh();
     } catch (e: any) {
@@ -1185,7 +1004,7 @@ export default function ElementosEditorPage() {
       setTreeBranchBusy(false);
       setTreeBranchProgress(null);
     }
-  }, [treeBranch, treeBranchTarget, treeBranchNivel, project_id, loadBuckets, fetchRows, bumpRevisionRefresh]);
+  }, [treeBranch, treeBranchTarget, treeBranchNivel, project_id, loadBuckets, loadFiltros, fetchRows, bumpRevisionRefresh, ajustarConteoLocal]);
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -1224,6 +1043,49 @@ export default function ElementosEditorPage() {
           <Settings className="w-3.5 h-3.5" /> Modelo 3D
         </button>
       </div>
+
+      {/* Qué falta y por qué — el estado del vínculo de cada elemento, a un click de filtrar y aislar */}
+      {chipsEnlace.length > 0 && (
+        <div className="bg-white border-b border-slate-200 px-6 py-2 flex items-center gap-1.5 flex-wrap shrink-0">
+          <span className="text-[9.5px] font-black uppercase tracking-wide text-slate-400 mr-1">Estado del vínculo</span>
+          {chipsEnlace.map(c => {
+            const activo = activeFilters.categoriaEnlace === c.valor;
+            return (
+              <button
+                key={c.valor}
+                onClick={() => toggleChipEnlace(c.valor)}
+                title={activo ? 'Quitar este filtro' : `Filtrar la tabla por ${c.valor} — después puedes aislarlos todos en 3D`}
+                className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold border transition',
+                  activo ? 'bg-[#0D47A1] text-white border-[#0D47A1]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100')}
+              >
+                {c.valor}
+                <span className={cn('font-mono', activo ? 'text-white/80' : 'text-slate-400')}>{c.n.toLocaleString('es-CL')}</span>
+              </button>
+            );
+          })}
+          {/* El "por qué" solo aparece cuando ya se eligió un "qué" — si no, son demasiados motivos juntos */}
+          {activeFilters.categoriaEnlace && chipsMotivo.length > 0 && (
+            <>
+              <span className="text-[9.5px] font-black uppercase tracking-wide text-slate-400 mx-1">Motivo</span>
+              {chipsMotivo.map(m => {
+                const activo = activeFilters.motivoNoValido === m.valor;
+                return (
+                  <button
+                    key={m.valor}
+                    onClick={() => onFilterChange('motivoNoValido', activo ? '' : m.valor)}
+                    title={m.valor}
+                    className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-medium border transition max-w-[280px]',
+                      activo ? 'bg-amber-500 text-white border-amber-500' : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100')}
+                  >
+                    <span className="truncate">{m.valor}</span>
+                    <span className={cn('font-mono shrink-0', activo ? 'text-white/80' : 'text-amber-500')}>{m.n.toLocaleString('es-CL')}</span>
+                  </button>
+                );
+              })}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 flex overflow-hidden">
         {/* Sidebar — colapsable para dejarle más espacio horizontal a la tabla */}
@@ -1370,7 +1232,7 @@ export default function ElementosEditorPage() {
                 value={bulkAllNivel} onChange={e => setBulkAllNivel(e.target.value as Nivel)}
                 className="px-1.5 py-1 rounded text-[10.5px] border border-amber-300 bg-white text-amber-900"
               >
-                {(['cwa', 'cv', 'cwp', 'swp'] as Nivel[]).map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
+                {NIVELES.map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
               </select>
               <input
                 list={bulkAllNivel === 'cwa' ? 'cwa-catalog-options' : bulkAllNivel === 'cv' ? 'cv-catalog-options' : bulkAllNivel === 'swp' ? 'swp-catalog-options' : 'cwp-catalog-options'}
@@ -1462,9 +1324,13 @@ export default function ElementosEditorPage() {
             <div className="flex-1 border-l border-slate-200 bg-[#060d1f] flex flex-col min-w-0">
               <div className="px-3 py-2 flex items-center justify-between bg-[#0a1628] border-b border-white/5 gap-2">
                 <span className="text-[10px] font-black uppercase tracking-wide text-slate-400 truncate">
-                  {paintTarget
-                    ? 'Click en un elemento para asignarlo'
-                    : 'Click en un elemento para ubicarlo en el árbol y en la tabla'}
+                  {sweepOn
+                    ? (paintTarget
+                      ? `Arrastra un rectángulo para asignar todo lo que caiga dentro a ${paintTarget.codigo}`
+                      : 'Arrastra un rectángulo sobre el modelo para barrer todo lo que caiga dentro')
+                    : paintTarget
+                      ? 'Click en un elemento para asignarlo'
+                      : 'Click en un elemento para ubicarlo en el árbol y en la tabla'}
                 </span>
                 <div className="flex items-center gap-1 shrink-0">
                   <button
@@ -1486,6 +1352,16 @@ export default function ElementosEditorPage() {
                   >
                     {ghostMode ? <Ghost className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                     <span className="text-[9px] font-bold uppercase">{ghostMode ? 'Fantasma' : 'Aislado'}</span>
+                  </button>
+                  <button
+                    onClick={toggleSweep}
+                    title={sweepOn
+                      ? 'Barrido por cuadro ACTIVO: arrastra un rectángulo y se selecciona todo lo que cae dentro (también lo chico y lo tapado). Click para volver a girar la cámara con el arrastre'
+                      : 'Barrido por cuadro: arrastra un rectángulo para seleccionar de una vez toda la geometría de un área — la forma rápida de marcar un límite de batería'}
+                    className={cn('p-1.5 rounded flex items-center gap-1', sweepOn ? 'bg-[#FF0000]/80 text-white' : 'bg-white/10 text-slate-300')}
+                  >
+                    <SquareDashedMousePointer className="w-3.5 h-3.5" />
+                    <span className="text-[9px] font-bold uppercase">Barrido</span>
                   </button>
                   <button
                     onClick={toggleMultiSelect}
@@ -1552,7 +1428,7 @@ export default function ElementosEditorPage() {
                           onChange={e => { setTreeBranchNivel(e.target.value as Nivel); setTreeBranchTarget(''); }}
                           className="shrink-0 px-1.5 py-1 rounded text-[10.5px] border border-blue-300/40 bg-white text-[#08203F]"
                         >
-                          {(['cwa', 'cv', 'cwp', 'swp'] as Nivel[]).map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
+                          {NIVELES.map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
                         </select>
                         <select
                           value={treeBranchTarget} onChange={e => setTreeBranchTarget(e.target.value)}
@@ -1594,13 +1470,14 @@ export default function ElementosEditorPage() {
                     ref={viewerRef} urn={bimUrn}
                     onReady={() => {
                       viewerRef.current?.setMultiSelect(multiSelectOn);
+                      viewerRef.current?.setDeepSelection(sweepOn);
                       setViewerReady(true);
                       // Precarga el índice de la llave principal del proyecto apenas el modelo
                       // está listo, en vez de esperar al primer clic en "Colorear": así el primer
                       // uso no se siente lento. Espera 1,5 s para no competir con el resto del
                       // onReady (árbol, paneles) mientras se pinta.
                       setTimeout(() => {
-                        const principal = llavesDelProyecto(bimConfig)[0];
+                        const principal = llavesDelProyecto(bimConfigRef.current)[0];
                         if (principal) viewerRef.current?.buildPropertyMultiIndex(principal).catch(() => {});
                       }, 1500);
                     }}
@@ -1698,914 +1575,6 @@ export default function ElementosEditorPage() {
         loadingProgress={exportProgress}
         filename={`elementos_${project_id}.xlsx`}
       />
-    </div>
-  );
-}
-
-function LevelCell({ value }: { value: string | null }) {
-  const { texto, cls } = levelBadge(value);
-  return (
-    <td className="px-2 py-1.5">
-      <span className={cn('px-1.5 py-0.5 rounded text-[9.5px] font-bold font-mono inline-block max-w-[140px] truncate', cls)} title={texto}>
-        {texto}
-      </span>
-    </td>
-  );
-}
-
-function RowItem({ r, checked, onToggle, onApply, onIsolate, visibleCols, applying }: {
-  r: Elemento; checked: boolean; onToggle: () => void; onApply: (target: string) => void; onIsolate: () => void;
-  visibleCols: Set<string>; applying: boolean;
-}) {
-  const [target, setTarget] = useState('');
-  return (
-    <tr className="border-b border-slate-100 hover:bg-slate-50">
-      <td className="px-2 py-1.5"><button onClick={onToggle}>{checked ? <CheckSquare className="w-3.5 h-3.5 text-blue-600" /> : <Square className="w-3.5 h-3.5 text-slate-300" />}</button></td>
-      <LevelCell value={r.cwa_id} />
-      <LevelCell value={r.cv_id} />
-      <LevelCell value={r.cwp_id} />
-      <LevelCell value={r.swp_id} />
-      <td className="px-2 py-1.5 font-mono text-[10px] text-slate-500 max-w-[160px] truncate">
-        <span className="truncate" title={r.sp3d_moniker}>{r.sp3d_moniker}</span>
-        {r.requiere_alta_sp3d && (
-          <span className="ml-1 px-1 py-0 rounded text-[8px] font-black uppercase bg-slate-100 text-slate-500" title={`Identificado por GUID del modelo: ${r.guid_modelo ?? '—'}`}>
-            GUID
-          </span>
-        )}
-      </td>
-      {COLUMN_DEFS.filter(c => visibleCols.has(c.key)).map(c => (
-        <td key={c.key} className="px-2 py-1.5 max-w-[200px] truncate" title={String(c.get(r) ?? '')}>{c.get(r)}</td>
-      ))}
-      <td className="px-2 py-1.5">
-        <div className="flex items-center gap-1">
-          <input list="cwp-catalog-options" value={target} onChange={e => setTarget(e.target.value)} placeholder="CWP…" className="w-24 px-1.5 py-0.5 text-[10px] border border-slate-200 rounded" />
-          <button disabled={applying || !target.trim()} onClick={() => { onApply(target); setTarget(''); }} className="p-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-30" title="Reasignar"><ArrowRightCircle className="w-3.5 h-3.5 text-[#0D47A1]" /></button>
-          <button onClick={onIsolate} className="p-1 rounded bg-slate-100 hover:bg-slate-200" title="Ver en 3D"><Crosshair className="w-3.5 h-3.5 text-slate-500" /></button>
-        </div>
-      </td>
-    </tr>
-  );
-}
-
-interface RevisionItem {
-  codigo: string; nombre: string | null; nElementos: number; enCatalogo: boolean; esOficial: boolean;
-}
-
-// CWP_ID = {CV}.{DISC}{NNN} (ej. 312101.D001) → CV = "312101" → CWA = CV[:4] = "3121"
-// (misma convención que deriveCwaCv en /api/mining-elementos) — usado para armar el árbol CWA→CV→CWP.
-function deriveCwaCvFromCwp(cwpId: string): { cwa: string | null; cv: string | null } {
-  // El formato del CWP cambia por proyecto (CV.DiscSeq, CWP-área-sector-disc-seq,
-  // WBS-CV-DiscSeq…), así que la derivación va contra el parser central. Antes se exigía
-  // aquí un patrón de 6 dígitos y un punto: cualquier otro proyecto veía TODOS sus paquetes
-  // caer en "sin clasificar", sin árbol CWA → CV.
-  const p = parseCwp(cwpId);
-  if (p) return { cwa: p.cwa_id, cv: p.cv_id };
-  // "{CV}.SIN-CWP" → un CWP se asignó al revés (CV sin CWP todavía): anidar bajo su CV/CWA real.
-  const mCv = cwpId.match(/^(\d{6})\.SIN-CWP$/);
-  if (mCv) { const cv = mCv[1]; return { cwa: cv.slice(0, 4), cv }; }
-  // "{CWA}.SIN-CV.SIN-CWP" → un elemento solo tiene CWA asignado: anidar bajo un CV sintético "por asignar".
-  const mCwa = cwpId.match(/^(\d{4})\.SIN-CV\.SIN-CWP$/);
-  if (mCwa) return { cwa: mCwa[1], cv: `${mCwa[1]}.SIN-CV` };
-  return { cwa: null, cv: null };
-}
-
-// CWP_ID = {CV}.{DISC}{NNN} → la disciplina es la parte alfabética entre el punto y el número
-// (ej. "312101.C001" → "C" = Civil, "312101.EH001" → "EH" = cableado) — es la MISMA letra sin importar
-// el CWA/CV, así que sirve para agrupar "todos los Civil" del proyecto entero independiente de en qué
-// sector/área caigan.
-function deriveDisciplinaFromCwp(cwpId: string): string | null {
-  const m = cwpId.match(/^\d{6}\.([A-Za-z]+)\d+$/);
-  return m ? m[1].toUpperCase() : null;
-}
-
-function GroupCheckbox({ state }: { state: 'all' | 'some' | 'none' }) {
-  if (state === 'all') return <CheckSquare className="w-3.5 h-3.5 text-blue-600" />;
-  if (state === 'some') return (
-    <div className="w-3.5 h-3.5 rounded-sm border-2 border-blue-600 flex items-center justify-center shrink-0">
-      <div className="w-1.5 h-0.5 bg-blue-600" />
-    </div>
-  );
-  return <Square className="w-3.5 h-3.5 text-slate-300" />;
-}
-
-type TreeNode = { dbId: number; name: string; childCount: number };
-type CoverageState = { vinculados: number; total: number } | 'loading' | 'too-big' | 'error';
-// Ramas con más hojas que esto no se calculan automático — leer sus propiedades (getLeafDbIds +
-// loadBulkElementProps) es trabajo síncrono pesado del SDK de Forge que congela el frame del
-// navegador varios segundos en ramas grandes (medido: ~8s con 8000 hojas). Quedan con "—" y el
-// usuario puede usar el botón de aislar para revisarlas igual.
-const COVERAGE_MAX_LEAVES = 1500;
-// Pausa entre cada rama de la cola — sin esto, el navegador encola decenas de ramas pesadas de
-// seguido al abrir el árbol y queda "pegado" varios segundos seguidos sin poder repintar nada.
-const COVERAGE_QUEUE_DELAY_MS = 400;
-
-// Navega el árbol NATIVO del modelo (assemblies/grupos tal como vienen del CAD) cargando hijos a demanda
-// con getChildren — nunca carga todo el árbol de una sola vez. Cada rama solo se RESUELVE a dbIds reales
-// (y se pide confirmación con el conteo) cuando el usuario hace click en el botón de "usar esta rama";
-// este componente nunca escribe nada en la BD por sí mismo.
-type TreeCoverageApi = { refresh: (dbId: number) => void; refreshAll: () => void };
-
-function ModelTreePanel({ viewerRef, viewerReady, onPreviewBranch, revealDbId, projectId, activeNivel, coverageApiRef, llaves }: {
-  llaves: string[];
-  viewerRef: { current: ForgeViewerHandle | null };
-  viewerReady: boolean;
-  onPreviewBranch: (dbId: number, name: string) => void;
-  revealDbId: { dbId: number; ts: number } | null;
-  projectId: string;
-  activeNivel: Nivel;
-  coverageApiRef?: { current: TreeCoverageApi | null };
-}) {
-  const [rootId, setRootId] = useState<number | null>(null);
-  const [childrenCache, setChildrenCache] = useState<Map<number, TreeNode[]>>(new Map());
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const [highlightDbId, setHighlightDbId] = useState<number | null>(null);
-  const [treeLoadError, setTreeLoadError] = useState(false);
-  const [retryToken, setRetryToken] = useState(0);
-
-  // Cobertura (% de elementos ya vinculados al nivel activo) por rama — se calcula UNA vez por
-  // dbId la primera vez que su fila se monta, en cola (1 a la vez) para no saturar el visor/API
-  // cuando se expanden muchas ramas de golpe. Se reinicia si cambia el nivel activo (CWA/CV/CWP/SWP),
-  // porque el % es relativo a ESE nivel.
-  const [coverage, setCoverage] = useState<Map<number, CoverageState>>(new Map());
-  const coverageQueueRef = useRef<number[]>([]);
-  const coverageBusyRef = useRef(false);
-  const coverageSeenRef = useRef<Set<number>>(new Set());
-
-  useEffect(() => {
-    setCoverage(new Map());
-    coverageQueueRef.current = [];
-    coverageSeenRef.current = new Set();
-  }, [activeNivel]);
-
-  const pumpCoverageQueue = useCallback(() => {
-    if (coverageBusyRef.current) return;
-    const dbId = coverageQueueRef.current.shift();
-    if (dbId == null) return;
-    coverageBusyRef.current = true;
-    setCoverage(prev => new Map(prev).set(dbId, 'loading'));
-    (async () => {
-      let result: CoverageState = 'error';
-      try {
-        const v = viewerRef.current;
-        if (v) {
-          const leafDbIds = v.getLeafDbIds([dbId]);
-          if (!leafDbIds.length) result = { vinculados: 0, total: 0 };
-          else if (leafDbIds.length > COVERAGE_MAX_LEAVES) result = 'too-big';
-          else {
-            const props = await v.loadBulkElementProps(leafDbIds, llaves);
-            const monikers = [...new Set(props.map(p => valorDeLlave(p.props as Record<string, string>, llaves)).filter(Boolean) as string[])];
-            let vinculados = 0;
-            if (monikers.length) {
-              const r = await fetchWithRetry('/api/mining-elementos/cobertura', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ project_id: projectId, nivel: activeNivel, monikers }),
-              });
-              const d = await parseJsonOrThrow(r);
-              vinculados = d.vinculados ?? 0;
-            }
-            result = { vinculados, total: leafDbIds.length };
-          }
-        }
-      } catch {
-        result = 'error';
-      }
-      setCoverage(prev => new Map(prev).set(dbId, result));
-      coverageBusyRef.current = false;
-      setTimeout(pumpCoverageQueue, COVERAGE_QUEUE_DELAY_MS);
-    })();
-  }, [viewerRef, projectId, activeNivel]);
-
-  const requestCoverage = useCallback((dbId: number) => {
-    if (coverageSeenRef.current.has(dbId)) return;
-    coverageSeenRef.current.add(dbId);
-    coverageQueueRef.current.push(dbId);
-    pumpCoverageQueue();
-  }, [pumpCoverageQueue]);
-
-  // Recalcula UNA rama puntual (ej. justo después de asignarle un CWP desde el banner del visor) —
-  // se "olvida" de que ya la había visto para que requestCoverage la vuelva a encolar.
-  const refreshCoverage = useCallback((dbId: number) => {
-    coverageSeenRef.current.delete(dbId);
-    requestCoverage(dbId);
-  }, [requestCoverage]);
-
-  // Recalcula TODAS las ramas YA RENDERIZADAS al menos una vez (todo lo que hay en childrenCache,
-  // colapsado o no) — el % NUNCA se calcula solo al abrir/expandir (eso es lo que congelaba el
-  // navegador, ver COVERAGE_QUEUE_DELAY_MS arriba); solo corre cuando el usuario aprieta este botón.
-  const refreshAllCoverage = useCallback(() => {
-    const dbIds = new Set<number>();
-    for (const kids of childrenCache.values()) for (const k of kids) dbIds.add(k.dbId);
-    setCoverage(new Map());
-    coverageQueueRef.current = [];
-    coverageSeenRef.current = new Set();
-    dbIds.forEach(requestCoverage);
-  }, [childrenCache, requestCoverage]);
-
-  useEffect(() => {
-    if (coverageApiRef) coverageApiRef.current = { refresh: refreshCoverage, refreshAll: refreshAllCoverage };
-  }, [coverageApiRef, refreshCoverage, refreshAllCoverage]);
-
-  const ensureChildren = useCallback((dbId: number) => {
-    setChildrenCache(prev => {
-      if (prev.has(dbId) || !viewerRef.current) return prev;
-      const kids = viewerRef.current.getChildren(dbId);
-      const next = new Map(prev);
-      next.set(dbId, kids);
-      return next;
-    });
-  }, [viewerRef]);
-
-  // getRootId() depende de que el instance tree ya esté armado — viewerReady puede activarse antes
-  // de que el tree termine de poblarse, y en modelos pesados eso puede demorar minutos (el resto del
-  // visor ya espera esto con waitForInstanceTree, hasta 5 min). Antes se pateaba con un poll de 10s
-  // hecho a mano, que se quedaba en "Cargando árbol…" para siempre en modelos grandes.
-  useEffect(() => {
-    if (!viewerReady || !viewerRef.current) return;
-    setTreeLoadError(false);
-    let cancelled = false;
-    const v = viewerRef.current;
-
-    // Fallback por si el bundle del navegador quedó desactualizado (hot-reload no recargó el método
-    // nuevo del visor) — sin esto, llamar a una función inexistente tira un TypeError silencioso
-    // dentro del efecto y la UI se queda pegada en "Cargando árbol…" sin ningún aviso.
-    if (typeof v.waitForInstanceTree !== 'function') {
-      let attempts = 0;
-      const tryLoad = () => {
-        if (cancelled) return;
-        const r = viewerRef.current?.getRootId() ?? null;
-        if (r != null) { setRootId(r); ensureChildren(r); }
-        else if (attempts++ < 150) setTimeout(tryLoad, 200);
-        else setTreeLoadError(true);
-      };
-      tryLoad();
-      return () => { cancelled = true; };
-    }
-
-    v.waitForInstanceTree()
-      .then(() => {
-        if (cancelled) return;
-        const r = viewerRef.current?.getRootId() ?? null;
-        if (r != null) { setRootId(r); ensureChildren(r); }
-        else setTreeLoadError(true);
-      })
-      .catch(() => { if (!cancelled) setTreeLoadError(true); });
-    return () => { cancelled = true; };
-  }, [viewerReady, viewerRef, ensureChildren, retryToken]);
-
-  // Click en el visor (rama "árbol del modelo" activa) → expande todos los ancestros del dbId
-  // clickeado para revelarlo en el árbol, hace scroll hasta él y lo resalta.
-  useEffect(() => {
-    if (!revealDbId || !viewerRef.current) return;
-    const info = viewerRef.current.getNodeInfo(revealDbId.dbId);
-    if (!info) return;
-    setExpanded(prev => {
-      const next = new Set(prev);
-      for (const a of info.ancestors) next.add(a.dbId);
-      return next;
-    });
-    for (const a of info.ancestors) ensureChildren(a.dbId);
-    setHighlightDbId(revealDbId.dbId);
-    requestAnimationFrame(() => {
-      setTimeout(() => {
-        document.getElementById(`tree-node-${revealDbId.dbId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }, 50);
-    });
-  }, [revealDbId, viewerRef, ensureChildren]);
-
-  const toggle = (dbId: number) => {
-    setExpanded(prev => {
-      const next = new Set(prev);
-      if (next.has(dbId)) next.delete(dbId);
-      else { next.add(dbId); ensureChildren(dbId); }
-      return next;
-    });
-  };
-
-  if (!viewerReady) return <div className="p-4 text-center text-[11px] text-slate-400 italic">Abre el modelo 3D primero.</div>;
-  if (treeLoadError) {
-    return (
-      <div className="p-4 text-center text-[11px] text-slate-400 flex flex-col items-center gap-2">
-        <span>No se pudo armar el árbol del modelo (demoró demasiado en cargar).</span>
-        <button
-          onClick={() => { setTreeLoadError(false); setRetryToken(t => t + 1); }}
-          className="text-blue-600 font-bold hover:text-blue-700"
-        >
-          Reintentar
-        </button>
-      </div>
-    );
-  }
-  if (rootId == null) {
-    return (
-      <div className="p-4 text-center text-[11px] text-slate-400 italic flex items-center justify-center gap-2">
-        <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" /> Cargando árbol… (puede demorar harto en modelos pesados)
-      </div>
-    );
-  }
-  const rootKids = childrenCache.get(rootId) ?? [];
-  return (
-    <div className="flex-1 overflow-y-auto p-2">
-      <div className="flex items-start gap-1.5 px-1 pb-2">
-        <p className="text-[9.5px] text-slate-400 leading-snug flex-1">
-          Navega el árbol nativo del modelo. Click en <Crosshair className="w-2.5 h-2.5 inline" /> de una rama para aislarla
-          y ver cuántos elementos tiene — nunca se asigna nada hasta que confirmes en el banner del visor.
-          Click en un elemento del visor para ubicarlo aquí. El % (cuántos elementos ya están vinculados
-          al nivel {NIVEL_LABEL[activeNivel]} activo en Revisión) NO se calcula solo — click en el "%" de
-          una rama para calcularla, o usa "Actualizar %" para calcular todas las que ya viste.
-        </p>
-        <button
-          onClick={refreshAllCoverage}
-          title="Recalcular el % de todas las ramas que ya se han mostrado en este árbol"
-          className="shrink-0 flex items-center gap-1 px-1.5 py-1 rounded bg-slate-100 hover:bg-blue-100 text-slate-500 hover:text-blue-700 text-[9px] font-bold whitespace-nowrap"
-        >
-          <RefreshCw className="w-3 h-3" /> Actualizar %
-        </button>
-      </div>
-      {rootKids.length ? rootKids.map(k => (
-        <TreeNodeRow
-          key={k.dbId} node={k} depth={0}
-          expanded={expanded} childrenCache={childrenCache} highlightDbId={highlightDbId}
-          onToggle={toggle} onPreviewBranch={onPreviewBranch}
-          coverageMap={coverage} requestCoverage={requestCoverage}
-        />
-      )) : (
-        <p className="text-[10.5px] text-slate-400 italic px-1">Esta rama no tiene hijos.</p>
-      )}
-    </div>
-  );
-}
-
-// El % NUNCA se calcula solo: o lo pide el usuario click-eando este badge (una rama puntual) o con
-// el botón "Actualizar %" de arriba (todas las renderizadas) — antes se disparaba en cuanto la fila
-// se montaba, lo que en este modelo (57k elementos) congelaba el navegador varios segundos por rama.
-function CoverageBadge({ state, onRequest }: { state: CoverageState | undefined; onRequest: () => void }) {
-  if (!state) {
-    return (
-      <button onClick={onRequest} title="Calcular el % de esta rama" className="w-7 shrink-0 text-[9px] text-slate-300 hover:text-blue-500">
-        %
-      </button>
-    );
-  }
-  if (state === 'loading') return <Loader2 className="w-3 h-3 text-slate-300 animate-spin shrink-0" />;
-  if (state === 'too-big') return <span className="text-[8.5px] text-slate-300 shrink-0" title="Rama muy grande para calcular automático — usa el botón de aislar para revisarla">—</span>;
-  if (state === 'error') return <span className="text-[9px] text-red-300 shrink-0" title="No se pudo calcular la cobertura">⚠</span>;
-  if (!state.total) return <span className="w-7 shrink-0" />;
-  const pct = Math.round((state.vinculados / state.total) * 100);
-  const color = pct >= 90 ? 'text-emerald-600' : pct >= 40 ? 'text-amber-600' : 'text-red-500';
-  return (
-    <span className={cn('text-[9px] font-mono font-bold shrink-0 w-9 text-right', color)} title={`${state.vinculados.toLocaleString('es-CL')} de ${state.total.toLocaleString('es-CL')} elementos vinculados`}>
-      {pct}%
-    </span>
-  );
-}
-
-function TreeNodeRow({ node, depth, expanded, childrenCache, highlightDbId, onToggle, onPreviewBranch, coverageMap, requestCoverage }: {
-  node: TreeNode; depth: number;
-  expanded: Set<number>; childrenCache: Map<number, TreeNode[]>; highlightDbId: number | null;
-  onToggle: (dbId: number) => void; onPreviewBranch: (dbId: number, name: string) => void;
-  coverageMap: Map<number, CoverageState>; requestCoverage: (dbId: number) => void;
-}) {
-  const isOpen = expanded.has(node.dbId);
-  const kids = childrenCache.get(node.dbId);
-  const isHighlighted = highlightDbId === node.dbId;
-  return (
-    <div>
-      <div
-        id={`tree-node-${node.dbId}`}
-        className={cn('flex items-center gap-1 py-1 hover:bg-blue-50 rounded', isHighlighted && 'bg-amber-100 ring-1 ring-amber-400')}
-        style={{ paddingLeft: depth * 14 + 4 }}
-      >
-        {node.childCount > 0 ? (
-          <button onClick={() => onToggle(node.dbId)} className="shrink-0 p-0.5">
-            {isOpen ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <ChevronRight className="w-3 h-3 text-slate-400" />}
-          </button>
-        ) : <span className="w-4 shrink-0" />}
-        <span className="text-[11px] text-slate-700 truncate flex-1" title={node.name}>{node.name || `#${node.dbId}`}</span>
-        <CoverageBadge state={coverageMap.get(node.dbId)} onRequest={() => requestCoverage(node.dbId)} />
-        {node.childCount > 0 && <span className="text-[9px] text-slate-400 font-mono shrink-0">{node.childCount}</span>}
-        <button
-          onClick={() => onPreviewBranch(node.dbId, node.name || `#${node.dbId}`)}
-          title="Aislar esta rama y ver cuántos elementos tiene, antes de clasificarla"
-          className="shrink-0 p-1 rounded bg-slate-100 hover:bg-blue-100 text-blue-600"
-        >
-          <Crosshair className="w-3 h-3" />
-        </button>
-      </div>
-      {isOpen && kids?.map(k => (
-        <TreeNodeRow
-          key={k.dbId} node={k} depth={depth + 1}
-          expanded={expanded} childrenCache={childrenCache} highlightDbId={highlightDbId}
-          onToggle={onToggle} onPreviewBranch={onPreviewBranch}
-          coverageMap={coverageMap} requestCoverage={requestCoverage}
-        />
-      ))}
-    </div>
-  );
-}
-
-function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onViewSelected, onVerSinAsignar, paintTarget, onArmPaint, onStopPaint, onCatalogChanged, onNivelChange, refreshSignal }: {
-  onVerSinAsignar: (nivel: Nivel) => void;
-  projectId: string; viewerReady: boolean;
-  onColorByLevel: (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => void;
-  onFocus: (nivel: Nivel, codigo: string) => void;
-  onViewSelected: (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => void;
-  paintTarget: PaintTarget | null;
-  onArmPaint: (nivel: Nivel, codigo: string, r: number, g: number, b: number, a: number) => void;
-  onStopPaint: () => void;
-  onCatalogChanged: () => void;
-  onNivelChange?: (nivel: Nivel) => void;
-  // Se incrementa desde la página cada vez que una reasignación (pintura 3D, árbol, fila o bulk)
-  // escribe en la BD, para recargar los conteos (nElementos) sin esperar a un cambio de pestaña.
-  refreshSignal?: number;
-}) {
-  // Los defaults de useState deben ser IGUALES en server y cliente (el server nunca tiene
-  // localStorage) — si no, React detecta un mismatch de hidratación. La preferencia guardada se
-  // aplica recién en el useEffect de abajo, que solo corre en el cliente después del montaje.
-  const [nivel, setNivel] = useState<Nivel>('cwa');
-  const nivelRef = useRef(nivel);
-  nivelRef.current = nivel;
-  const [items, setItems] = useState<RevisionItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const [expandedCwa, setExpandedCwa] = useState<Set<string>>(new Set());
-  const [expandedCv, setExpandedCv] = useState<Set<string>>(new Set());
-  const [colorOverrides, setColorOverrides] = useState<Record<string, string>>({});
-  const [pendingOverrides, setPendingOverrides] = useState<Record<string, string>>({});
-  const [savingColors, setSavingColors] = useState(false);
-  const [colorError, setColorError] = useState<string | null>(null);
-  const [showNewForm, setShowNewForm] = useState(false);
-  const [mostrarFiltro, setMostrarFiltro] = useState<'todas' | 'oficiales' | 'creadas'>('todas');
-  const [colorearCreadas, setColorearCreadas] = useState(true);
-  const [prefsLoaded, setPrefsLoaded] = useState(false);
-
-  useEffect(() => {
-    const prefs = loadRevisionPrefs(projectId);
-    if (prefs.nivel) setNivel(prefs.nivel);
-    if (prefs.mostrarFiltro) setMostrarFiltro(prefs.mostrarFiltro);
-    if (prefs.colorearCreadas !== undefined) setColorearCreadas(prefs.colorearCreadas);
-    setPrefsLoaded(true);
-  }, [projectId]);
-
-  useEffect(() => { onNivelChange?.(nivel); }, [nivel, onNivelChange]);
-
-  useEffect(() => {
-    if (!prefsLoaded) return;
-    saveRevisionPrefs(projectId, { nivel, mostrarFiltro, colorearCreadas });
-  }, [projectId, nivel, mostrarFiltro, colorearCreadas, prefsLoaded]);
-  const [newCodigo, setNewCodigo] = useState('');
-  const [newNombre, setNewNombre] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    const nivelPedido = nivel;
-    Promise.all([
-      fetch(`/api/mining-revision?project_id=${projectId}&nivel=${nivelPedido}`).then(parseJsonOrThrow),
-      fetch(`/api/mining-colores?project_id=${projectId}&nivel=${nivelPedido}`).then(parseJsonOrThrow),
-    ]).then(([rev, col]) => {
-      // Si el usuario ya cambió de pestaña mientras esta respuesta viajaba, descártala —
-      // sin este guard, una respuesta vieja (ej. CWA) puede llegar después y pisar los items de la pestaña actual (CV).
-      if (nivelPedido !== nivelRef.current) return;
-      setItems(rev.items ?? []);
-      setColorOverrides(col.colores ?? {});
-      setPendingOverrides({});
-    }).catch(() => {}).finally(() => { if (nivelPedido === nivelRef.current) setLoading(false); });
-  }, [projectId, nivel]);
-
-  const saveColors = useCallback(async () => {
-    if (!Object.keys(pendingOverrides).length) return;
-    setSavingColors(true);
-    setColorError(null);
-    try {
-      const res = await fetch('/api/mining-colores', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: projectId, nivel, colores: pendingOverrides }),
-      });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d?.error ?? 'Error al guardar colores');
-      setColorOverrides(prev => ({ ...prev, ...pendingOverrides }));
-      setPendingOverrides({});
-    } catch (e: any) {
-      setColorError(e.message);
-    } finally {
-      setSavingColors(false);
-    }
-  }, [pendingOverrides, projectId, nivel]);
-
-  const createCategoria = useCallback(async () => {
-    const codigo = newCodigo.trim();
-    if (!codigo) return;
-    setCreating(true);
-    setCreateError(null);
-    try {
-      const res = await fetch('/api/mining-catalogo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: projectId, nivel, codigo, nombre: newNombre.trim() || null }),
-      });
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d?.error ?? 'Error al crear la categoría');
-      setNewCodigo('');
-      setNewNombre('');
-      setShowNewForm(false);
-      load();
-      onCatalogChanged();
-    } catch (e: any) {
-      setCreateError(e.message);
-    } finally {
-      setCreating(false);
-    }
-  }, [newCodigo, newNombre, projectId, nivel, load, onCatalogChanged]);
-
-  useEffect(() => { load(); setChecked(new Set()); }, [load]);
-
-  // refreshSignal cambia tras CUALQUIER reasignación (pintura 3D, árbol, fila o bulk) — recarga los
-  // conteos sin tocar `checked` (a diferencia del efecto de arriba, que sí lo resetea porque ahí el
-  // cambio es de nivel/proyecto, no de datos). No se lista `load` en las deps a propósito: ya cambia
-  // de nivel/projectId vía el efecto de arriba, listarlo aquí también duplicaría el fetch en cada
-  // cambio de pestaña.
-  const didMountRefreshRef = useRef(false);
-  useEffect(() => {
-    if (!didMountRefreshRef.current) { didMountRefreshRef.current = true; return; }
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshSignal]);
-
-  // "Oficiales" = vienen del itemizado/DevPack original (catálogo importado). "Creadas" = se agregaron
-  // después desde esta misma página (botón "+ Nueva categoría") o son placeholders "por asignar".
-  const itemsFiltrados = useMemo(() => {
-    if (mostrarFiltro === 'todas') return items;
-    // "Sin asignar" siempre queda visible — no es ni oficial ni creada, es la bandeja de pendientes.
-    return items.filter(it => isSinAsignar(it.codigo) || (mostrarFiltro === 'oficiales' ? it.esOficial : !it.esOficial));
-  }, [items, mostrarFiltro]);
-
-  // Árbol CWA → CV → CWP solo para el nivel CWP (los SIN-CWP.* sin patrón derivable quedan sueltos al final).
-  const cwpTree = useMemo(() => {
-    if (nivel !== 'cwp') return null;
-    const byCwa = new Map<string, Map<string, RevisionItem[]>>();
-    const sueltos: RevisionItem[] = [];
-    for (const it of itemsFiltrados) {
-      const { cwa, cv } = deriveCwaCvFromCwp(it.codigo);
-      if (!cwa || !cv) { sueltos.push(it); continue; }
-      if (!byCwa.has(cwa)) byCwa.set(cwa, new Map());
-      const cvMap = byCwa.get(cwa)!;
-      if (!cvMap.has(cv)) cvMap.set(cv, []);
-      cvMap.get(cv)!.push(it);
-    }
-    return { byCwa, sueltos };
-  }, [itemsFiltrados, nivel]);
-
-  // Por defecto el árbol queda totalmente expandido (son pocos CWA/CV).
-  useEffect(() => {
-    if (!cwpTree) return;
-    setExpandedCwa(new Set(cwpTree.byCwa.keys()));
-    setExpandedCv(new Set([...cwpTree.byCwa.values()].flatMap(m => [...m.keys()])));
-  }, [cwpTree]);
-
-  const colorIndexByCodigo = useMemo(() => new Map(items.map((it, i) => [it.codigo, i])), [items]);
-  const esOficialPorCodigo = useMemo(() => new Map(items.map(it => [it.codigo, it.esOficial])), [items]);
-  const colorOf = (codigo: string): { r: number; g: number; b: number; a: number } => {
-    if (!isSinAsignar(codigo)) {
-      const hex = pendingOverrides[codigo] ?? colorOverrides[codigo];
-      if (hex) return { ...hexToRgb(hex), a: 1 };
-    }
-    return paintColorFor(codigo, colorIndexByCodigo.get(codigo) ?? 0, esOficialPorCodigo.get(codigo) ?? true, colorearCreadas);
-  };
-
-  // Marcar un checkbox aísla/colorea de inmediato esos elementos en el visor — no hace falta
-  // apretar un botón "Colorear marcados" aparte, el check ES la acción.
-  //
-  // toggleChecked/toggleGroup son simples: solo tocan el estado `checked`, nada más. Un único
-  // useEffect (más abajo) reacciona a ese cambio y dispara la vista — así hay UN solo lugar que
-  // decide cuándo mirar el visor, en vez de repetir la llamada en cada handler (eso fue lo que se
-  // rompió antes: llamar setState de otro componente desde dentro de un updater de setChecked).
-  const toggleChecked = (codigo: string) => {
-    setChecked(prev => {
-      const next = new Set(prev);
-      next.has(codigo) ? next.delete(codigo) : next.add(codigo);
-      return next;
-    });
-  };
-
-  const toggleGroup = (codes: string[]) => {
-    setChecked(prev => {
-      const next = new Set(prev);
-      const allOn = codes.length > 0 && codes.every(c => next.has(c));
-      for (const c of codes) allOn ? next.delete(c) : next.add(c);
-      return next;
-    });
-  };
-
-  // Ref con la última versión de "qué significa ver estos códigos" — se actualiza cada render pero
-  // su IDENTIDAD nunca cambia, así el efecto de abajo puede depender SOLO de `checked` sin quedar
-  // con datos viejos (nivel/colores/filtro actuales) ni reactivarse de más.
-  const viewCheckedRef = useRef<(codes: Set<string>) => void>(() => {});
-  viewCheckedRef.current = (codes: Set<string>) => {
-    if (!codes.size) return;
-    onViewSelected(nivel, itemsFiltrados.filter(it => codes.has(it.codigo)).map(it => ({ codigo: it.codigo, ...colorOf(it.codigo) })));
-  };
-  useEffect(() => { viewCheckedRef.current(checked); }, [checked]);
-
-  const groupState = (codes: string[]): 'all' | 'some' | 'none' => {
-    if (!codes.length) return 'none';
-    const n = codes.filter(c => checked.has(c)).length;
-    return n === 0 ? 'none' : n === codes.length ? 'all' : 'some';
-  };
-
-  const allCodes = useMemo(() => itemsFiltrados.map(i => i.codigo), [itemsFiltrados]);
-  const selectAllState = groupState(allCodes);
-
-  // Marcar un checkbox ya aísla/colorea esos elementos al instante (ver viewCodes) — este botón
-  // colorea TODO el nivel filtrado de una vez (respeta el filtro Oficiales/Creadas).
-  const handleColorear = () => {
-    onColorByLevel(nivel, itemsFiltrados.map(it => ({ codigo: it.codigo, ...colorOf(it.codigo) })));
-  };
-
-  // Vista de contraste — dos modos:
-  // 1) Con CWP marcados en el árbol: cada uno marcado queda con un color de paleta DISTINTO por
-  //    posición (ignora colorOf()/overrides por disciplina a propósito — esos hacen que todos los
-  //    CWP de una misma disciplina comparten color y el límite entre ellos se pierde). Todo lo NO
-  //    marcado queda casi negro, para que el límite de batería ENTRE los CWP marcados resalte.
-  // 2) Sin nada marcado: fallback al contraste original oficial-vs-no-oficial (límite de batería AWP).
-  const handleVistaContraste = () => {
-    if (checked.size > 0) {
-      const checkedCodes = items.map(it => it.codigo).filter(c => checked.has(c));
-      const idxByCodigo = new Map(checkedCodes.map((c, i) => [c, i]));
-      onColorByLevel(nivel, items.map(it => {
-        const idx = idxByCodigo.get(it.codigo);
-        return { codigo: it.codigo, ...(idx !== undefined ? { ...colorForIndex(idx), a: 1 } : CONTRASTE_COLOR) };
-      }));
-      return;
-    }
-    onColorByLevel(nivel, items.map(it => ({
-      codigo: it.codigo,
-      ...(it.esOficial && !isSinAsignar(it.codigo) ? { ...colorOf(it.codigo) } : CONTRASTE_COLOR),
-    })));
-  };
-
-  const renderItem = (it: RevisionItem) => {
-    const armed = paintTarget?.nivel === nivel && paintTarget.codigo === it.codigo;
-    const sinAsignar = isSinAsignar(it.codigo);
-    const { r, g, b, a } = colorOf(it.codigo);
-    return (
-      <div key={it.codigo} className={cn('px-3 py-2 border-b border-slate-100 hover:bg-blue-50 flex items-center gap-2', armed && 'bg-amber-50')}>
-        <button onClick={() => toggleChecked(it.codigo)} className="shrink-0">
-          {checked.has(it.codigo) ? <CheckSquare className="w-3.5 h-3.5 text-blue-600" /> : <Square className="w-3.5 h-3.5 text-slate-300" />}
-        </button>
-        {sinAsignar ? (
-          <span className="w-3 h-3 rounded-full shrink-0 border-2 border-dashed border-slate-400 bg-white" title="Sin asignar — restaura el color nativo del CAD" />
-        ) : (
-          <input
-            type="color"
-            value={rgbToHex(r, g, b)}
-            onClick={e => e.stopPropagation()}
-            onChange={e => {
-              const hex = e.target.value;
-              setPendingOverrides(prev => {
-                const next = { ...prev, [it.codigo]: hex };
-                // Misma disciplina (la letra del CWP, ej. "C" de Civil) → mismo color en TODO el
-                // proyecto, sin importar el CWA/CV: así no hay que repintar cada uno a mano.
-                if (nivel === 'cwp') {
-                  const disc = deriveDisciplinaFromCwp(it.codigo);
-                  if (disc) {
-                    for (const other of items) {
-                      if (other.codigo !== it.codigo && deriveDisciplinaFromCwp(other.codigo) === disc) {
-                        next[other.codigo] = hex;
-                      }
-                    }
-                  }
-                }
-                return next;
-              });
-            }}
-            title={nivel === 'cwp' ? 'Elegir un color para esta disciplina — se aplica a todos los CWP con la misma letra (recuerda Guardar)' : 'Elegir un color personalizado para este código (recuerda Guardar)'}
-            className="w-3.5 h-3.5 shrink-0 rounded-full border-0 p-0 cursor-pointer appearance-none [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:rounded-full [&::-webkit-color-swatch]:border [&::-webkit-color-swatch]:border-slate-300"
-          />
-        )}
-        <div onClick={() => onFocus(nivel, it.codigo)} className="flex-1 overflow-hidden cursor-pointer">
-          <div className="font-mono text-[11px] font-bold text-[#08203F] flex items-center gap-1.5">
-            {it.codigo}
-            {!sinAsignar && !it.esOficial && (
-              <span className="px-1 py-0 rounded text-[8px] font-black uppercase bg-violet-100 text-violet-600 shrink-0">Nueva</span>
-            )}
-          </div>
-          {it.nombre && <div className="text-[10px] text-slate-400 truncate">{it.nombre}</div>}
-        </div>
-        <span className="text-[10px] text-slate-400 font-mono shrink-0">{it.nElementos.toLocaleString('es-CL')}</span>
-        <button
-          onClick={() => armed ? onStopPaint() : onArmPaint(nivel, it.codigo, r, g, b, a)}
-          title={armed
-            ? 'Detener: dejar de mover elementos aquí'
-            : sinAsignar
-              ? 'Sacar de la categoría: click en 🖌️, luego click en los elementos mal pintados para restaurar su color original y quitarlos de este nivel'
-              : 'Mover elementos aquí: click en 🖌️, luego click en los elementos del modelo'}
-          className={cn('p-1 rounded shrink-0', armed ? 'bg-amber-500 text-white' : sinAsignar ? 'bg-slate-100 hover:bg-slate-200 text-slate-500 ring-1 ring-slate-300' : 'bg-slate-100 hover:bg-slate-200 text-slate-500')}
-        >
-          {armed ? <StopCircle className="w-3.5 h-3.5" /> : sinAsignar ? <Eraser className="w-3.5 h-3.5" /> : <Paintbrush className="w-3.5 h-3.5" />}
-        </button>
-      </div>
-    );
-  };
-
-  return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="px-3 py-2 border-b border-slate-100 space-y-2 shrink-0">
-        <div className="flex gap-1">
-          {(['cwa', 'cv', 'cwp', 'swp'] as Nivel[]).map(n => (
-            <button
-              key={n} onClick={() => setNivel(n)}
-              className={cn('flex-1 py-1 rounded text-[10.5px] font-bold uppercase',
-                nivel === n ? 'bg-[#0D47A1] text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200')}
-            >
-              {NIVEL_LABEL[n]}
-            </button>
-          ))}
-        </div>
-        {showNewForm ? (
-          <div className="border border-blue-200 bg-blue-50 rounded p-2 space-y-1.5">
-            <input
-              autoFocus value={newCodigo} onChange={e => setNewCodigo(e.target.value)}
-              placeholder={`Código del nuevo ${NIVEL_LABEL[nivel]}…`}
-              className="w-full px-2 py-1 text-[11px] border border-slate-200 rounded"
-            />
-            <input
-              value={newNombre} onChange={e => setNewNombre(e.target.value)}
-              placeholder="Nombre (opcional)"
-              className="w-full px-2 py-1 text-[11px] border border-slate-200 rounded"
-            />
-            {createError && <p className="text-[9.5px] text-red-600 font-bold">{createError}</p>}
-            <div className="flex gap-1.5">
-              <button
-                onClick={createCategoria} disabled={creating || !newCodigo.trim()}
-                className="flex-1 inline-flex items-center justify-center gap-1 bg-[#0D47A1] hover:bg-[#1565C0] disabled:opacity-40 text-white rounded px-2 py-1 text-[10.5px] font-bold"
-              >
-                {creating ? 'Creando…' : 'Crear'}
-              </button>
-              <button
-                onClick={() => { setShowNewForm(false); setNewCodigo(''); setNewNombre(''); setCreateError(null); }}
-                className="px-2 py-1 text-[10.5px] font-bold text-slate-500 hover:text-slate-700"
-              >
-                Cancelar
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button
-            onClick={() => setShowNewForm(true)}
-            className="w-full inline-flex items-center justify-center gap-1.5 border border-dashed border-blue-300 text-blue-600 hover:bg-blue-50 rounded px-2 py-1.5 text-[10.5px] font-bold"
-          >
-            <Plus className="w-3.5 h-3.5" /> Nueva categoría {NIVEL_LABEL[nivel]}
-          </button>
-        )}
-        {Object.keys(pendingOverrides).length > 0 && (
-          <button
-            onClick={saveColors} disabled={savingColors}
-            className="w-full inline-flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
-          >
-            <Save className="w-3.5 h-3.5" /> {savingColors ? 'Guardando…' : `Guardar ${Object.keys(pendingOverrides).length} color(es)`}
-          </button>
-        )}
-        {colorError && <p className="text-[9.5px] text-red-600 font-bold">{colorError}</p>}
-        <div className="flex items-center gap-1">
-          {(['todas', 'oficiales', 'creadas'] as const).map(f => (
-            <button
-              key={f} onClick={() => setMostrarFiltro(f)}
-              className={cn('flex-1 py-1 rounded text-[9.5px] font-bold uppercase',
-                mostrarFiltro === f ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200')}
-            >
-              {f === 'todas' ? 'Todas' : f === 'oficiales' ? 'Oficiales' : 'Creadas'}
-            </button>
-          ))}
-        </div>
-        <label className="flex items-center gap-1.5 text-[9.5px] text-slate-500 font-bold cursor-pointer">
-          <input type="checkbox" checked={colorearCreadas} onChange={e => setColorearCreadas(e.target.checked)} className="accent-blue-600" />
-          Colorear las &quot;Nuevas&quot; con su propio color (si no, quedan con el color normal del CAD)
-        </label>
-        <button
-          onClick={handleColorear}
-          disabled={!viewerReady || loading}
-          className="w-full inline-flex items-center justify-center gap-1.5 bg-[#0D47A1] hover:bg-[#1565C0] disabled:opacity-40 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
-          title={!viewerReady ? 'Abre el modelo 3D primero' : undefined}
-        >
-          <Palette className="w-3.5 h-3.5" /> Colorear modelo por {NIVEL_LABEL[nivel]}
-        </button>
-        {/* Las dos preguntas del día a día: dónde termina un paquete y qué queda sin asignar. */}
-        <button
-          onClick={handleVistaContraste}
-          disabled={!viewerReady || loading || checked.size < 2}
-          className="w-full inline-flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-black disabled:opacity-40 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
-          title={checked.size < 2
-            ? 'Marca 2 paquetes contiguos para ver dónde está el límite entre ellos'
-            : `Los ${checked.size} marcados con colores bien distintos entre sí y el resto en negro`}
-        >
-          <Eye className="w-3.5 h-3.5" />
-          {checked.size < 2 ? 'Límite de batería — marca 2' : `Límite de batería (${checked.size})`}
-        </button>
-        <button
-          onClick={() => onVerSinAsignar(nivel)}
-          disabled={!viewerReady || loading}
-          className="w-full inline-flex items-center justify-center gap-1.5 border-2 border-red-200 bg-red-50 hover:bg-red-100 disabled:opacity-40 text-[#A00000] rounded px-2 py-1.5 text-[10.5px] font-black"
-          title={`Aísla en rojo la geometría del modelo que todavía no pertenece a ningún ${NIVEL_LABEL[nivel]}`}
-        >
-          <AlertTriangle className="w-3.5 h-3.5" /> Ver lo que falta por asignar
-        </button>
-        {checked.size > 0 && (
-          <p className="text-[9.5px] text-blue-600 font-bold text-center">{checked.size} marcado(s) — aislado(s) en el visor</p>
-        )}
-        <p className="text-[9.5px] text-slate-400 leading-snug">
-          Cada {NIVEL_LABEL[nivel]} queda con un color. Click en uno para ubicarlo en el visor. Si ves elementos
-          del color equivocado, click en 🖌️ del {NIVEL_LABEL[nivel]} correcto y luego click en esos elementos en el modelo para moverlos ahí.
-          Si te equivocaste de color al pintar, usa el botón <Eraser className="w-2.5 h-2.5 inline" /> de &quot;Sin {NIVEL_LABEL[nivel]} asignado&quot; (círculo punteado) y click en el elemento: lo saca de la categoría y le restaura su color original del CAD.
-        </p>
-        <div className="flex items-center justify-between gap-2">
-          <button
-            onClick={() => toggleGroup(allCodes)}
-            disabled={!allCodes.length}
-            className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-500 hover:text-blue-600 disabled:opacity-40"
-          >
-            <GroupCheckbox state={selectAllState} /> {selectAllState === 'all' ? 'Deseleccionar todos' : 'Seleccionar todos'}
-          </button>
-          {checked.size > 0 && <span className="text-[10px] text-slate-400">{checked.size} marcado(s)</span>}
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        {loading ? (
-          <div className="flex items-center justify-center py-8 text-slate-400 gap-2 text-[11px]"><Loader2 className="w-4 h-4 animate-spin" /> Cargando…</div>
-        ) : !itemsFiltrados.length ? (
-          <div className="p-6 text-center text-[11px] text-slate-400 italic">
-            {items.length ? 'Nada que mostrar con este filtro.' : `Sin ${NIVEL_LABEL[nivel]} para este proyecto.`}
-          </div>
-        ) : nivel !== 'cwp' || !cwpTree ? (
-          mostrarFiltro !== 'todas' ? itemsFiltrados.map(renderItem) : (
-            <>
-              {itemsFiltrados.some(it => it.esOficial || isSinAsignar(it.codigo)) && (
-                <div className="px-2 py-1 bg-slate-100 border-b border-slate-200">
-                  <span className="text-[9.5px] font-black uppercase text-slate-500">Oficiales</span>
-                </div>
-              )}
-              {itemsFiltrados.filter(it => it.esOficial || isSinAsignar(it.codigo)).map(renderItem)}
-              {itemsFiltrados.some(it => !it.esOficial && !isSinAsignar(it.codigo)) && (
-                <div className="px-2 py-1 bg-violet-50 border-b border-violet-100">
-                  <span className="text-[9.5px] font-black uppercase text-violet-600">Creadas en la app</span>
-                </div>
-              )}
-              {itemsFiltrados.filter(it => !it.esOficial && !isSinAsignar(it.codigo)).map(renderItem)}
-            </>
-          )
-        ) : (
-          <>
-            {[...cwpTree.byCwa.entries()].map(([cwa, cvMap]) => {
-              const cwaCodes = [...cvMap.values()].flat().map(i => i.codigo);
-              const cwaOpen = expandedCwa.has(cwa);
-              return (
-                <div key={cwa}>
-                  <div className="flex items-center gap-2 px-2 py-1.5 bg-slate-100 border-b border-slate-200">
-                    <button onClick={() => toggleGroup(cwaCodes)} className="shrink-0"><GroupCheckbox state={groupState(cwaCodes)} /></button>
-                    <button
-                      onClick={() => setExpandedCwa(prev => { const n = new Set(prev); n.has(cwa) ? n.delete(cwa) : n.add(cwa); return n; })}
-                      className="flex items-center gap-1 flex-1 text-left"
-                    >
-                      {cwaOpen ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <ChevronRight className="w-3 h-3 text-slate-400" />}
-                      <span className="font-mono text-[11px] font-black text-[#08203F]">CWA {cwa}</span>
-                      <span className="text-[9px] text-slate-400">({cwaCodes.length} CWP)</span>
-                    </button>
-                  </div>
-                  {cwaOpen && [...cvMap.entries()].map(([cv, cvItems]) => {
-                    const cvCodes = cvItems.map(i => i.codigo);
-                    const cvOpen = expandedCv.has(cv);
-                    return (
-                      <div key={cv}>
-                        <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 border-b border-slate-100">
-                          <button onClick={() => toggleGroup(cvCodes)} className="shrink-0"><GroupCheckbox state={groupState(cvCodes)} /></button>
-                          <button
-                            onClick={() => setExpandedCv(prev => { const n = new Set(prev); n.has(cv) ? n.delete(cv) : n.add(cv); return n; })}
-                            className="flex items-center gap-1 flex-1 text-left"
-                          >
-                            {cvOpen ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <ChevronRight className="w-3 h-3 text-slate-400" />}
-                            <span className="font-mono text-[10.5px] font-bold text-slate-600">CV {cv}</span>
-                            <span className="text-[9px] text-slate-400">({cvCodes.length})</span>
-                          </button>
-                        </div>
-                        {cvOpen && cvItems.map(renderItem)}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
-            {cwpTree.sueltos.length > 0 && (
-              <div>
-                <div className="px-2 py-1.5 bg-slate-100 border-b border-slate-200">
-                  <span className="text-[10px] font-black uppercase text-slate-500">Sin clasificar (sin CWA/CV derivable)</span>
-                </div>
-                {cwpTree.sueltos.map(renderItem)}
-              </div>
-            )}
-          </>
-        )}
-      </div>
     </div>
   );
 }

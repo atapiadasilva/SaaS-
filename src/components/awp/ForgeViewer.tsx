@@ -1323,16 +1323,23 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
 
       setDeepSelection: (enabled) => {
         deepSelectionRef.current = enabled;
-        console.log(`[BIM] Selección profunda: ${enabled ? 'ON' : 'OFF'}`);
-        // Si la extensión está cargada, podemos ajustar su modo también
         const v = viewerRef.current;
-        if (v) {
-          const ext = v.getExtension('Autodesk.BoxSelection');
-          if (ext) {
-            // El modo 'REGULAR' es por píxeles, pero podemos forzar el modo de intersección
-            // si la API lo permite, aunque nuestra lógica manual lo sobreescribirá.
+        // La bandera sola no basta: la extensión trae su PROPIA herramienta de arrastre y, si no se
+        // activa, el evento 'boxSelection' no se dispara nunca y el barrido parece no existir.
+        // Se prueban las dos formas porque cambian entre versiones del visor.
+        const ext = v?.getExtension?.('Autodesk.BoxSelection');
+        try {
+          if (enabled) ext?.activate?.();
+          else ext?.deactivate?.();
+        } catch (e) { console.warn('[BIM] BoxSelection activate/deactivate falló:', e); }
+        try {
+          const tc = (v as any)?.toolController;
+          if (tc?.getTool?.('box-selection')) {
+            if (enabled) tc.activateTool('box-selection');
+            else tc.deactivateTool('box-selection');
           }
-        }
+        } catch { /* esta versión no expone la herramienta por nombre */ }
+        console.log(`[BIM] Barrido por cuadro: ${enabled ? 'ON' : 'OFF'}${ext ? '' : ' — ATENCIÓN: la extensión BoxSelection no está cargada'}`);
       },
 
       setMultiSelect: (enabled) => {
