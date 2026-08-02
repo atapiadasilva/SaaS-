@@ -55,16 +55,46 @@ const partesCwp = (c) => {
 };
 const esCwpValido = (c) => partesCwp(c) !== null;
 
+// Tablas que ya pertenecen a un servicio versionado (ver docs/ARQUITECTURA_SERVICIOS.md).
+// Ahí NO se borra lo anterior: los datos nuevos caen en un borrador y la carga previa queda
+// como versión histórica. Borrarla sería imposible además de indeseable — el trigger de
+// inmutabilidad rechaza tocar una versión publicada.
+const SERVICIO_DE_TABLA = {
+  mining_personal: 'recursos',
+  mining_dotacion: 'recursos',
+};
+const serviciosTocados = new Set();
+
 async function reemplazar(tabla, rows) {
   if (SECO) return `${rows.length} (simulado)`;
-  await sb.from(tabla).delete().eq('project_id', PROJECT_ID);
+  const servicio = SERVICIO_DE_TABLA[tabla];
+  if (servicio) serviciosTocados.add(servicio);
+  else await sb.from(tabla).delete().eq('project_id', PROJECT_ID);
+
   let n = 0;
   for (let i = 0; i < rows.length; i += 500) {
     const { error } = await sb.from(tabla).insert(rows.slice(i, i + 500));
     if (error) { console.error(`  ${tabla}:`, error.message); return n; }
     n += Math.min(500, rows.length - i);
   }
-  return n;
+  return servicio ? `${n} (en borrador de "${servicio}")` : n;
+}
+
+// Publicar es un acto deliberado: lo cargado no lo ve nadie hasta que ocurre. El loader lo
+// hace explícito al final para que una carga completa quede utilizable de inmediato.
+async function publicarServicios(nota) {
+  for (const servicio of serviciosTocados) {
+    const { error } = await sb.schema('pub').rpc('publicar_version', {
+      p_project: PROJECT_ID, p_servicio: servicio, p_nota: nota,
+    });
+    if (error) {
+      console.error(`  publicar ${servicio}:`, error.message);
+      if (/schema must be one of/i.test(error.message)) {
+        console.error('  → Falta exponer el schema "pub": Supabase → Settings → API → Exposed schemas.');
+        console.error('     Los datos quedaron cargados en el borrador; publícalos cuando lo hagas.');
+      }
+    } else console.log(`servicio "${servicio}": versión publicada`);
+  }
 }
 
 // ── P10 Ruta a ejecución: no es una tabla aparte, enriquece el catálogo CWP ──
@@ -232,4 +262,7 @@ console.log('personal:', await reemplazar('mining_personal', personal));
 console.log('suministros:', await reemplazar('mining_suministro', suministros));
 console.log('doc_aconex:', await reemplazar('mining_doc_aconex', docAconex));
 console.log('planos:', await reemplazar('mining_planos', planos));
+
+if (!SECO) await publicarServicios(`Carga de data pack: ${FILE.split(/[\\/]/).pop()}`);
+
 console.log('\nListo. Revisa la madurez del proyecto en /<org>/proyectos.');

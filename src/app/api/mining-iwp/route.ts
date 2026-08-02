@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { cargarBanco } from '@/lib/cwp-banco';
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient();
@@ -14,13 +15,26 @@ export async function GET(req: NextRequest) {
   const sb = supabase as any;
 
   if (iwp_id) {
-    const [iwpRes, actRes, constRes, progRes] = await Promise.all([
+    const [iwpRes, actRes, partRes, constRes, progRes] = await Promise.all([
       sb.from('mining_iwp').select('*').eq('project_id', pid).eq('iwp_id', iwp_id).single(),
       sb.from('mining_iwp_actividad').select('*, mining_programa(id, cod_actividad, nombre_actividad, hh, fecha_inicio, fecha_fin, tipo)').eq('project_id', pid).eq('iwp_id', iwp_id),
+      sb.from('mining_iwp_partida').select('*').eq('project_id', pid).eq('iwp_id', iwp_id).order('hh_asignadas', { ascending: false }),
       sb.from('mining_iwp_constraint').select('*').eq('project_id', pid).eq('iwp_id', iwp_id),
       sb.from('mining_iwp_progreso').select('*').eq('project_id', pid).eq('iwp_id', iwp_id).order('fecha_reporte', { ascending: false }),
     ]);
     if (iwpRes.error) return NextResponse.json({ error: iwpRes.error.message }, { status: 500 });
+
+    // La cuadrilla y el turno del paquete: es lo que terreno necesita saber para tomarlo.
+    let cuadrilla = null, turno = null;
+    if (iwpRes.data?.cuadrilla_id) {
+      const { data } = await sb.from('mining_cuadrilla').select('*').eq('id', iwpRes.data.cuadrilla_id).maybeSingle();
+      cuadrilla = data;
+    }
+    if (iwpRes.data?.turno_id) {
+      const { data } = await sb.from('mining_turno').select('*').eq('id', iwpRes.data.turno_id).maybeSingle();
+      turno = data;
+    }
+
     return NextResponse.json({
       iwp: iwpRes.data,
       actividades: (actRes.data ?? []).map((a: any) => ({
@@ -29,14 +43,19 @@ export async function GET(req: NextRequest) {
           ? { ...a.mining_programa, codigo: a.mining_programa.cod_actividad, descripcion: a.mining_programa.nombre_actividad }
           : null,
       })),
+      partidas: partRes.data ?? [],
+      cuadrilla,
+      turno,
       constraints: constRes.data ?? [],
       progreso: progRes.data ?? [],
     });
   }
 
-  const [iwpsRes, cwpRes] = await Promise.all([
-    cwp_id ? sb.from('mining_iwp').select('*').eq('project_id', pid).eq('cwp_id', cwp_id).order('fecha_creacion', { ascending: false }) : Promise.resolve({ data: [] }),
+  const [iwpsRes, cwpRes, bancoRes] = await Promise.all([
+    cwp_id ? sb.from('mining_iwp').select('*').eq('project_id', pid).eq('cwp_id', cwp_id).order('secuencia', { ascending: true, nullsFirst: false }).order('fecha_creacion', { ascending: false }) : Promise.resolve({ data: [] }),
     cwp_id ? sb.from('mining_cwp').select('hh_planner, disciplina_cod').eq('project_id', pid).eq('cwp_id', cwp_id).single() : Promise.resolve({ data: null }),
+    // El saldo del CWP encabeza la lista: sin él, "5 IWP" no dice si el CWP está aperturado.
+    cwp_id ? cargarBanco(sb, pid, cwp_id).catch(() => null) : Promise.resolve(null),
   ]);
   if (iwpsRes.error) return NextResponse.json({ error: iwpsRes.error.message }, { status: 500 });
 
@@ -62,6 +81,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     cwp: cwpRes.data,
+    banco: bancoRes ? { fuente: bancoRes.fuente, ...bancoRes.totales } : null,
     iwps: iwps.map((i: any) => ({
       ...i,
       constraints: constByIwp.get(i.iwp_id) ?? { total: 0, despejados: 0 },

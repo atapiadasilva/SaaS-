@@ -6,6 +6,9 @@ import { Loader2, X, Plus, Calendar, AlertCircle, CheckCircle2 } from 'lucide-re
 interface IwpData {
   iwp: any;
   actividades: any[];
+  partidas: any[];
+  cuadrilla: any | null;
+  turno: any | null;
   constraints: any[];
   progreso: any[];
 }
@@ -26,7 +29,7 @@ export default function IwpDetail({ projectId, iwpId, onClose, onChanged }: Prop
   const [error, setError] = useState<string | null>(null);
   const [imageInput, setImageInput] = useState('');
   const [imageType, setImageType] = useState<'scope_3d' | 'plano' | 'foto'>('scope_3d');
-  const [tab, setTab] = useState<'resumen' | 'gantt' | 'constraints' | 'avance' | 'imagenes'>('resumen');
+  const [tab, setTab] = useState<'resumen' | 'partidas' | 'gantt' | 'constraints' | 'avance' | 'imagenes'>('resumen');
 
   // Avance
   const [pasos, setPasos] = useState<any[] | null>(null);
@@ -153,9 +156,12 @@ export default function IwpDetail({ projectId, iwpId, onClose, onChanged }: Prop
   if (error) return <div style={{ color: '#A00000', fontSize: 13, padding: 32 }}>{error}</div>;
   if (!data) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '48px 32px', color: '#757575', fontSize: 13 }}><Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} /> Cargando…</div>;
 
-  const { iwp, actividades, constraints } = data;
+  const { iwp, actividades, constraints, cuadrilla, turno } = data;
+  const partidas = data.partidas ?? [];
   const duracion = iwp.fecha_fin_plan && iwp.fecha_inicio_plan ? Math.ceil((new Date(iwp.fecha_fin_plan).getTime() - new Date(iwp.fecha_inicio_plan).getTime()) / 86400000) : 0;
   const hoyCons = constraints.filter((c: any) => !c.cleared);
+  // La regla del WFP: el paquete se cierra dentro del ciclo de turno o no es un IWP.
+  const excedeTurno = turno && iwp.duracion_dias != null && Number(iwp.duracion_dias) > Number(turno.dias_trabajo);
 
   return (
     <div style={{ borderRadius: 14, border: '2px solid #EEEEEE', backgroundColor: 'white', overflow: 'hidden' }}>
@@ -168,7 +174,7 @@ export default function IwpDetail({ projectId, iwpId, onClose, onChanged }: Prop
       </div>
 
       <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #FF0000', backgroundColor: '#FAFAFA' }}>
-        {(['resumen', 'gantt', 'constraints', 'avance', 'imagenes'] as const).map(t => (
+        {(['resumen', 'partidas', 'gantt', 'constraints', 'avance', 'imagenes'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} style={{ flex: 1, padding: '9px 12px', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', border: 'none', backgroundColor: tab === t ? 'white' : '#FAFAFA', color: tab === t ? '#FF0000' : '#757575', cursor: 'pointer', borderBottom: tab === t ? '2px solid #FF0000' : 'none' }}>
             {t}
           </button>
@@ -177,20 +183,76 @@ export default function IwpDetail({ projectId, iwpId, onClose, onChanged }: Prop
 
       <div style={{ padding: '16px' }}>
         {tab === 'resumen' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-            {[
-              { label: 'HH ESTIMADAS', val: num(iwp.hh_estimadas), color: '#1A1A1A' },
-              { label: 'DURACIÓN', val: duracion + ' días', color: '#1A1A1A' },
-              { label: 'AVANCE FÍSICO', val: iwp.avance_fisico_pct + '%', color: iwp.avance_fisico_pct >= 50 ? '#166534' : '#B45309' },
-              { label: 'CREW', val: iwp.crew_size || '—', color: '#1A1A1A' },
-              { label: 'INICIO', val: fecha(iwp.fecha_inicio_plan), color: '#1A1A1A' },
-              { label: 'FIN', val: fecha(iwp.fecha_fin_plan), color: '#1A1A1A' },
-            ].map((k, i) => (
-              <div key={i} style={{ borderRadius: 10, border: '1px solid #EEEEEE', padding: '10px 12px' }}>
-                <div style={{ fontSize: 8.5, fontWeight: 900, color: '#757575' }}>{k.label}</div>
-                <div style={{ fontSize: 15, fontWeight: 900, color: k.color, marginTop: 4 }}>{k.val}</div>
+          <div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+              {[
+                { label: 'HH ESTIMADAS', val: num(iwp.hh_estimadas), color: '#1A1A1A' },
+                { label: 'DURACIÓN', val: duracion + ' días', color: excedeTurno ? '#B45309' : '#1A1A1A' },
+                { label: 'AVANCE FÍSICO', val: iwp.avance_fisico_pct + '%', color: iwp.avance_fisico_pct >= 50 ? '#166534' : '#B45309' },
+                { label: 'CUADRILLA', val: cuadrilla ? `${cuadrilla.codigo} · ${cuadrilla.n_personas}p` : (iwp.crew_size || '—'), color: '#1A1A1A' },
+                { label: 'TURNO', val: turno ? `${turno.codigo} · ${turno.horas_dia} h` : '—', color: '#1A1A1A' },
+                { label: 'INICIO', val: fecha(iwp.fecha_inicio_plan), color: '#1A1A1A' },
+                { label: 'FIN', val: fecha(iwp.fecha_fin_plan), color: '#1A1A1A' },
+              ].map((k, i) => (
+                <div key={i} style={{ borderRadius: 10, border: '1px solid #EEEEEE', padding: '10px 12px' }}>
+                  <div style={{ fontSize: 8.5, fontWeight: 900, color: '#757575' }}>{k.label}</div>
+                  <div style={{ fontSize: 15, fontWeight: 900, color: k.color, marginTop: 4 }}>{k.val}</div>
+                </div>
+              ))}
+            </div>
+
+            {excedeTurno && (
+              <div style={{ display: 'flex', gap: 8, marginTop: 10, padding: '8px 11px', borderRadius: 8, backgroundColor: '#FFFBEB', border: '1px solid #FDE68A', fontSize: 10.5, color: '#92400E' }}>
+                <AlertCircle style={{ width: 14, height: 14, flexShrink: 0, marginTop: 1 }} />
+                Este paquete dura {iwp.duracion_dias} días y el turno {turno.codigo} son {turno.dias_trabajo}. La cuadrilla baja antes de cerrarlo.
               </div>
-            ))}
+            )}
+
+            {iwp.limites_bateria && (
+              <div style={{ marginTop: 10, padding: '9px 12px', borderRadius: 10, border: '1px solid #EEEEEE', backgroundColor: '#FAFAFA' }}>
+                <div style={{ fontSize: 8.5, fontWeight: 900, color: '#757575', marginBottom: 3 }}>LÍMITES DE BATERÍA</div>
+                <div style={{ fontSize: 10.5, color: '#33475B', lineHeight: 1.45 }}>{iwp.limites_bateria}</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'partidas' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#1A1A1A' }}>Cantidades del paquete ({partidas.length})</span>
+              <span style={{ fontSize: 10, color: '#757575', marginLeft: 'auto' }}>
+                {num(partidas.reduce((s: number, p: any) => s + Number(p.hh_asignadas || 0), 0))} HH
+              </span>
+            </div>
+            {partidas.length === 0 ? (
+              <div style={{ fontSize: 11, color: '#9E9E9E', fontStyle: 'italic', padding: '20px 0', lineHeight: 1.5 }}>
+                Este IWP no tiene cantidades asignadas — se creó a mano desde el programa, no desde la apertura del CWP.
+                Sin cantidades no descuenta del banco ni se puede medir en terreno.
+              </div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10.5 }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#FAFAFA' }}>
+                    {['Item', 'Descripción', 'Un.', 'Cantidad', 'HH/un', 'HH'].map((h, i) => (
+                      <th key={i} style={{ padding: '6px 8px', fontSize: 9, fontWeight: 900, color: '#757575', textTransform: 'uppercase', textAlign: i >= 3 ? 'right' : 'left', borderBottom: '1px solid #EEEEEE' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {partidas.map((p: any) => (
+                    <tr key={p.id} style={{ borderBottom: '1px solid #F5F5F5' }}>
+                      <td style={{ padding: '6px 8px', fontWeight: 700, color: '#1A1A1A', whiteSpace: 'nowrap' }}>{p.item}</td>
+                      <td style={{ padding: '6px 8px', color: '#33475B', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={p.descripcion ?? ''}>{p.descripcion ?? '—'}</td>
+                      <td style={{ padding: '6px 8px', color: '#757575' }}>{p.unidad ?? '—'}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 800, color: '#1A1A1A' }}>{Number(p.cantidad_asignada).toLocaleString('es-CL', { maximumFractionDigits: 2 })}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right', color: '#757575' }}>{p.hh_unidad ? Number(p.hh_unidad).toLocaleString('es-CL', { maximumFractionDigits: 3 }) : '—'}</td>
+                      <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 800, color: '#1A1A1A' }}>{num(p.hh_asignadas)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         )}
 

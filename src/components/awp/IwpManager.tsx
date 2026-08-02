@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Loader2, Plus, AlertTriangle, X, Trash2 } from 'lucide-react';
+import { Loader2, Plus, AlertTriangle, X, Trash2, Split, Users } from 'lucide-react';
 import IwpDetail from './IwpDetail';
+import AperturaWizard from './AperturaWizard';
 
 export interface IwpViewerBridge {
   captureScope?: (name: string) => Promise<string | null>;
@@ -30,20 +31,29 @@ const STATUS_COLOR: Record<string, { bg: string; fg: string }> = {
   COMPLETADO: { bg: '#F3F4F6', fg: '#374151' },
 };
 
+interface BancoResumen {
+  fuente: 'mc' | 'itemizado';
+  hh_banco: number; hh_asignadas: number; hh_saldo: number;
+  pct_aperturado: number; n_partidas: number; n_partidas_sin_rendimiento: number;
+}
+
 export default function IwpManager({ projectId, cwp }: Props) {
   const [iwps, setIwps] = useState<any[]>([]);
   const [cwpInfo, setCwpInfo] = useState<{ hh_planner: number | null } | null>(null);
+  const [banco, setBanco] = useState<BancoResumen | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedIwp, setSelectedIwp] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showApertura, setShowApertura] = useState(false);
+  const [aviso, setAviso] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!cwp?.cwp) { setLoading(false); return; }
     setLoading(true);
     fetch(`/api/mining-iwp?project_id=${projectId}&cwp_id=${encodeURIComponent(cwp.cwp)}`)
       .then(async r => { const d = await r.json(); if (!r.ok) throw new Error(d?.error); return d; })
-      .then(d => { setIwps(d.iwps ?? []); setCwpInfo(d.cwp ?? null); setError(null); })
+      .then(d => { setIwps(d.iwps ?? []); setCwpInfo(d.cwp ?? null); setBanco(d.banco ?? null); setError(null); })
       .catch(e => setError(String(e.message ?? e)))
       .finally(() => setLoading(false));
   }, [projectId, cwp?.cwp]);
@@ -58,8 +68,11 @@ export default function IwpManager({ projectId, cwp }: Props) {
   };
 
   const hhAsignadas = iwps.reduce((s, i) => s + (Number(i.hh_estimadas) || 0), 0);
-  const hhCwp = Number(cwpInfo?.hh_planner) || 0;
-  const excedido = hhCwp > 0 && hhAsignadas > hhCwp;
+  // El banco del itemizado es la referencia buena; el HH del planner es el respaldo cuando
+  // el CWP todavía no tiene cantidades cruzadas.
+  const hhReferencia = Number(banco?.hh_banco) || Number(cwpInfo?.hh_planner) || 0;
+  const excedido = hhReferencia > 0 && hhAsignadas > hhReferencia * 1.02;
+  const pctApertura = hhReferencia > 0 ? Math.min(100, (hhAsignadas / hhReferencia) * 100) : 0;
   const hoy14 = Date.now() + 14 * 86400000;
 
   if (loading) return <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 32, color: '#757575', fontSize: 13 }}><Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} /> Cargando IWPs…</div>;
@@ -67,26 +80,65 @@ export default function IwpManager({ projectId, cwp }: Props) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: selectedIwp ? '1fr 1.2fr' : '1fr', gap: 14 }}>
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 900, color: '#1A1A1A' }}>IWP ({iwps.length})</div>
-            <div style={{ fontSize: 10, color: excedido ? '#A00000' : '#757575', fontWeight: excedido ? 700 : 400 }}>
-              HH asignadas: {num(hhAsignadas)}{hhCwp > 0 ? ` / ${num(hhCwp)} del CWP` : ''}
+        {/* Apertura del CWP: cuánto de su alcance ya está quebrado en paquetes ejecutables.
+            Es el indicador que la rutina de Pull Planning tiene que mover hasta el 100%. */}
+        <div style={{ borderRadius: 12, border: '1px solid #EEEEEE', padding: '11px 14px', marginBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 900, color: '#1A1A1A' }}>Apertura del CWP en IWP</div>
+              <div style={{ fontSize: 10, color: excedido ? '#A00000' : '#757575', fontWeight: excedido ? 700 : 400 }}>
+                {iwps.length} paquete(s) · {num(hhAsignadas)} HH aperturadas
+                {hhReferencia > 0 && ` de ${num(hhReferencia)} HH del ${banco?.hh_banco ? 'banco de cantidades' : 'planner'}`}
+              </div>
+            </div>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button onClick={() => setShowApertura(true)} title="Quebrar el saldo del CWP en IWP siguiendo la rutina de Pull Planning"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', fontSize: 11, fontWeight: 800, backgroundColor: '#FF0000', color: 'white', border: 'none', borderRadius: 10, cursor: 'pointer' }}>
+                <Split style={{ width: 13, height: 13 }} /> Aperturar CWP
+              </button>
+              <button onClick={() => setShowCreate(true)} title="Crear un IWP suelto desde las actividades del programa"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 12px', fontSize: 11, fontWeight: 700, backgroundColor: 'white', color: '#374151', border: '1px solid #E5E7EB', borderRadius: 10, cursor: 'pointer' }}>
+                <Plus style={{ width: 13, height: 13 }} /> Manual
+              </button>
             </div>
           </div>
-          <button onClick={() => setShowCreate(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', fontSize: 11, fontWeight: 800, backgroundColor: '#FF0000', color: 'white', border: 'none', borderRadius: 10, cursor: 'pointer' }}>
-            <Plus style={{ width: 13, height: 13 }} /> Nuevo IWP
-          </button>
+
+          <div style={{ height: 8, borderRadius: 999, backgroundColor: '#F3F4F6', overflow: 'hidden' }}>
+            <div style={{ width: `${pctApertura}%`, height: '100%', backgroundColor: excedido ? '#B45309' : pctApertura >= 99 ? '#16A34A' : '#FF0000', transition: 'width .3s' }} />
+          </div>
+
+          {banco && (
+            <div style={{ display: 'flex', gap: 14, marginTop: 7, fontSize: 9.5, color: '#757575', flexWrap: 'wrap' }}>
+              <span>Saldo por aperturar: <b style={{ color: banco.hh_saldo > 0 ? '#1A1A1A' : '#166534' }}>{num(banco.hh_saldo)} HH</b></span>
+              <span>{banco.n_partidas} partidas · fuente {banco.fuente === 'mc' ? 'matriz de cobro' : 'itemizado'}</span>
+              {banco.n_partidas_sin_rendimiento > 0 && (
+                <span style={{ color: '#B45309', fontWeight: 700 }}>
+                  {banco.n_partidas_sin_rendimiento} sin rendimiento HH/unidad
+                </span>
+              )}
+            </div>
+          )}
         </div>
+
+        {aviso && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 10, borderRadius: 8, backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', fontSize: 10.5, color: '#166534' }}>
+            <Users style={{ width: 14, height: 14, flexShrink: 0 }} /> {aviso}
+          </div>
+        )}
 
         {excedido && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 10, borderRadius: 8, backgroundColor: '#FFFBEB', border: '1px solid #FDE68A', fontSize: 10.5, color: '#92400E' }}>
             <AlertTriangle style={{ width: 14, height: 14, flexShrink: 0 }} />
-            La suma de HH de los IWP supera el presupuesto del CWP.
+            La suma de HH de los IWP supera el alcance del CWP.
           </div>
         )}
         {error && <div style={{ fontSize: 11, color: '#A00000', marginBottom: 8 }}>{error}</div>}
-        {iwps.length === 0 && <div style={{ fontSize: 11, color: '#9E9E9E', fontStyle: 'italic', padding: '24px 0' }}>Este CWP aún no tiene IWPs. Crea el primero con las actividades del programa P333.</div>}
+        {iwps.length === 0 && (
+          <div style={{ fontSize: 11, color: '#9E9E9E', fontStyle: 'italic', padding: '24px 0', lineHeight: 1.5 }}>
+            Este CWP todavía no está aperturado. «Aperturar CWP» levanta sus cantidades y rendimientos y
+            propone el quiebre completo en paquetes que una cuadrilla cierre dentro de un turno.
+          </div>
+        )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {iwps.map((iwp: any) => {
@@ -100,6 +152,9 @@ export default function IwpManager({ projectId, cwp }: Props) {
               <div key={iwp.iwp_id} onClick={() => setSelectedIwp(iwp.iwp_id)}
                 style={{ borderRadius: 12, border: sel ? '2px solid #FF0000' : '1px solid #EEEEEE', backgroundColor: 'white', padding: '12px 14px', cursor: 'pointer' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  {iwp.secuencia != null && (
+                    <span title="Orden de ejecución dentro del CWP" style={{ fontSize: 9, fontWeight: 900, color: '#9E9E9E', minWidth: 14 }}>{iwp.secuencia}</span>
+                  )}
                   <span style={{ fontSize: 11.5, fontWeight: 900, color: '#1A1A1A' }}>{iwp.iwp_id}</span>
                   <span style={{ fontSize: 8.5, fontWeight: 800, padding: '2px 8px', borderRadius: 999, backgroundColor: st.bg, color: st.fg, textTransform: 'uppercase' }}>{String(iwp.status ?? '').replace(/_/g, ' ')}</span>
                   {riesgo && <span title="Inicia en menos de 14 días con constraints pendientes"><AlertTriangle style={{ width: 14, height: 14, color: '#B45309' }} /></span>}
@@ -137,6 +192,19 @@ export default function IwpManager({ projectId, cwp }: Props) {
           tasks={cwp.prog?.tasks ?? []}
           onClose={() => setShowCreate(false)}
           onCreated={() => { setShowCreate(false); load(); }}
+        />
+      )}
+
+      {showApertura && (
+        <AperturaWizard
+          projectId={projectId}
+          cwpId={cwp.cwp}
+          onClose={() => setShowApertura(false)}
+          onCreated={({ n_iwp, hh_total }) => {
+            setShowApertura(false);
+            setAviso(`${n_iwp} IWP creados con ${num(hh_total)} HH. Ya pueden entrar a la rutina de 6WLA para despejar sus restricciones.`);
+            load();
+          }}
         />
       )}
     </div>
