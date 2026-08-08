@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Loader2, Search, AlertTriangle, ShieldCheck, FileText, Clock } from 'lucide-react';
+import { fecha as fechaHilo } from '@/lib/formato';
 
 // Dashboard genérico por departamento: KPIs + consideraciones del feed diario IA + documentos Aconex.
 // Lo usan los módulos Calidad, Medio Ambiente, SSO, Equipos y RRHH.
@@ -29,7 +30,7 @@ interface Doc {
 
 const docFileUrl = (codigo: string) => `/api/mining-planos/file?codigo_documento=${encodeURIComponent(codigo)}`;
 
-const fecha = (s: string | null) => s ? new Date(s).toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—';
+const fecha = fechaHilo;
 
 const SEV_STYLE = {
   BLOQUEANTE: { bg: '#FEE2E2', bd: '#FECACA', fg: '#A00000', label: 'BLOQUEANTE' },

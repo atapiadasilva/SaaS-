@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import IwpDetail from './IwpDetail';
 import { metaDe } from '@/lib/iwp-estado';
+import { fechaCorta } from '@/lib/formato';
 
 export interface IwpViewerBridge {
   captureScope?: (name: string) => Promise<string | null>;
@@ -23,7 +24,7 @@ interface Props {
 }
 
 const num = (v: number | null | undefined) => v == null ? '—' : Math.round(v).toLocaleString('es-CL');
-const fecha = (s: string | null) => s ? new Date(s).toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' }) : '—';
+const fecha = fechaCorta;
 
 interface BancoResumen {
   fuente: 'mc' | 'itemizado';

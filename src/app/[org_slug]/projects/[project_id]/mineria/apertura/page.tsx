@@ -19,6 +19,7 @@ import {
   Layers, CalendarClock, ShieldAlert, Boxes,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { colorDisciplina } from '@/lib/disciplinas';
 
 const ROJO = '#FF0000';
 /** La meta del estándar COAA: cuatro semanas de backlog libre de restricciones. */
@@ -274,7 +275,10 @@ function FilaApertura({ c, base }: { c: FilaCwp; base: string }) {
         <td className="px-3 py-2.5">
           <div className="flex items-center gap-2">
             {c.disciplina_cod && (
-              <span className="min-w-[24px] text-center rounded px-1.5 py-0.5 bg-[#33475B] text-white text-[9px] font-extrabold shrink-0">
+              <span
+                className="min-w-[24px] text-center rounded px-1.5 py-0.5 text-white text-[9px] font-extrabold shrink-0"
+                style={{ backgroundColor: colorDisciplina(c.disciplina_cod) }}
+              >
                 {c.disciplina_cod}
               </span>
             )}

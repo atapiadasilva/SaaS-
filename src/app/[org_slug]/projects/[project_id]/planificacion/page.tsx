@@ -9,6 +9,7 @@ import {
 import { cn } from '@/lib/utils';
 import { metaDe } from '@/lib/iwp-estado';
 import { colorDesdeNombre } from '@/lib/disciplinas';
+import { fecha } from '@/lib/formato';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 interface PAct {
@@ -48,7 +49,7 @@ const DAY = 86_400_000;
 const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 const toMs = (s: string) => +new Date(s + 'T00:00:00');
 const fn = (v: number) => Math.round(v).toLocaleString('es-CL');
-const fd = (s: string | null) => s ? s.slice(8, 10) + '-' + MESES[+s.slice(5, 7) - 1] + '-' + s.slice(2, 4) : '—';
+const fd = fecha;
 
 const PX_DIA: Record<Escala, number> = { año: 1.15, mes: 2.6, semana: 6.5 };
 const LEFT_W = 680;

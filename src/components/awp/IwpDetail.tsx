@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Loader2, X, Plus, Calendar, AlertCircle, CheckCircle2, Send } from 'lucide-react';
 import { metaDe, transicionesManuales, ESTADO_META, normalizarEstado } from '@/lib/iwp-estado';
 import { TIPOS_CONSTRAINT, CONSTRAINT_META, metaTipo, diasParaVencer } from '@/lib/constraints';
+import { fechaCorta } from '@/lib/formato';
 
 interface IwpData {
   iwp: any;
@@ -22,7 +23,7 @@ interface Props {
   onChanged?: () => void;
 }
 
-const fecha = (s: string | null) => s ? new Date(s).toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit' }) : '—';
+const fecha = fechaCorta;
 const num = (v: number | null | undefined) => v == null ? '—' : Math.round(v).toLocaleString('es-CL');
 const hoyISO = () => new Date().toISOString().slice(0, 10);
 

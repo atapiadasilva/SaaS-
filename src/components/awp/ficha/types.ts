@@ -1,5 +1,6 @@
 // Tipos y utilidades compartidas por el editor de ficha CWP y la vista de impresión.
 import { metaDe } from '@/lib/iwp-estado';
+import { fechaLarga } from '@/lib/formato';
 
 export type Orientacion = 'vertical' | 'horizontal';
 
@@ -43,7 +44,8 @@ export const nuevoId = () => `b${Date.now().toString(36)}${(_seq++).toString(36)
 // Formateadores es-CL
 export const fn = (v: any) => v == null ? '—' : Math.round(Number(v)).toLocaleString('es-CL');
 export const f1 = (v: any) => v == null ? '—' : Number(v).toLocaleString('es-CL', { maximumFractionDigits: 1 });
-export const fd = (v: any) => v ? String(v).slice(0, 10) : '—';
+// La ficha se imprime y se entrega: la fecha va en el formato de la plataforma, no en ISO.
+export const fd = fechaLarga;
 export const fmm = (v: any) => !v ? '—' : '$' + Math.round(Number(v) / 1e6).toLocaleString('es-CL') + ' MM';
 
 // La ficha va firmada y se le entrega al mandante: el nombre del estado tiene que ser el

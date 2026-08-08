@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { Loader2, CalendarClock, ChevronRight, ChevronDown, AlertTriangle, Clock, Layers, CheckCircle2, Search } from 'lucide-react';
+import { fechaCorta } from '@/lib/formato';
+import { colorDisciplina } from '@/lib/disciplinas';
 
 interface Act {
   id: string; id_p6: string; id_3wla: string | null; actividad: string; especialidad: string | null;
@@ -24,7 +26,9 @@ interface Data {
 }
 
 const fn = (v: any) => v == null ? '—' : Math.round(Number(v)).toLocaleString('es-CL');
-const fd = (s: string | null) => s ? s.slice(8, 10) + '-' + s.slice(5, 7) : '—';
+// Fecha en el formato único de la plataforma (lib/formato): antes esta pantalla escribía
+// `18-01` y Planificación `18-Ene-27` para el mismo día.
+const fd = fechaCorta;
 
 const TIPO_COLOR: Record<string, string> = {
   'Ingeniería': '#1D4ED8', 'Seguridad': '#B45309', 'Suministro': '#7C3AED',
@@ -127,7 +131,9 @@ export default function TrisemanalPage() {
               <button onClick={() => setOpen(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; })}
                 className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 text-left">
                 {abierto ? <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />}
-                {g.disciplina_cod && <span className="min-w-[30px] text-center rounded-md px-2 py-0.5 text-white text-[11px] font-extrabold bg-[#FF0000]">{g.disciplina_cod}</span>}
+                {/* El color de la disciplina es el mismo de lib/disciplinas que usan el explorador,
+                    Recursos y el Gantt; acá se pintaban todas de rojo, así que la letra no distinguía nada. */}
+                {g.disciplina_cod && <span className="min-w-[30px] text-center rounded-md px-2 py-0.5 text-white text-[11px] font-extrabold" style={{ backgroundColor: colorDisciplina(g.disciplina_cod) }}>{g.disciplina_cod}</span>}
                 <span className="font-mono text-[14px] font-extrabold text-[#1A1A1A]">{g.cwp_id ?? 'Sin CWP'}</span>
                 <span className="text-[12px] text-slate-500 truncate">{g.nombre}</span>
                 <div className="ml-auto flex items-center gap-4 text-[11px] shrink-0">
