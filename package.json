@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "predev": "node -e \"require('fs').rmSync('.next/dev/types', {recursive:true, force:true})\"",
-    "dev": "next dev",
+    "dev": "node --dns-result-order=ipv4first ./node_modules/next/dist/bin/next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node --dns-result-order=ipv4first ./node_modules/next/dist/bin/next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke-api.mjs"

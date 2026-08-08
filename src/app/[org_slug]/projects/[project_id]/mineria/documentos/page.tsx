@@ -41,6 +41,7 @@ export default function DocumentosPage() {
   const { org_slug, project_id } = useParams<{ org_slug: string; project_id: string }>();
   const [data, setData] = useState<MResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [activeDisc, setActiveDisc] = useState<string | null>(null);
   const [estado, setEstado] = useState<'' | 'oficial' | 'estimado_por_area' | 'sin_clasificar'>('');
@@ -52,8 +53,14 @@ export default function DocumentosPage() {
     if (!project_id) return;
     setLoading(true);
     fetch(`/api/mining-planos/list?project_id=${project_id}`)
-      .then(r => r.json())
-      .then((d: MResponse) => setData(d))
+      .then(async r => {
+        const d = await r.json();
+        // Un 500 entrega `{error}`: guardarlo como si fueran datos reventaba el render
+        // (`data.disciplinas.map` de undefined). Error explícito, no pantalla muerta.
+        if (!r.ok || d?.error || !Array.isArray(d?.docs)) throw new Error(d?.error || `HTTP ${r.status}`);
+        setData(d);
+      })
+      .catch(e => setLoadError(String(e?.message ?? e)))
       .finally(() => setLoading(false));
   }, [project_id]);
 
@@ -94,6 +101,15 @@ export default function DocumentosPage() {
   const onCwaChange = (v: string) => { setActiveCwa(v); setActiveCv(''); setActiveCwp(''); };
   const onCvChange = (v: string) => { setActiveCv(v); setActiveCwp(''); };
 
+  if (loadError) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-6">
+        <p className="text-sm font-bold text-[#1A1A1A]">No se pudieron cargar los documentos.</p>
+        <p className="text-[11px] text-[#9E9E9E]">{loadError}</p>
+        <button onClick={() => window.location.reload()} className="px-4 py-2 rounded-full bg-[#FF0000] hover:bg-[#A00000] text-white text-[10px] font-black uppercase tracking-wide transition">Reintentar</button>
+      </div>
+    );
+  }
   if (loading || !data) {
     return <div className="h-full flex items-center justify-center text-slate-400 text-[13px]">Cargando documentos…</div>;
   }

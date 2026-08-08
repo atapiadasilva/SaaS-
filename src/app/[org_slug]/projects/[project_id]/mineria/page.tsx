@@ -54,6 +54,7 @@ export default function MineriaPage() {
 
   const [data, setData] = useState<MData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [activeDiscs, setActiveDiscs] = useState<Set<string>>(new Set());
   const [selectedCwp, setSelectedCwp] = useState<string | null>(null);
@@ -129,12 +130,21 @@ export default function MineriaPage() {
     window.addEventListener('mouseup', onUp);
   }, [viewerWidth]);
 
-  useEffect(() => {
+  // Carga con reintento. Antes se hacía `r.json()` sin mirar `r.ok`: un 500 pasajero de la
+  // base entregaba `{error}` en vez de datos, `d.disc.map` reventaba y el explorador quedaba
+  // en blanco sin explicación. Un fallo puntual de red se reintenta solo; si persiste, se
+  // dice y se ofrece reintentar — nunca una pantalla muerta.
+  const cargarData = useCallback((intento = 0) => {
     if (!project_id) return;
     setLoading(true);
+    setLoadError(null);
     fetch(`/api/mining-data?project_id=${project_id}`)
-      .then(r => r.json())
-      .then((d: MData) => {
+      .then(async r => {
+        const d = await r.json();
+        if (!r.ok || d?.error) throw new Error(d?.error || `HTTP ${r.status}`);
+        return d as MData;
+      })
+      .then(d => {
         setData(d);
         setActiveDiscs(new Set(d.disc.map(x => x.code)));
         // `?cwp=` permite llegar acá desde la Sala de Apertura o desde un enlace compartido
@@ -142,9 +152,16 @@ export default function MineriaPage() {
         const pedido = new URLSearchParams(window.location.search).get('cwp');
         const destino = pedido && d.cwp.some(x => x.cwp === pedido) ? pedido : d.cwp[0]?.cwp;
         if (destino) setSelectedCwp(destino);
+        setLoading(false);
       })
-      .finally(() => setLoading(false));
+      .catch(e => {
+        if (intento < 2) { setTimeout(() => cargarData(intento + 1), 1500 * (intento + 1)); return; }
+        setLoadError(String(e?.message ?? e));
+        setLoading(false);
+      });
   }, [project_id]);
+
+  useEffect(() => { cargarData(); }, [cargarData]);
 
   useEffect(() => {
     if (!project_id) return;
@@ -287,6 +304,24 @@ export default function MineriaPage() {
     return (
       <div className="flex items-center justify-center h-full gap-3 text-slate-400">
         <Loader2 className="w-5 h-5 animate-spin" /> Cargando datos AWP de minería…
+      </div>
+    );
+  }
+
+  // Error ≠ vacío. Antes un fallo de la API caía en "Sin data AWP cargada", que es mentira
+  // (los datos existen, la petición falló) y no ofrecía salida.
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-6">
+        <Package className="w-10 h-10 text-[#FF0000] opacity-60" />
+        <p className="text-sm font-bold text-[#1A1A1A]">No se pudieron cargar los datos del explorador.</p>
+        <p className="text-[11px] text-[#9E9E9E] max-w-[420px]">{loadError}</p>
+        <button
+          onClick={() => cargarData()}
+          className="mt-1 px-4 py-2 rounded-full bg-[#FF0000] hover:bg-[#A00000] text-white text-[10px] font-black uppercase tracking-wide transition"
+        >
+          Reintentar
+        </button>
       </div>
     );
   }
