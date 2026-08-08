@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Pickaxe, CalendarRange, CalendarClock, Link2, Receipt, ShieldCheck, Leaf, HardHat, Truck, Users, LayoutDashboard, BarChart3, Split, LayoutGrid, ChevronDown } from 'lucide-react';
@@ -36,7 +36,17 @@ interface Props {
 export function ProjectNavBar({ orgSlug, projectId, activeModuleKeys }: Props) {
   const pathname = usePathname();
   const [deptosAbierto, setDeptosAbierto] = useState(false);
+  // El menú se ancla al viewport (position fixed): la nav vive dentro de un
+  // contenedor con scroll horizontal y un `absolute` quedaría recortado por él.
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
   const base = `/${orgSlug}/projects/${projectId}`;
+
+  const abrirDeptos = () => {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setMenuPos({ top: r.bottom + 8, left: Math.min(r.left, window.innerWidth - 210) });
+    setDeptosAbierto(v => !v);
+  };
 
   const esDepto = (key: string) => (DEPARTAMENTOS as readonly string[]).includes(key);
   // Setup vive como engranaje en el header (lo pinta el layout), no como pastilla.
@@ -60,7 +70,7 @@ export function ProjectNavBar({ orgSlug, projectId, activeModuleKeys }: Props) {
   const pillOn   = 'bg-[#FF0000] text-white shadow-[0_2px_10px_rgba(255,0,0,0.3)]';
 
   return (
-    <nav className="flex items-center gap-1">
+    <nav className="flex items-center gap-1 mx-auto">
       {pillKeys.map(key => {
         const mod = MODULE_NAV[key as keyof typeof MODULE_NAV];
         if (!mod) return null;
@@ -77,7 +87,8 @@ export function ProjectNavBar({ orgSlug, projectId, activeModuleKeys }: Props) {
       {deptoKeys.length > 0 && (
         <div className="relative">
           <button
-            onClick={() => setDeptosAbierto(v => !v)}
+            ref={btnRef}
+            onClick={abrirDeptos}
             className={cn(pillBase, deptoActivo ? pillOn : pillOff)}
           >
             <LayoutGrid className="w-3.5 h-3.5" />
@@ -85,11 +96,14 @@ export function ProjectNavBar({ orgSlug, projectId, activeModuleKeys }: Props) {
             <ChevronDown className={cn('w-3 h-3 transition-transform', deptosAbierto && 'rotate-180')} />
           </button>
 
-          {deptosAbierto && (
+          {deptosAbierto && menuPos && (
             <>
               {/* Clic afuera cierra el menú */}
-              <div className="fixed inset-0 z-20" onClick={() => setDeptosAbierto(false)} />
-              <div className="absolute right-0 top-full mt-2 z-30 bg-white border border-[#EEEEEE] rounded-xl shadow-[0_8px_30px_rgba(0,0,0,0.12)] py-1.5 min-w-[190px]">
+              <div className="fixed inset-0 z-40" onClick={() => setDeptosAbierto(false)} />
+              <div
+                style={{ position: 'fixed', top: menuPos.top, left: menuPos.left }}
+                className="z-50 bg-white border border-[#EEEEEE] rounded-xl shadow-[0_8px_30px_rgba(0,0,0,0.12)] py-1.5 min-w-[190px]"
+              >
                 {deptoKeys.map(key => {
                   const mod = MODULE_NAV[key as keyof typeof MODULE_NAV];
                   const Icon = mod.icon;

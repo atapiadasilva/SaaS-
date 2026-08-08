@@ -56,8 +56,9 @@ export default async function ProjectLayout({
           </div>
         </Link>
 
-        {/* Nav centrado */}
-        <div className="flex-1 flex justify-center relative">
+        {/* Nav centrada. min-w-0 + scroll interno: si no cabe, se desliza dentro
+            de la barra en vez de empujar el badge y el engranaje fuera de pantalla. */}
+        <div className="flex-1 flex relative min-w-0 overflow-x-auto sin-scrollbar">
           <ProjectNavBar
             orgSlug={org_slug}
             projectId={project_id}
