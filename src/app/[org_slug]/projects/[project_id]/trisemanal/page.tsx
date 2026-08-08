@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import { Loader2, CalendarClock, ChevronRight, ChevronDown, AlertTriangle, Clock, Layers, CheckCircle2, Search } from 'lucide-react';
 import { fechaCorta } from '@/lib/formato';
 import { colorDisciplina } from '@/lib/disciplinas';
+import { metaTipo } from '@/lib/constraints';
 
 interface Act {
   id: string; id_p6: string; id_3wla: string | null; actividad: string; especialidad: string | null;
@@ -30,10 +31,6 @@ const fn = (v: any) => v == null ? '—' : Math.round(Number(v)).toLocaleString(
 // `18-01` y Planificación `18-Ene-27` para el mismo día.
 const fd = fechaCorta;
 
-const TIPO_COLOR: Record<string, string> = {
-  'Ingeniería': '#1D4ED8', 'Seguridad': '#B45309', 'Suministro': '#7C3AED',
-  'Maquinaria/Equipo': '#0891B2', 'Liberación de área': '#166534', 'Otro': '#64748B',
-};
 
 export default function TrisemanalPage() {
   const params = useParams();
@@ -186,7 +183,18 @@ export default function TrisemanalPage() {
                               </button>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-[8.5px] font-black uppercase px-2 py-0.5 rounded-full text-white" style={{ background: TIPO_COLOR[r.tipo ?? 'Otro'] ?? '#64748B' }}>{r.tipo}</span>
+                                  {/* Tipo normalizado al catálogo COAA (lib/constraints), el mismo que usan
+                                      la Mesa y el IWP. El 3WLA guarda texto libre propio ("Seguridad",
+                                      "Liberación de área"): se mostraba con un vocabulario y unos colores
+                                      distintos a los del resto, y el morado que aquí era "Suministro" es
+                                      "Permiso" en la Mesa. El texto original queda en el tooltip. */}
+                                  <span
+                                    title={r.tipo ? `Registrado en el 3WLA como «${r.tipo}»` : undefined}
+                                    className="text-[8.5px] font-black uppercase px-2 py-0.5 rounded-full text-white"
+                                    style={{ background: metaTipo(r.tipo).color }}
+                                  >
+                                    {metaTipo(r.tipo).label}
+                                  </span>
                                   {r.entidad && <span className="text-[8.5px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{r.entidad}</span>}
                                   <span className="text-[9px] font-mono text-slate-400">{r.id_p6}</span>
                                   {r.fecha_compromiso && !cerrada && <span className="text-[9px] text-amber-700 font-bold ml-auto">compromiso {fd(r.fecha_compromiso)}</span>}

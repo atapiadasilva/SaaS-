@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { esAprobado, esRechazado, esEnRevision } from '@/lib/documentos';
 import { listLocalDocNums } from '@/lib/aconex-local';
 import { dedupeConsideraciones } from '@/lib/consideraciones';
 
@@ -56,14 +57,12 @@ export async function GET(req: NextRequest) {
   // El feed diario repite el mismo hallazgo en cada carga: se cuenta y se muestra una vez.
   const cons = dedupeConsideraciones(consRes.data ?? []);
 
-  const esAprobado = (e: string | null) => !!e && /aprobado/i.test(e) && !/para aprob/i.test(e);
-  const esRechazado = (e: string | null) => !!e && /rechaz/i.test(e);
 
   const kpis = {
     docs_total: docs.length,
     aprobados: docs.filter((d: any) => esAprobado(d.estado_aconex)).length,
     rechazados: docs.filter((d: any) => esRechazado(d.estado_aconex)).length,
-    en_revision: docs.filter((d: any) => d.estado_aconex && !esAprobado(d.estado_aconex) && !esRechazado(d.estado_aconex)).length,
+    en_revision: docs.filter((d: any) => esEnRevision(d.estado_aconex)).length,
     consid_abiertas: cons.filter((c: any) => c.estado !== 'CERRADA').length,
     bloqueantes: cons.filter((c: any) => c.estado !== 'CERRADA' && c.severidad === 'BLOQUEANTE').length,
     ultima_actualizacion: cons[0]?.fecha_reporte ?? null,
