@@ -372,3 +372,30 @@ BIM arrastraban los headers azul marino de la generación anterior (`#08203F`, `
 `#1565C0`) sobre fondo gris `#EEF2F7`: pasan a blanco con acento rojo, como el resto. Las
 paletas de disciplina (los chips de colores del explorador y de Recursos) **se conservan**:
 ahí el color es dato, no decoración.
+
+### Cuarta ronda — un solo vocabulario
+
+Con las pantallas ya coherentes en color, quedaba lo que se contradecía en **palabras y
+cifras**:
+
+| Dónde | Decía | Dice |
+|---|---|---|
+| Explorador de Minería | "suministros" (eran ítems del ECO-2; `mining_suministro` es otra tabla) | "ítems ECO-2" |
+| Explorador y tarjeta de CWP | "HH planner" sobre las HH del programa P333 — y el planner es otra cifra (486.978 vs 530.652) que la propia ficha muestra al lado | "HH programa" |
+| Explorador | "MM CLP" (suma de `costo_oferta_clp`) junto a un Panel que llama "Valor Contrato" a otra cifra | "MM CLP oferta" |
+| Conciliación | `CONCILIACION` sin tilde, con la pestaña diciendo `CONCILIACIÓN` | con tilde |
+
+**El banco divergía entre la Sala y la Mesa**: 77.536 HH contra 77.539 sobre el mismo CWP.
+`cwp-banco.ts` redondeaba **cada una** de las 89 líneas y sumaba los redondeos; la vista
+`v_cwp_banco` suma y redondea una vez (`round(sum(hh))`). Los totales se acumulan ahora sin
+redondear y se redondean al final, como la vista — las líneas se siguen mostrando redondeadas.
+Es exactamente la divergencia que este mismo repo advertía en `CLAUDE.md`.
+
+**La máquina de estados del IWP estaba copiada en tres lugares más** (`planificacion`,
+`CwpGantt`, `ficha/types`) y a las tres copias les faltaban `LIBERADO` y `CERRADO`. El efecto:
+un paquete entregado a terreno se pintaba **gris como "Planificado"** en el Gantt —
+justo lo que el Gantt existe para distinguir— y se imprimía como el código crudo `LIBERADO`
+en la ficha que se le entrega al mandante. `CwpGantt` además pintaba de rojo el "Listo"
+cuando el rojo es el "Liberado" en el resto de la plataforma. Las tres leen ahora
+`lib/iwp-estado`, que ya era la fuente única declarada: **la regla estaba escrita, pero no
+cableada.**
