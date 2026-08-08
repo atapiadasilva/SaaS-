@@ -434,3 +434,62 @@ si es marzo o mayo.
 `lib/formato` fija de paso **qué se muestra cuando no hay dato**: había veinte copias del mismo
 `toLocaleString('es-CL')`, unas devolviendo `—` y otras dejando la celda vacía para el mismo
 caso, así que "sin dato" se veía distinto en cada tabla.
+
+### Sexta ronda — el gate de ingeniería estaba roto por el idioma
+
+**El hallazgo más grave de toda la auditoría.** La Sala de Apertura declaraba en pantalla
+*«Ningún documento está emitido para construcción»* teniendo **350 planos IFC vinculados a
+CWP** en la propia base. La vista `v_cwp_ingenieria` clasificaba el estado del ciclo de vida
+buscando el texto **en inglés** (`'%for construction%'`, `'%for review%'`, `'%internal%'`), y
+Aconex lo entrega en español (`"Emitido para construcción"`). `n_ifc` daba **0 siempre**.
+
+Como el IFC es el gate de liberación del IWP por regla COAA, **la plataforma bloqueaba de
+hecho la apertura del proyecto entero por una condición que nunca se podía cumplir**. Con la
+vista corregida (migración `v_cwp_ingenieria_estados_en_espanol`) aparecen 350 documentos IFC
+en 28 CWP y siete paquetes pasan de "1 aviso" a **"Listo"** en el ranking.
+
+La vista busca ahora **raíces** (`'construc'`, `'informaci'`) en vez de frases completas: cubre
+el español con y sin acento y el inglés a la vez, sin depender de la extensión `unaccent`.
+
+`src/lib/documentos.ts` deja en un solo lugar cómo se lee el estado de un documento y explica
+la distinción que causaba el enredo, porque es fácil de confundir y cara:
+
+| Campo | Qué es | Quién lo mira |
+|---|---|---|
+| `estado_aconex` | estado de **revisión** (Aprobado / Rechazado / En revisión) | Calidad y los demás departamentos |
+| `estado_ciclo_vida` | el «Estatus» de Aconex: *Emitido para construcción* = **IFC** | el gate de liberación del IWP |
+
+**Un documento aprobado no es un documento liberado para construir**: aprobar un procedimiento
+no es emitir un plano. `mining-depto` y `mining-kpi` tenían esa lógica duplicada.
+
+**Restricciones.** El 3WLA guardaba las suyas con vocabulario propio ("Seguridad",
+"Liberación de área") y colores propios — y el morado que allí era "Suministro" es "Permiso"
+en la Mesa, o sea **el mismo color significaba cosas distintas**. Trisemanal normaliza ahora al
+catálogo COAA con `normalizarTipo()` y deja el texto original en el tooltip.
+
+**"Abiertas" quería decir dos cosas.** El Panel contaba como abiertas sólo las accionables
+(sin las `INFO`) y los departamentos todas las no cerradas, ambos bajo la misma palabra. El
+criterio vive ahora en `lib/consideraciones` con nombre propio (`estaAbierta`, `esAccionable`,
+`esBloqueante`) y el Panel dice en el título lo que lista.
+
+---
+
+## Dónde quedó la verdad: los ocho módulos que mandan
+
+Las seis rondas encontraron siempre la misma falla — reglas declaradas como fuente única que
+cada pantalla reimplementaba por su cuenta, con copias incompletas o desfasadas. **La regla
+estaba escrita; faltaba el cable.** Al cerrar la auditoría, esto es lo que manda y quién lo usa:
+
+| Módulo | Qué fija | Archivos |
+|---|---|---|
+| `lib/iwp-estado` | estados del IWP, sus nombres y colores | 14 |
+| `lib/formato` | fechas, números, moneda, "sin dato" | 6 |
+| `lib/disciplinas` | color por disciplina | 5 |
+| `lib/constraints` | catálogo COAA de restricciones y su dueño | 4 |
+| `lib/consideraciones` | deduplicación y qué es "abierta" | 3 |
+| `lib/cwp-banco` | el banco de cantidades y su saldo | 3 |
+| `lib/awp-codigo` | codificación del CWP y placeholders | 3 |
+| `lib/documentos` | estado de revisión vs. ciclo de vida (IFC) | 2 |
+
+Antes de agregar una constante, un color o un formateador a una pantalla: **está en uno de
+estos ocho**.
