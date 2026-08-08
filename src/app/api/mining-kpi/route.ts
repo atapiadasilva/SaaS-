@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { esAprobado, esRechazado, esEnRevision } from '@/lib/documentos';
 import { fetchAllPaged } from '@/lib/supabase/paginado';
-import { dedupeConsideraciones } from '@/lib/consideraciones';
+import { dedupeConsideraciones, estaAbierta, esAccionable, esBloqueante } from '@/lib/consideraciones';
 
 // Panel KPI general del proyecto: consolida contrato, programa, conciliación,
 // avance físico/financiero, dotación, consideraciones, entregables clave y compromisos.
@@ -102,13 +102,15 @@ export async function GET(req: NextRequest) {
   const deptos: Record<string, { abiertas: number; bloqueantes: number }> = {};
   for (const c of cons as any[]) {
     const d = deptos[c.depto] ?? { abiertas: 0, bloqueantes: 0 };
-    if (c.estado !== 'CERRADA') {
+    if (estaAbierta(c)) {
       d.abiertas++;
-      if (c.severidad === 'BLOQUEANTE') d.bloqueantes++;
+      if (esBloqueante(c)) d.bloqueantes++;
     }
     deptos[c.depto] = d;
   }
-  const abiertas = cons.filter((c: any) => c.estado !== 'CERRADA' && c.severidad !== 'INFO');
+  // `consideraciones_abiertas` son en realidad las ACCIONABLES (sin las informativas): el
+  // Panel las lista para actuar sobre ellas. El nombre se conserva por compatibilidad.
+  const abiertas = cons.filter(esAccionable);
 
   // ── Documental ──
   const documental = {

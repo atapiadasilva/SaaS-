@@ -19,6 +19,10 @@ export interface ConsideracionBase {
   cwp_id?: string | null;
   iwp_id?: string | null;
   responsable?: string | null;
+  /** ABIERTA · EN_CURSO · CERRADA */
+  estado?: string | null;
+  /** BLOQUEANTE · ADVERTENCIA · INFO */
+  severidad?: string | null;
   [k: string]: unknown;
 }
 
@@ -33,6 +37,27 @@ const llave = (c: ConsideracionBase) => `${norm(c.titulo)}|${norm(c.tipo)}`;
  *  llega perdería el chip del documento que sí trae una de ellas. */
 function riqueza(c: ConsideracionBase): number {
   return [c.n_cmdic, c.cwp_id, c.iwp_id, c.responsable, c.detalle].filter(v => !!String(v ?? '').trim()).length;
+}
+
+// ── Qué se considera "abierto" ────────────────────────────────────────────────
+//
+// El Panel contaba como abiertas sólo las que exigen acción (excluía las `INFO`) y los
+// dashboards de departamento contaban todas las no cerradas, las dos bajo la etiqueta
+// "abiertas". Dos criterios con el mismo nombre en pantallas contiguas. Ahora cada uno
+// tiene su nombre y ambos salen de aquí.
+
+/** Cualquiera que no esté cerrada, incluidas las informativas. */
+export function estaAbierta(c: { estado?: string | null }): boolean {
+  return c.estado !== 'CERRADA';
+}
+
+/** Abierta y con severidad que exige acción — lo que se lleva a una reunión. */
+export function esAccionable(c: { estado?: string | null; severidad?: string | null }): boolean {
+  return estaAbierta(c) && c.severidad !== 'INFO';
+}
+
+export function esBloqueante(c: { estado?: string | null; severidad?: string | null }): boolean {
+  return estaAbierta(c) && c.severidad === 'BLOQUEANTE';
 }
 
 export function dedupeConsideraciones<T extends ConsideracionBase>(filas: T[]): T[] {

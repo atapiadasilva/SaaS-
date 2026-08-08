@@ -260,7 +260,10 @@ export default function PanelPage() {
       </div>
 
       {/* ── FILA 3: entregables clave ── */}
-      <SecTitle icon={FileText}>Observaciones abiertas{entregables.length ? ` (${entregables.length})` : ''}</SecTitle>
+      {/* "Que exigen acción": esta lista deja fuera las informativas, mientras los dashboards
+          de departamento cuentan todas las abiertas. Las dos cifras son correctas y ahora la
+          etiqueta dice cuál es cuál, en vez de llamarse igual y no calzar. */}
+      <SecTitle icon={FileText}>Observaciones abiertas que exigen acción{entregables.length ? ` (${entregables.length})` : ''}</SecTitle>
       <Card style={{ padding: 0, overflow: 'hidden' }}>
         {!entregables.length && (
           <div style={{ padding: '14px 16px', fontSize: 11.5, color: '#9E9E9E' }}>

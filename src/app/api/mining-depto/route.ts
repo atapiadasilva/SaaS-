@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { esAprobado, esRechazado, esEnRevision } from '@/lib/documentos';
 import { listLocalDocNums } from '@/lib/aconex-local';
-import { dedupeConsideraciones } from '@/lib/consideraciones';
+import { dedupeConsideraciones, estaAbierta, esAccionable, esBloqueante } from '@/lib/consideraciones';
 
 // Dashboard por departamento (Calidad, Medio Ambiente, SSO, Equipos, RRHH).
 // GET ?project_id=&depto= → { kpis, docs, consideraciones }
@@ -63,8 +63,9 @@ export async function GET(req: NextRequest) {
     aprobados: docs.filter((d: any) => esAprobado(d.estado_aconex)).length,
     rechazados: docs.filter((d: any) => esRechazado(d.estado_aconex)).length,
     en_revision: docs.filter((d: any) => esEnRevision(d.estado_aconex)).length,
-    consid_abiertas: cons.filter((c: any) => c.estado !== 'CERRADA').length,
-    bloqueantes: cons.filter((c: any) => c.estado !== 'CERRADA' && c.severidad === 'BLOQUEANTE').length,
+    consid_abiertas: cons.filter(estaAbierta).length,
+    consid_accionables: cons.filter(esAccionable).length,
+    bloqueantes: cons.filter(esBloqueante).length,
     ultima_actualizacion: cons[0]?.fecha_reporte ?? null,
   };
 
