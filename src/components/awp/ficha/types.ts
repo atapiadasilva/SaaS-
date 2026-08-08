@@ -1,4 +1,5 @@
 // Tipos y utilidades compartidas por el editor de ficha CWP y la vista de impresión.
+import { metaDe } from '@/lib/iwp-estado';
 
 export type Orientacion = 'vertical' | 'horizontal';
 
@@ -45,10 +46,10 @@ export const f1 = (v: any) => v == null ? '—' : Number(v).toLocaleString('es-C
 export const fd = (v: any) => v ? String(v).slice(0, 10) : '—';
 export const fmm = (v: any) => !v ? '—' : '$' + Math.round(Number(v) / 1e6).toLocaleString('es-CL') + ' MM';
 
-export const STATUS_LABEL: Record<string, string> = {
-  PLANIFICADO: 'Planificado', LISTO_PARA_TRABAJO: 'Listo', EN_EJECUCION: 'En ejecución',
-  COMPLETADO: 'Completado', HOLD: 'En espera',
-};
+// La ficha va firmada y se le entrega al mandante: el nombre del estado tiene que ser el
+// mismo que muestra la plataforma. Antes era una copia a la que le faltaban LIBERADO y
+// CERRADO, así que un paquete liberado se imprimía con su código crudo `LIBERADO`.
+export const statusLabel = (s: string | null | undefined) => metaDe(s ?? '').label;
 
 // Composición por defecto cuando el CWP aún no tiene ficha guardada.
 export function bloquesPorDefecto(): Bloque[] {

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Calendar, Users, AlertTriangle, ChevronDown, ChevronRight, Clock, Layers } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { metaDe, ESTADO_META, ESTADOS_IWP } from '@/lib/iwp-estado';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface MTask {
@@ -50,13 +51,12 @@ const fn    = (v: number) => Math.round(v).toLocaleString('es-CL');
 const fd    = (s: string | null) =>
   s ? s.slice(8,10)+'-'+MESES[+s.slice(5,7)-1]+'-'+s.slice(2,4) : '—';
 
-const IWP_STATUS_COLOR: Record<string, { bar: string; label: string }> = {
-  PLANIFICADO:        { bar: 'bg-slate-300',   label: 'Planificado' },
-  LISTO_PARA_TRABAJO: { bar: 'bg-[#FF0000]',   label: 'Listo' },
-  EN_EJECUCION:       { bar: 'bg-amber-500',   label: 'En ejecución' },
-  COMPLETADO:         { bar: 'bg-emerald-500', label: 'Completado' },
-  HOLD:               { bar: 'bg-slate-500',   label: 'En espera' },
-};
+// El vocabulario y los colores de estado salen de `lib/iwp-estado` — la fuente única.
+// Este componente tenía su propio catálogo y le faltaban LIBERADO y CERRADO: un paquete
+// entregado a terreno caía al fallback y se pintaba gris como "Planificado", justo el
+// estado que el Gantt existe para distinguir. Además usaba rojo para "Listo" cuando el
+// resto de la plataforma pinta rojo el "Liberado".
+const metaGantt = (status: string | null | undefined) => metaDe(status ?? '');
 
 function addDays(dateMs: number, days: number) { return dateMs + days * 86_400_000; }
 
@@ -209,14 +209,14 @@ function ActivityBar({
         if (!iwp.fecha_inicio_plan || !iwp.fecha_fin_plan) return null;
         const iLeft = ((toMs(iwp.fecha_inicio_plan) - timelineStartMs) / totalMs) * 100;
         const iW    = Math.max(1, ((toMs(iwp.fecha_fin_plan) - toMs(iwp.fecha_inicio_plan)) / totalMs) * 100);
-        const sc    = IWP_STATUS_COLOR[iwp.status?.toUpperCase()] ?? IWP_STATUS_COLOR.PLANIFICADO;
+        const sc    = metaGantt(iwp.status);
         return (
           <IwpBar
             key={iwp.iwp_id}
             iwp={iwp}
             leftPct={iLeft}
             widthPct={iW}
-            colorCls={sc.bar}
+            colorCls={sc.color}
             minWidthPx={minWidthPx}
           />
         );
@@ -238,7 +238,7 @@ function IwpBar({
   minWidthPx: number;
 }) {
   const [tip, setTip] = useState<TooltipInfo | null>(null);
-  const sc = IWP_STATUS_COLOR[iwp.status?.toUpperCase()] ?? IWP_STATUS_COLOR.PLANIFICADO;
+  const sc = metaGantt(iwp.status);
   const blocked = iwp.constraints.total > 0 && iwp.constraints.despejados < iwp.constraints.total;
 
   return (
@@ -260,8 +260,8 @@ function IwpBar({
       </div>
       <div className="flex-1 relative flex items-center">
         <div
-          className={cn('absolute inset-y-[1.5px] rounded cursor-pointer opacity-80 hover:opacity-100 transition', colorCls)}
-          style={{ left: `${leftPct}%`, width: `max(${minWidthPx * 0.6}px, ${widthPct}%)` }}
+          className="absolute inset-y-[1.5px] rounded cursor-pointer opacity-80 hover:opacity-100 transition"
+          style={{ left: `${leftPct}%`, width: `max(${minWidthPx * 0.6}px, ${widthPct}%)`, backgroundColor: colorCls }}
           onMouseMove={e => setTip({
             x: e.clientX, y: e.clientY,
             title: `IWP: ${iwp.iwp_id}`,
@@ -406,10 +406,10 @@ export function CwpGantt({ cwps, projectId }: { cwps: MCwp[]; projectId: string 
       {totalIwps > 0 && (
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-[10px] text-slate-400 uppercase tracking-wider">IWP Status:</span>
-          {Object.entries(IWP_STATUS_COLOR).map(([k, v]) => (
+          {ESTADOS_IWP.map(k => (
             <span key={k} className="flex items-center gap-1 text-[10px] text-slate-500">
-              <span className={cn('w-2.5 h-2.5 rounded-sm', v.bar)} />
-              {v.label}
+              <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: ESTADO_META[k].color }} />
+              {ESTADO_META[k].label}
             </span>
           ))}
         </div>

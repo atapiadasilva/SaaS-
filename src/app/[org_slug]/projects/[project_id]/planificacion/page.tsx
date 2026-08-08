@@ -7,6 +7,7 @@ import {
   Maximize2, Minimize2, TrendingUp, Diamond, Flame, Layers,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { metaDe } from '@/lib/iwp-estado';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 interface PAct {
@@ -85,14 +86,11 @@ function discColor(txt: string | null | undefined): string {
   return '#757575';
 }
 
-const IWP_BAR: Record<string, string> = {
-  PLANIFICADO: '#BDBDBD', LISTO_PARA_TRABAJO: '#FF0000',
-  EN_EJECUCION: '#F59E0B', COMPLETADO: '#16A34A', HOLD: '#64748B',
-};
-const IWP_LABEL: Record<string, string> = {
-  PLANIFICADO: 'Planificado', LISTO_PARA_TRABAJO: 'Listo para trabajo',
-  EN_EJECUCION: 'En ejecución', COMPLETADO: 'Completado', HOLD: 'En espera',
-};
+// Color y nombre de cada estado salen de `lib/iwp-estado`, la fuente única. Esta pantalla
+// tenía su propia copia: le faltaban LIBERADO y CERRADO (se pintaban como "Planificado") y
+// llamaba "Listo para trabajo" a lo que el resto de la plataforma llama "Listo".
+const IWP_BAR   = (s: string) => metaDe(s).color;
+const IWP_LABEL = (s: string) => metaDe(s).label;
 
 // ─── Nodo del árbol WBS ──────────────────────────────────────────────────────
 interface WbsNode { label: string; children: Map<string, WbsNode>; acts: PAct[]; }
@@ -690,14 +688,14 @@ function GanttRow({ row, x, pxd, collapsed, onToggle, hhAsignada, onOpenIwp, onA
 
   if (row.kind === 'iwp') {
     const i = row.iwp;
-    const color = IWP_BAR[i.status] ?? '#BDBDBD';
+    const color = IWP_BAR(i.status);
     const pend = i.constraints.total - i.constraints.despejados;
     left = (
       <div className="flex items-center gap-1.5 min-w-0 flex-1 pl-3">
         <Layers className="w-2.5 h-2.5 text-[#FF0000] shrink-0" />
         <span className="font-mono text-[9.5px] font-bold text-[#1A1A1A] truncate">{i.iwp_id}</span>
         <span className="text-[8.5px] shrink-0 px-1.5 rounded-full font-bold" style={{ background: color + '22', color }}>
-          {IWP_LABEL[i.status] ?? i.status}
+          {IWP_LABEL(i.status)}
         </span>
         {pend > 0 && <span className="text-[8.5px] text-[#A00000] font-bold shrink-0">⚠ {pend}</span>}
       </div>

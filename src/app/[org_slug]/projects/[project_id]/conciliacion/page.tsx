@@ -120,7 +120,7 @@ export default function ConciliacionPage() {
     <div style={{ maxWidth: '1600px', margin: '0 auto' }}>
       <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontWeight: 'bold', fontSize: '22px', color: '#1A1A1A' }}>CONCILIACION <span style={{ color: '#FF0000' }}>DE DATOS</span></h1>
+          <h1 style={{ fontWeight: 'bold', fontSize: '22px', color: '#1A1A1A' }}>CONCILIACIÓN <span style={{ color: '#FF0000' }}>DE DATOS</span></h1>
           <p style={{ fontSize: '11.5px', color: '#757575' }}>ECO-2, Bases de M&P, Programa, Aconex y tu Diccionario AWP (7 CWA + 69 CWP). {done > 0 && <span style={{ marginLeft: '12px', color: '#166534', fontWeight: 'bold' }}>✓ {done} matches</span>}</p>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>

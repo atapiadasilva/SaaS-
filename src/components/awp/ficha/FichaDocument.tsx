@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { type Bloque, type FichaData, type Orientacion, fn, f1, fd, fmm, STATUS_LABEL } from './types';
+import { type Bloque, type FichaData, type Orientacion, fn, f1, fd, fmm, statusLabel } from './types';
 
 // Render puro del documento de ficha CWP. Lo usan tanto el editor (preview en vivo) como la
 // página de impresión, así que lo que se ve es exactamente lo que sale en PDF (WYSIWYG).
@@ -178,7 +178,7 @@ function TablaIwp({ d, titulo }: { d: FichaData; titulo?: string }) {
             <tr key={k}>
               <td className="mono">{i.iwp_id}</td>
               <td>{i.descripcion ?? ''}</td>
-              <td><span className="chip">{STATUS_LABEL[i.status ?? ''] ?? i.status ?? '—'}</span></td>
+              <td><span className="chip">{statusLabel(i.status)}</span></td>
               <td className="nw">{fd(i.ini)} → {fd(i.fin)}</td>
               <td className="num">{fn(i.hh)}</td>
               <td className="num"><b>{i.avance}%</b></td>

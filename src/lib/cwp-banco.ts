@@ -101,11 +101,24 @@ export async function cargarBanco(sb: any, projectId: string, cwpId: string): Pr
     }
   }
 
+  // Los totales se acumulan SIN redondear y se redondean una sola vez al final, igual que
+  // `v_cwp_banco` (`round(sum(hh))`). Sumar líneas ya redondeadas desviaba el total: el CWP
+  // 312101.D001 tiene 89 partidas y la Mesa mostraba 77.539 HH contra 77.536 de la Sala de
+  // Apertura, sobre el mismo paquete. Las líneas se siguen mostrando redondeadas —lo que
+  // cambia es que el total ya no es la suma de esos redondeos.
+  const exacto = { hh_banco: 0, hh_asignadas: 0, hh_saldo: 0, monto_clp: 0 };
+
   const banco: FilaBanco[] = [...agg.values()]
     .map(f => {
       const a = asignado.get(f.clave) ?? { cantidad: 0, hh: 0 };
       // El rendimiento declarado manda; si falta, se deduce de las propias cantidades.
       const hhUnidad = f.hh_unidad ?? (f.cantidad_total > 0 && f.hh_total > 0 ? f.hh_total / f.cantidad_total : null);
+
+      exacto.hh_banco     += f.hh_total;
+      exacto.hh_asignadas += a.hh;
+      exacto.hh_saldo     += Math.max(0, f.hh_total - a.hh);
+      exacto.monto_clp    += f.cantidad_total * n(f.pu_clp);
+
       return {
         ...f,
         cantidad_total: r3(f.cantidad_total),
@@ -119,26 +132,18 @@ export async function cargarBanco(sb: any, projectId: string, cwpId: string): Pr
     })
     .sort((a, b) => b.hh_saldo - a.hh_saldo || b.hh_total - a.hh_total);
 
-  const t = banco.reduce(
-    (acc, b) => ({
-      hh_banco: acc.hh_banco + b.hh_total,
-      hh_asignadas: acc.hh_asignadas + b.hh_asignadas,
-      hh_saldo: acc.hh_saldo + b.hh_saldo,
-      monto_clp: acc.monto_clp + b.cantidad_total * n(b.pu_clp),
-    }),
-    { hh_banco: 0, hh_asignadas: 0, hh_saldo: 0, monto_clp: 0 },
-  );
-
   return {
     fuente: 'itemizado',
     banco,
     iwpIds,
     totales: {
-      ...t,
-      monto_clp: Math.round(t.monto_clp),
+      hh_banco: Math.round(exacto.hh_banco),
+      hh_asignadas: Math.round(exacto.hh_asignadas),
+      hh_saldo: Math.round(exacto.hh_saldo),
+      monto_clp: Math.round(exacto.monto_clp),
       n_partidas: banco.length,
       n_partidas_sin_rendimiento: banco.filter(b => !b.hh_unidad && b.cantidad_saldo > 0).length,
-      pct_aperturado: t.hh_banco > 0 ? Math.round((t.hh_asignadas / t.hh_banco) * 1000) / 10 : 0,
+      pct_aperturado: exacto.hh_banco > 0 ? Math.round((exacto.hh_asignadas / exacto.hh_banco) * 1000) / 10 : 0,
     },
   };
 }

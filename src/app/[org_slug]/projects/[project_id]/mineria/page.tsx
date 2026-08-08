@@ -314,10 +314,14 @@ export default function MineriaPage() {
           {/* Los cajones "por asignar" no son paquetes: contarlos daba 74 aquí contra 69
               en la Sala de Apertura y en Conciliación, sobre el mismo proyecto. */}
           <Kpi value={fn(data.cwp.filter((c: any) => !esCwpPlaceholder(c.cwp)).length)} label="CWP" />
-          <Kpi value={fn(data.kpi.part)} label="suministros" />
+          {/* Las etiquetas dicen de dónde sale cada número, porque en este proyecto conviven
+              tres fuentes de HH y dos de plata. `part` son líneas del itemizado (ECO-2), no
+              suministros — esos son `mining_suministro`, otra tabla. `hh` es del programa
+              P333, no el `hh_planner` del CWP: son cifras distintas y se llamaban igual. */}
+          <Kpi value={fn(data.kpi.part)} label="ítems ECO-2" />
           <Kpi value={fn(data.kpi.plan)} label="planos" />
-          <Kpi value={fn(data.kpi.costo / 1e6)} label="MM CLP" />
-          <Kpi value={fn(data.kpi.hh)} label="HH planner" />
+          <Kpi value={fn(data.kpi.costo / 1e6)} label="MM CLP oferta" />
+          <Kpi value={fn(data.kpi.hh)} label="HH programa" />
         </div>
         <Link href={`/${org_slug}/projects/${project_id}/mineria/elementos`} className={topLink}>
           <ListChecks className="w-3.5 h-3.5 text-[#FF0000]" /> Elementos
@@ -646,9 +650,9 @@ function DetailPanel({ c, cwaName, tab, setTab, projectId, orgSlug, onIsolateMon
         </div>
         <div className="flex gap-6 mt-3 flex-wrap">
           <DK label="Costo oferta" value={fmm(c.costo)} color="text-green-700" />
-          <DK label="Suministros" value={String(c.items.length)} />
+          <DK label="Ítems ECO-2" value={String(c.items.length)} />
           <DK label="Planos" value={String(c.planos.length)} />
-          <DK label="HH planner" value={c.prog ? fn(c.prog.hh) : '—'} color="text-orange-600" />
+          <DK label="HH programa" value={c.prog ? fn(c.prog.hh) : '—'} color="text-orange-600" />
         </div>
       </div>
       <div className="flex gap-1 px-6 bg-white border-b-2 border-slate-200 flex-wrap sticky top-[97px] z-10">
