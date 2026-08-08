@@ -55,6 +55,21 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* La selección de texto también es parte de la marca */
+::selection {
+  background: rgba(255, 0, 0, 0.12);
+  color: var(--foreground);
+}
+
+/* Navegación por teclado visible, sin ensuciar el uso con mouse */
+:focus-visible {
+  outline: 2px solid rgba(255, 0, 0, 0.55);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 /* ── App instalada en iOS ────────────────────────────────────────

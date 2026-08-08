@@ -46,6 +46,7 @@ export default async function OrgRootPage({
       .from('projects')
       .select('id')
       .eq('organization_id', org.id)
+      .order('created_at', { ascending: true })
       .limit(1)
       .single() as { data: { id: string } | null };
 

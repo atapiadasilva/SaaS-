@@ -11,7 +11,7 @@ import IwpManager, { type IwpViewerBridge } from '@/components/awp/IwpManager';
 import IwpSkyline from '@/components/awp/IwpSkyline';
 import { HiloWave, HiloTrace } from '@/components/brand/Hilo';
 import { CwpGantt } from '@/components/awp/CwpGantt';
-import { Search, Loader2, Package, ListChecks, Layers, FileText, Table2, Box, X, ChevronRight, ChevronLeft, CheckSquare, Square, Eye, Ghost, ListTree, Calendar, Columns3, Crosshair, Settings, ChevronDown, PenLine, ClipboardCheck } from 'lucide-react';
+import { Search, Loader2, Package, ListChecks, Layers, FileText, Box, X, ChevronRight, ChevronLeft, CheckSquare, Square, Eye, Ghost, ListTree, Calendar, Columns3, Crosshair, Settings, ChevronDown, PenLine, ClipboardCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const ForgeViewer = dynamic(() => import('@/components/awp/ForgeViewer'), { ssr: false });
@@ -333,9 +333,9 @@ export default function MineriaPage() {
         <Link href={`/${org_slug}/projects/${project_id}/mineria/documentos`} className={topLink}>
           <FileText className="w-3.5 h-3.5 text-[#FF0000]" /> Documentos
         </Link>
-        <Link href={`/${org_slug}/projects/${project_id}/mineria/explorador`} className={topLink}>
-          <Table2 className="w-3.5 h-3.5 text-[#FF0000]" /> Explorador
-        </Link>
+        {/* El explorador de servicios (mineria/explorador) sigue accesible por URL, pero
+            fuera de la barra: es un experimento a medio construir y el botón confundía
+            con el título de esta misma página. */}
       </div>
 
       <div className="flex-1 flex overflow-hidden">

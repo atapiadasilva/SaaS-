@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
+import Link from "next/link";
+import { Settings2 } from "lucide-react";
 import { ProjectNavBar } from "@/components/layout/ProjectNavBar";
 import { HiloLogo, HiloWave } from "@/components/brand/Hilo";
 import { resolverModulos } from "@/lib/modules";
@@ -32,12 +34,19 @@ export default async function ProjectLayout({
 
   return (
     <div className="h-screen bg-white flex flex-col overflow-hidden">
-      <header className="relative bg-white border-b-2 border-[#FF0000] sticky top-0 z-10 px-6 py-2.5 flex items-center gap-4 overflow-hidden">
-        {/* Hilo decorativo de fondo */}
-        <HiloWave className="absolute right-0 top-0 h-full w-[420px]" opacity={0.14} />
+      <header className="relative bg-white border-b-2 border-[#FF0000] sticky top-0 z-10 px-6 py-2.5 flex items-center gap-4">
+        {/* Hilo decorativo de fondo. El recorte va en este contenedor y no en el header,
+            para que el desplegable de Departamentos pueda salirse de la barra. */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          <HiloWave className="absolute right-0 top-0 h-full w-[420px]" opacity={0.14} />
+        </div>
 
-        {/* Logo Hilo Digital */}
-        <div className="flex items-center gap-2.5 shrink-0 relative">
+        {/* Logo Hilo Digital — clic vuelve a la organización */}
+        <Link
+          href={`/${org_slug}/dashboard`}
+          title="Volver a la organización"
+          className="flex items-center gap-2.5 shrink-0 relative hover:opacity-80 transition"
+        >
           <HiloLogo size={34} />
           <div>
             <div className="font-display text-[13px] font-bold text-[#1A1A1A] leading-none">
@@ -45,7 +54,7 @@ export default async function ProjectLayout({
             </div>
             <div className="text-[8px] text-[#757575] leading-none tracking-[0.18em] uppercase mt-0.5">{project.name}</div>
           </div>
-        </div>
+        </Link>
 
         {/* Nav centrado */}
         <div className="flex-1 flex justify-center relative">
@@ -56,11 +65,18 @@ export default async function ProjectLayout({
           />
         </div>
 
-        {/* Stage badge */}
-        <div className="shrink-0 relative">
+        {/* Stage + Setup */}
+        <div className="shrink-0 relative flex items-center gap-2">
           <span className="px-2.5 py-1 bg-white border border-[#FF0000]/40 text-[#A00000] text-[9px] font-black rounded-full uppercase tracking-wider">
             {project.stage}
           </span>
+          <Link
+            href={`/${org_slug}/projects/${project_id}/setup`}
+            title="Setup del proyecto"
+            className="p-2 rounded-full text-[#757575] hover:text-[#A00000] hover:bg-red-50 transition"
+          >
+            <Settings2 className="w-4 h-4" />
+          </Link>
         </div>
       </header>
 

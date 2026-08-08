@@ -1,9 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
-import { PremiumSidebar } from "@/components/layout/PremiumSidebar";
-import { previewOrgRole } from "@/lib/rolePreview";
-import { getPreviewRole } from "@/lib/rolePreviewServer";
 
+// Guard común de todo /[org_slug]: sesión y membresía. Sin chrome — la barra
+// lateral de la organización vive en el route group (org), así las pantallas de
+// proyecto quedan a pantalla completa (el visor 3D y la Mesa usan cada pixel).
 export default async function OrgLayout({
   children,
   params,
@@ -19,9 +19,9 @@ export default async function OrgLayout({
 
   const { data: org } = await (supabase as any)
     .from("organizations")
-    .select("id, logo_url, name")
+    .select("id")
     .eq("slug", org_slug)
-    .single() as { data: { id: string; logo_url: string | null; name: string } | null };
+    .single() as { data: { id: string } | null };
 
   if (!org) redirect("/organizaciones");
 
@@ -34,32 +34,5 @@ export default async function OrgLayout({
 
   if (!orgMember) redirect("/organizaciones");
 
-  const realIsOwner = orgMember.role === 'owner';
-
-  // Preview solo disponible para el owner real
-  const preview = realIsOwner ? await getPreviewRole() : null;
-
-  // Rol efectivo para decidir el layout
-  const effectiveOrgRole = preview ? previewOrgRole(preview) : orgMember.role;
-  const isOrgAdmin = effectiveOrgRole === 'owner' || effectiveOrgRole === 'admin';
-
-  return (
-    <>
-      {isOrgAdmin ? (
-        <div className="flex min-h-screen w-full bg-background font-sans">
-          <PremiumSidebar
-            orgSlug={org_slug}
-            orgLogoUrl={org.logo_url}
-            orgName={org.name}
-            orgRole={effectiveOrgRole}
-          />
-          <main className="flex-1 overflow-auto">{children}</main>
-        </div>
-      ) : (
-        <div className="min-h-screen w-full bg-background font-sans">
-          {children}
-        </div>
-      )}
-    </>
-  );
+  return <div className="min-h-screen w-full bg-background font-sans">{children}</div>;
 }
