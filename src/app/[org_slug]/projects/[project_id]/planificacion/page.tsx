@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { metaDe } from '@/lib/iwp-estado';
+import { colorDesdeNombre } from '@/lib/disciplinas';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 interface PAct {
@@ -70,20 +71,11 @@ function discOf(txt: string | null | undefined): string {
 }
 const H_GROUP = 26, H_TASK = 21, H_IWP = 19, H_CWP = 26;
 
-// Color por disciplina detectada en el WBS / nombre de disciplina del CWP
-const DISC_COLORS: [string, string][] = [
-  ['OBRAS CIVILES', '#8D6E63'], ['CIVIL', '#8D6E63'],
-  ['ESTRUCTURA', '#546E7A'], ['MOV. TIERRA', '#795548'],
-  ['MECÁNICA', '#E65100'], ['MECANICA', '#E65100'],
-  ['PIPING', '#00838F'], ['CAÑERÍA', '#00838F'],
-  ['ELECTRICIDAD', '#6A1B9A'], ['ELÉCTRIC', '#6A1B9A'],
-  ['INSTRUMENTACIÓN', '#00695C'], ['INSTRUMENTACION', '#00695C'],
-  ['ARQUITECTURA', '#AD1457'],
-];
+// El color por disciplina sale de lib/disciplinas (por código), no de una tabla propia:
+// el WBS de P6 solo trae el texto, así que se traduce a código y se pinta con el mismo
+// color que el explorador de Minería y la curva de Recursos.
 function discColor(txt: string | null | undefined): string {
-  const t = (txt ?? '').toUpperCase();
-  for (const [k, c] of DISC_COLORS) if (t.includes(k)) return c;
-  return '#757575';
+  return colorDesdeNombre(txt);
 }
 
 // Color y nombre de cada estado salen de `lib/iwp-estado`, la fuente única. Esta pantalla

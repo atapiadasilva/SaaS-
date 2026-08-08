@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { Loader2, BarChart3, Clock, Users, Layers, TrendingUp, Info } from 'lucide-react';
+import { colorDisciplina } from '@/lib/disciplinas';
 
 interface Disc {
   disciplina_cod: string; disciplina: string; grupo: string;
@@ -20,13 +21,9 @@ const fn = (v: any) => v == null ? '—' : Math.round(Number(v)).toLocaleString(
 const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 const mesLbl = (m: string) => { const [y, mo] = m.split('-'); return MESES[+mo - 1] + " '" + y.slice(2); };
 
-// Paleta por disciplina (estable)
-const COLOR: Record<string, string> = {
-  D: '#1565C0', S: '#6A1B9A', M: '#E65100', C: '#2E7D32', EW: '#00838F', P: '#AD1457',
-  A: '#5E35B1', T: '#0891B2', MB: '#C9A100', E: '#00695C', F: '#8D6E63', J: '#546E7A',
-  X: '#B71C1C', ER: '#3949AB', 'N/A': '#9E9E9E',
-};
-const col = (c: string) => COLOR[c] ?? '#9E9E9E';
+// La paleta por disciplina vive en lib/disciplinas — la comparten el explorador de
+// Minería, el Gantt de Planificación y esta curva de dotación.
+const col = (c: string) => colorDisciplina(c);
 
 export default function RecursosPage() {
   const params = useParams();

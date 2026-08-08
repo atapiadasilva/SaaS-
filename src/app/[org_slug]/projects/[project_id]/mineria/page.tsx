@@ -695,8 +695,6 @@ function DK({ label, value, color }: { label: string; value: string; color?: str
   );
 }
 
-const PAL = ['#1565C0', '#00695C', '#E65100', '#6A1B9A', '#AD1457', '#5E35B1', '#2E7D32', '#8D6E63', '#C9A100', '#00838F'];
-
 interface CwpResumen {
   cwp: {
     fecha_ifc: string | null; status_cwp: string | null; suministro: string | null;

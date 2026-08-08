@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { colorDisciplina } from '@/lib/disciplinas';
 import { fetchAllPaged } from '@/lib/supabase/paginado';
 import { listLocalDocNums } from '@/lib/aconex-local';
 
@@ -69,14 +70,14 @@ export async function GET(req: NextRequest) {
   }
 
   // Disciplinas derivadas de los propios CWP (robusto: no depende de la tabla mining_disciplinas).
-  const PAL = ['#1565C0', '#1E88E5', '#78909C', '#6A1B9A', '#8D6E63', '#E65100', '#00695C', '#AD1457', '#F9A825', '#FB8C00', '#5E35B1', '#C9A100', '#E53935', '#283593', '#546E7A'];
+  // El color sale de `lib/disciplinas`, por CÓDIGO: antes se repartía una paleta por orden
+  // alfabético, así que Estructura era roja acá y morada en Recursos, y agregar una disciplina
+  // nueva recoloreaba todas las demás.
   const discNombre = new Map<string, string>();
   for (const d of (discRes.data ?? [])) discNombre.set(d.disciplina_cod, d.disciplina_nombre);
   const discCodes: string[] = [];
   for (const c of (cwpRes.data ?? [])) if (c.disciplina_cod && !discCodes.includes(c.disciplina_cod)) discCodes.push(c.disciplina_cod);
   discCodes.sort();
-  const discColor = new Map<string, string>();
-  discCodes.forEach((code, i) => discColor.set(code, PAL[i % PAL.length]));
 
   const cwp = (cwpRes.data ?? []).map((c: any) => {
     const items = itemsByCwp.get(c.cwp_id) ?? [];
@@ -94,7 +95,7 @@ export async function GET(req: NextRequest) {
     return {
       cwa: c.cwa_id, cv: c.cv_id, cvName: (cvRes.data ?? []).find((v: any) => v.cv_id === c.cv_id)?.cv_nombre ?? '',
       disc: c.disciplina_cod, dn: c.disciplina, cwp: c.cwp_id, ewp: c.ewp_id,
-      nombre: c.cwp_nombre, alcance: c.alcance, color: discColor.get(c.disciplina_cod) ?? '#1565C0',
+      nombre: c.cwp_nombre, alcance: c.alcance, color: colorDisciplina(c.disciplina_cod),
       costo: c.costo_oferta_clp ?? 0,
       items, planos, qty,
       prog: tasks.length ? { hh, acts: tasks.length, start, end, tasks } : null,
@@ -106,7 +107,7 @@ export async function GET(req: NextRequest) {
   const cwa = (cwaRes.data ?? []).map((c: any) => ({ cwa: c.cwa_id, name: c.cwa_nombre }));
   const disc = discCodes.map((code) => ({
     code, name: discNombre.get(code) ?? cwp.find((c: any) => c.disc === code)?.dn ?? code,
-    color: discColor.get(code) ?? '#1565C0',
+    color: colorDisciplina(code),
     n: cwp.filter((c: any) => c.disc === code).length,
   })).filter((d: any) => d.n > 0);
 
