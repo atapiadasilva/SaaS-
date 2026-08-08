@@ -12,8 +12,11 @@ import { esCwpPlaceholder } from '@/lib/awp-codigo';
 export type RelId = 'eco2_cwp' | 'item_bmp' | 'prog_cwp' | 'aconex_cwp';
 
 const REL_META: Record<RelId, { label: string; desc: string; origen: string; destino: string }> = {
-  eco2_cwp:   { label: 'ECO-2 → Diccionario AWP',  desc: 'Cada ítem de cobro del Itemizado debe estar asignado a su paquete constructivo exacto en el Diccionario AWP (69 CWP, 7 CWA).', origen: 'mining_itemizado.cwp_id', destino: 'mining_cwp.cwp_id' },
-  item_bmp:   { label: 'ECO-2 → Bases de M&P',      desc: 'Cada ítem del Itemizado debe calzar con una partida de las Bases de Medición y Pago (ponderaciones de avance físico y financiero).', origen: 'mining_itemizado.partida_mp', destino: 'mining_ponderaciones.partida' },
+  eco2_cwp:   { label: 'Itemizado → Diccionario AWP', desc: 'Cada ítem del itemizado debe estar asignado a su paquete constructivo exacto en el Diccionario AWP. Sin CWP, el ítem no se puede planificar ni aperturar.', origen: 'mining_itemizado.cwp_id', destino: 'mining_cwp.cwp_id' },
+  // REGLA DE ORO DEL COBRO: todo ítem del itemizado tiene que tener una forma de pago
+  // definida en las Bases de Medición y Pago. Un ítem sin partida de M&P se ejecuta en
+  // terreno pero no se puede medir ni facturar: es trabajo que se regala.
+  item_bmp:   { label: 'Itemizado → forma de pago', desc: 'REGLA DE ORO: cada ítem del itemizado debe tener su forma de pago en las Bases de Medición y Pago. Sin ella el ítem no se puede medir ni cobrar, por mucho que se ejecute en terreno.', origen: 'mining_itemizado.partida_mp', destino: 'mining_ponderaciones (Bases de M&P)' },
   prog_cwp:   { label: 'Programa → CWP',            desc: 'Cada actividad P333 vigente debe pertenecer a un CWP para poder abrirla en IWP y valorizarla.', origen: 'mining_programa.cwp_id', destino: 'mining_cwp.cwp_id' },
   aconex_cwp: { label: 'Aconex → CWP',              desc: 'Cada documento descargado de Aconex debe quedar asignado a su CWP exacto (hay sugerencia por área/disciplina).', origen: 'mining_planos.cwp_id / doc_aconex.cwp_id_exacto', destino: 'mining_cwp.cwp_id' },
 };

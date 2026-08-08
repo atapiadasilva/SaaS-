@@ -29,7 +29,7 @@ export const MODULE_CATALOG: ModuleDef[] = [
   { key: 'planificacion',  label: 'Planificación',  category: 'awp', descripcion: 'Programa maestro / Carta Gantt por CWP y disciplina.', requiereDatos: true },
   { key: 'trisemanal',     label: 'Trisemanal',     category: 'awp', descripcion: 'Planificación intermedia (3WLA): actividades, HH y restricciones por CWP.', requiereDatos: true },
   { key: 'recursos',       label: 'Recursos',       category: 'awp', descripcion: 'Estadísticas por disciplina y curva de dotación estimada.', requiereDatos: true },
-  { key: 'conciliacion',   label: 'Conciliación',   category: 'awp', descripcion: 'Salud de los cruces de datos (ECO-2, Programa, Aconex, BIM) y match manual.', requiereDatos: true },
+  { key: 'conciliacion',   label: 'Conciliación',   category: 'awp', descripcion: 'Salud de los cruces de datos (itemizado, Bases de M&P, Programa, Aconex, BIM) y match manual.', requiereDatos: true },
   { key: 'estado-pago',    label: 'Estado de Pago', category: 'awp', descripcion: 'Avance físico/financiero por ítem y monto ganado según Bases de M&P.', requiereDatos: true },
   { key: 'calidad',        label: 'Calidad',        category: 'departamentos', descripcion: 'Documentos, procedimientos e ITP con estado de aprobación en Aconex.' },
   { key: 'medio-ambiente', label: 'M. Ambiente',    category: 'departamentos', descripcion: 'Documentos y consideraciones ambientales del contrato.' },

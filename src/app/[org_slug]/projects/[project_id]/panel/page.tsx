@@ -134,8 +134,8 @@ export default function PanelPage() {
   const ultDot = dot[dot.length - 1];
   const maxHd = Math.max(1, ...dot.map((x: any) => (Number(x.mod_hd) || 0) + (Number(x.moi_hd) || 0)));
   const relaciones = [
-    { label: 'ECO-2 → CWP', ...it.conciliacion.eco2_cwp },
-    { label: 'ECO-2 → BMP', ...it.conciliacion.eco2_bmp },
+    { label: 'Itemizado → CWP', ...it.conciliacion.eco2_cwp },
+    { label: 'Itemizado → forma de pago', ...it.conciliacion.eco2_bmp },
     { label: 'Programa → CWP', ...it.conciliacion.prog_cwp },
     { label: 'Aconex → CWP', ...it.conciliacion.aconex_cwp },
   ];
@@ -159,10 +159,10 @@ export default function PanelPage() {
       {/* ── FILA 1: héroe económico/plazo/avance ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
         <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>VALOR CONTRATO</div>
-          {/* Sin precios en el ECO-2 el total da 0, y un "$0 MM" afirma que el contrato no vale
+          {/* Sin precios en el itemizado el total da 0, y un "$0 MM" afirma que el contrato no vale
               nada. Se muestra el vacío y se dice qué falta para llenarlo. */}
           <div style={{ fontSize: 21, fontWeight: 900, color: d.contrato.valor_clp ? '#1A1A1A' : '#BDBDBD' }}>{d.contrato.valor_clp ? clpMM(d.contrato.valor_clp) : '—'}</div>
-          <div style={{ fontSize: 9.5, color: '#9E9E9E' }}>{d.contrato.valor_clp ? `${num(it.eco2_hh)} HH · ${num(d.proyecto?.n_items)} items ECO-2` : `${num(d.proyecto?.n_items)} items ECO-2 sin precio unitario`}</div></Card>
+          <div style={{ fontSize: 9.5, color: '#9E9E9E' }}>{d.contrato.valor_clp ? `${num(it.eco2_hh)} HH · ${num(d.proyecto?.n_items)} ítems del itemizado` : `${num(d.proyecto?.n_items)} ítems del itemizado sin precio unitario`}</div></Card>
         <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>PLAZO</div>
           {plazo ? (<>
             <div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A' }}>Día {plazo.dia} <span style={{ fontSize: 12, color: '#757575' }}>/ {plazo.total}</span></div>
@@ -234,7 +234,7 @@ export default function PanelPage() {
       <SecTitle icon={Scale}>Integridad de datos — que todo calce</SecTitle>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 12 }}>
         <Card>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}><Semaforo nivel={calceClp ? 'ok' : 'crit'} /><span style={{ fontSize: 11, fontWeight: 900 }}>ECO-2 vs Estado de Pago</span></div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}><Semaforo nivel={calceClp ? 'ok' : 'crit'} /><span style={{ fontSize: 11, fontWeight: 900 }}>Itemizado vs Estado de Pago</span></div>
           <div style={{ fontSize: 10.5, color: '#33475B', lineHeight: 1.7 }}>
             Itemizado: <b>{clp(it.eco2_clp)}</b><br />
             EP-01 Valor Contrato: <b>{clp(it.ep_valor_contrato)}</b><br />
@@ -244,9 +244,9 @@ export default function PanelPage() {
         <Card>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}><Semaforo nivel="warn" /><span style={{ fontSize: 11, fontWeight: 900 }}>HH: tres fuentes, tres números</span></div>
           <div style={{ fontSize: 10.5, color: '#33475B', lineHeight: 1.7 }}>
-            ECO-2 (contrato): <b>{num(it.eco2_hh)} HH</b><br />
-            Programa P333: <b>{num(it.prog_hh)} HH</b> ({pctDe(it.prog_hh, it.eco2_hh)} del ECO-2)<br />
-            CWP planner: <b>{num(it.cwp_hh)} HH</b> ({pctDe(it.cwp_hh, it.eco2_hh)} del ECO-2)
+            Itemizado (contrato): <b>{num(it.eco2_hh)} HH</b><br />
+            Programa P333: <b>{num(it.prog_hh)} HH</b> ({pctDe(it.prog_hh, it.eco2_hh)} del itemizado)<br />
+            CWP planner: <b>{num(it.cwp_hh)} HH</b> ({pctDe(it.cwp_hh, it.eco2_hh)} del itemizado)
           </div>
         </Card>
         <Card>

@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import { Loader2, Search, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
 
 // Estado de Pago — avance físico y financiero por item del ECO-2 según las
@@ -23,6 +24,7 @@ const fnum = (v: number) => Math.round(v).toLocaleString('es-CL');
 export default function EstadoPagoPage() {
   const params = useParams();
   const projectId = params.project_id as string;
+  const orgSlug = params.org_slug as string;
 
   const [items, setItems] = useState<Item[]>([]);
   const [pasos, setPasos] = useState<Paso[]>([]);
@@ -128,7 +130,7 @@ export default function EstadoPagoPage() {
     <div style={{ maxWidth: 1500, margin: '0 auto' }}>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontWeight: 'bold', fontSize: 22, color: '#1A1A1A' }}>ESTADO <span style={{ color: '#FF0000' }}>DE PAGO</span></h1>
-        <p style={{ fontSize: 11.5, color: '#757575' }}>Avance físico y financiero por item del ECO-2 según Bases de Medición y Pago (ponderaciones CMDIC).</p>
+        <p style={{ fontSize: 11.5, color: '#757575' }}>Avance físico y financiero por ítem del itemizado según las Bases de Medición y Pago (ponderaciones CMDIC).</p>
       </div>
 
       {/* KPIs */}
@@ -138,7 +140,7 @@ export default function EstadoPagoPage() {
           // el ECO-2 cargado no trae precios unitarios. La pantalla lo dice en vez de inventar.
           { label: 'TOTAL CONTRATO',
             valor: kpi.total > 0 ? clp(kpi.total) : '—',
-            sub: kpi.total > 0 ? `${fnum(items.length)} items ECO-2` : `${fnum(items.length)} items ECO-2 · sin precios cargados` },
+            sub: kpi.total > 0 ? `${fnum(items.length)} ítems del itemizado` : `${fnum(items.length)} ítems del itemizado · sin precios cargados` },
           { label: 'AVANCE FÍSICO', valor: kpi.fisicoPct.toFixed(1) + '%', sub: 'ponderado por monto' },
           { label: 'MONTO GANADO (EP)', valor: clp(kpi.ganado), sub: 'según hitos financieros' },
           { label: 'AVANCE FINANCIERO', valor: kpi.cobrable.toFixed(1) + '%', sub: 'del total contrato' },
@@ -151,10 +153,21 @@ export default function EstadoPagoPage() {
         ))}
       </div>
 
+      {/* REGLA DE ORO DEL COBRO: todo ítem del itemizado necesita una forma de pago definida
+          en las Bases de Medición y Pago. Un ítem sin ella se ejecuta igual en terreno, pero
+          no se puede medir ni facturar — es trabajo regalado. Por eso el aviso es rojo y no
+          amarillo: no es una advertencia de calidad de dato, es plata que se pierde. */}
       {kpi.sinBmp > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: '#B45309', backgroundColor: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 8, padding: '8px 14px', marginBottom: 14 }}>
-          <AlertTriangle style={{ width: 14, height: 14, flexShrink: 0 }} />
-          {kpi.sinBmp} items sin partida BMP con reglas — no suman avance. Asígnalos en Conciliación → ECO-2 → Bases de M&P.
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 11, color: '#A00000', backgroundColor: '#FFF5F5', border: '1px solid #FECACA', borderRadius: 8, padding: '10px 14px', marginBottom: 14 }}>
+          <AlertTriangle style={{ width: 14, height: 14, flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <b>{kpi.sinBmp} de {fnum(items.length)} ítems no se pueden cobrar.</b>{' '}
+            No tienen forma de pago definida en las Bases de Medición y Pago: se pueden ejecutar en
+            terreno, pero no hay con qué medirlos ni facturarlos.
+            <Link href={`/${orgSlug}/projects/${projectId}/conciliacion`} style={{ marginLeft: 6, fontWeight: 700, textDecoration: 'underline' }}>
+              Asignarles forma de pago →
+            </Link>
+          </div>
         </div>
       )}
 

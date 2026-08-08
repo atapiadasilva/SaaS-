@@ -173,7 +173,7 @@ export default function ItemizadoTable({ projectId }: { projectId: string }) {
     setSaving(null);
   };
 
-  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, paddingTop: 96, color: '#757575', fontSize: 13 }}><Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} /> Cargando ECO-2…</div>;
+  if (loading) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, paddingTop: 96, color: '#757575', fontSize: 13 }}><Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} /> Cargando el itemizado…</div>;
   if (error && !items.length) return <div style={{ color: '#A00000', fontSize: 13, padding: 32 }}>{error}</div>;
 
   const totalW = 34 + COLS.reduce((s, c) => s + c.width, 0);

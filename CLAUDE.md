@@ -53,6 +53,13 @@ El formato de data pack que un cliente/IA debe entregar está en `Downloads/Brie
 ## Modelo de datos y llaves de conexión
 Tablas centrales (todas con `project_id`): `mining_cwa`, `mining_cv`, `mining_cwp`, `mining_programa` (P6/P333), `mining_itemizado` (ECO-2), `mining_ponderaciones` (Bases de M&P), `mining_elementos` (BIM), `mining_planos`, `mining_doc_aconex`, `mining_iwp` (+ `_actividad`/`_partida`/`_constraint`/`_progreso`), `mining_3wla` (+ `_restriccion`), `mining_personal`, `mining_suministro`, `mining_turno` + `mining_cuadrilla` (WFP).
 
+### Regla de oro del cobro: todo ítem del itemizado necesita forma de pago
+**Cada ítem del itemizado tiene que tener su forma de pago definida en las Bases de Medición y Pago** (`mining_itemizado.partida_mp` → `mining_ponderaciones.item_code`/`subitem_code`). Un ítem sin esa partida se ejecuta igual en terreno, pero **no se puede medir ni facturar**: es trabajo que se regala. Por eso el aviso de Estado de Pago es rojo y no amarillo — no es calidad de dato, es plata que se pierde.
+
+Medido en el Puerto: **69 de 919 ítems sin forma de pago** (Desinstalación de Equipos, Equipos mecánicos, Montaje de equipos eléctricos y soportes secundarios). Se asignan en Conciliación → *Itemizado → forma de pago*.
+
+**Vocabulario: se dice «itemizado», no «ECO-2».** El nombre del documento cambia entre contratos y clientes; lo que no cambia es que es el itemizado de cobro y que se paga según las Bases de Medición y Pago. Toda la interfaz dice «itemizado» y «forma de pago». Las claves internas de la API (`eco2_cwp`, `eco2_hh`) conservan el nombre viejo a propósito: son contrato entre API y front, y renombrarlas no le cambia nada al usuario.
+
 **Llaves que conectan todo:**
 - `CWP` (cwp_id) → conecta programa ↔ itemizado ↔ elementos ↔ planos ↔ trisemanal.
 - `mining_programa.cod_actividad` = `mining_itemizado.partida_bmp` → conecta itemizado ↔ programa (el código P333 en Collahuasi, código P6 tipo `A1250` en Spence).

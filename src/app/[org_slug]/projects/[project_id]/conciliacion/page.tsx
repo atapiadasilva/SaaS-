@@ -121,10 +121,10 @@ export default function ConciliacionPage() {
       <div style={{ marginBottom: '20px', display: 'flex', alignItems: 'flex-end', gap: '16px', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontWeight: 'bold', fontSize: '22px', color: '#1A1A1A' }}>CONCILIACIÓN <span style={{ color: '#FF0000' }}>DE DATOS</span></h1>
-          <p style={{ fontSize: '11.5px', color: '#757575' }}>ECO-2, Bases de M&P, Programa, Aconex y tu Diccionario AWP (7 CWA + 69 CWP). {done > 0 && <span style={{ marginLeft: '12px', color: '#166534', fontWeight: 'bold' }}>✓ {done} matches</span>}</p>
+          <p style={{ fontSize: '11.5px', color: '#757575' }}>Itemizado, Bases de M&P, Programa, Aconex y tu Diccionario AWP (7 CWA + 69 CWP). {done > 0 && <span style={{ marginLeft: '12px', color: '#166534', fontWeight: 'bold' }}>✓ {done} matches</span>}</p>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
-          {([['resumen', 'Resumen'], ['eco2', 'Hoja ECO-2'], ['diagrama', 'Diagrama relacional']] as [Vista, string][]).map(([v, label]) => (
+          {([['resumen', 'Resumen'], ['eco2', 'Hoja del itemizado'], ['diagrama', 'Diagrama relacional']] as [Vista, string][]).map(([v, label]) => (
             <button key={v} onClick={() => { setVista(v); if (v !== 'match') { setRel(null); setDetalle(null); setOrphan(null); } }}
               style={{ padding: '7px 14px', borderRadius: '9999px', fontSize: '11px', fontWeight: 900, cursor: 'pointer', border: vista === v ? '2px solid #FF0000' : '2px solid #EEEEEE', backgroundColor: vista === v ? '#FF0000' : 'white', color: vista === v ? 'white' : '#33475B' }}>
               {label}

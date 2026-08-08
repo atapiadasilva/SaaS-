@@ -315,10 +315,10 @@ export default function MineriaPage() {
               en la Sala de Apertura y en Conciliación, sobre el mismo proyecto. */}
           <Kpi value={fn(data.cwp.filter((c: any) => !esCwpPlaceholder(c.cwp)).length)} label="CWP" />
           {/* Las etiquetas dicen de dónde sale cada número, porque en este proyecto conviven
-              tres fuentes de HH y dos de plata. `part` son líneas del itemizado (ECO-2), no
+              tres fuentes de HH y dos de plata. `part` son líneas del itemizado, no
               suministros — esos son `mining_suministro`, otra tabla. `hh` es del programa
               P333, no el `hh_planner` del CWP: son cifras distintas y se llamaban igual. */}
-          <Kpi value={fn(data.kpi.part)} label="ítems ECO-2" />
+          <Kpi value={fn(data.kpi.part)} label="ítems itemizado" />
           <Kpi value={fn(data.kpi.plan)} label="planos" />
           <Kpi value={fn(data.kpi.costo / 1e6)} label="MM CLP oferta" />
           <Kpi value={fn(data.kpi.hh)} label="HH programa" />
@@ -650,7 +650,7 @@ function DetailPanel({ c, cwaName, tab, setTab, projectId, orgSlug, onIsolateMon
         </div>
         <div className="flex gap-6 mt-3 flex-wrap">
           <DK label="Costo oferta" value={fmm(c.costo)} color="text-green-700" />
-          <DK label="Ítems ECO-2" value={String(c.items.length)} />
+          <DK label="Ítems del itemizado" value={String(c.items.length)} />
           <DK label="Planos" value={String(c.planos.length)} />
           <DK label="HH programa" value={c.prog ? fn(c.prog.hh) : '—'} color="text-orange-600" />
         </div>
@@ -740,11 +740,11 @@ function ResumenTab({ c, projectId }: { c: MCwp; projectId: string }) {
     }
     if (w.suministro) f.push({ icon: '🚚', text: `Suministro: ${w.suministro}.` });
     if (ctx.mc.monto_clp > 0) {
-      f.push({ icon: '💰', text: `Vale ${fmm(ctx.mc.monto_clp)} cobrables vía ${ctx.mc.n_items} ítems del ECO-2 (${ctx.mc.n_actividades} actividades vinculadas en la MC).` });
+      f.push({ icon: '💰', text: `Vale ${fmm(ctx.mc.monto_clp)} cobrables vía ${ctx.mc.n_items} ítems del itemizado (${ctx.mc.n_actividades} actividades vinculadas en la MC).` });
     } else {
       f.push({ icon: '💰', text: 'Sin ítems de cobro vinculados en la Matriz de Correspondencia — el avance de este paquete hoy no se puede valorizar.', alerta: true });
     }
-    if (ctx.mc.items_sin_match > 0) f.push({ icon: '⚠️', text: `${ctx.mc.items_sin_match} vínculos de la MC usan numeración que no existe en ECO-2 (corregir antes de cobrar).`, alerta: true });
+    if (ctx.mc.items_sin_match > 0) f.push({ icon: '⚠️', text: `${ctx.mc.items_sin_match} vínculos de la MC usan numeración que no existe en el itemizado (corregir antes de cobrar).`, alerta: true });
     f.push(ctx.docs.exactos > 0
       ? { icon: '📄', text: `${ctx.docs.exactos} documento(s) oficiales del CWP en Aconex${ctx.docs.sugeridos ? ` + ${ctx.docs.sugeridos} asociados por área/disciplina` : ''}.` }
       : { icon: '📄', text: 'Sin documentos oficiales identificados en Aconex para este CWP.', alerta: true });
@@ -790,7 +790,7 @@ function ResumenTab({ c, projectId }: { c: MCwp; projectId: string }) {
             <b>Alcance:</b> {c.alcance ?? '—'}
           </div>
           {ctx === null ? (
-            <div className="flex items-center gap-2 text-slate-400 text-[11.5px]"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Cruzando programa, MC, ECO-2, Aconex e IWP…</div>
+            <div className="flex items-center gap-2 text-slate-400 text-[11.5px]"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Cruzando programa, MC, itemizado, Aconex e IWP…</div>
           ) : (
             <ul className="space-y-1.5">
               {frases.map((s, i) => (
@@ -831,17 +831,17 @@ function ResumenTab({ c, projectId }: { c: MCwp; projectId: string }) {
       {ctx && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <ResumenKpi label="HH programa" value={c.prog ? fn(c.prog.hh) : '—'} sub={ctx.cwp.hh_planner ? `planner: ${fn(ctx.cwp.hh_planner)}` : undefined} />
-          <ResumenKpi label="Monto cobrable (MC↔ECO-2)" value={ctx.mc.monto_clp ? fmm(ctx.mc.monto_clp) : '—'} sub={`${ctx.mc.n_items} ítems`} accent />
+          <ResumenKpi label="Monto cobrable (MC↔itemizado)" value={ctx.mc.monto_clp ? fmm(ctx.mc.monto_clp) : '—'} sub={`${ctx.mc.n_items} ítems`} accent />
           <ResumenKpi label="Ventana programa" value={c.prog ? `${fd(c.prog.start)} → ${fd(c.prog.end)}` : '—'} sub={ctx.cwp.ruta_critica ? '🔥 ruta crítica' : undefined} />
           <ResumenKpi label="Avance físico (IWP)" value={ctx.iwp.n ? `${ctx.iwp.avance_pct}%` : '—'} sub={ctx.iwp.n ? `${ctx.iwp.n} IWP · ${fn(ctx.iwp.hh_asignadas)} HH` : 'sin IWP'} />
         </div>
       )}
 
-      {/* ── Qué se cobra: top ítems ECO-2 ── */}
+      {/* ── Qué se cobra: top ítems del itemizado ── */}
       {ctx && ctx.mc.top_items.length > 0 && (
         <div className="border border-[#EEEEEE] rounded-2xl overflow-hidden">
           <div className="px-5 py-2.5 border-b border-[#EEEEEE] font-display text-[12px] font-bold text-[#1A1A1A]">
-            Qué se cobra en este paquete <span className="text-[#BDBDBD] normal-case font-sans font-normal">(ítems ECO-2 vía MC, ordenados por monto)</span>
+            Qué se cobra en este paquete <span className="text-[#BDBDBD] normal-case font-sans font-normal">(ítems del itemizado vía MC, ordenados por monto)</span>
           </div>
           <table className="w-full text-[11.5px]">
             <thead><tr className="bg-[#FAFAFA] text-[#757575] text-[10px] uppercase">

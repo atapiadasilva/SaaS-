@@ -26,7 +26,7 @@ const ENTIDADES: Entidad[] = [
     { k: 'fecha_fin', label: 'Fecha fin', keys: ['fin', 'finish', 'termino', 'end'] },
     { k: 'cwp_id', label: 'CWP (clave)', req: true, keys: ['cwp'] },
   ] },
-  { id: 'itemizado', nombre: 'Itemizado (ECO-2 / MC)', icon: Package, ayuda: 'Ítems de cobro con cantidades y HH. Cada ítem debe traer su CWP.', campos: [
+  { id: 'itemizado', nombre: 'Itemizado de cobro', icon: Package, ayuda: 'Ítems de cobro con cantidades y HH. Cada ítem debe traer su CWP.', campos: [
     { k: 'item', label: 'Ítem (clave)', req: true, keys: ['item', 'partida'] },
     { k: 'descripcion', label: 'Descripción', keys: ['descrip'] },
     { k: 'unidad', label: 'Unidad', keys: ['unidad', 'unit', 'un'] },

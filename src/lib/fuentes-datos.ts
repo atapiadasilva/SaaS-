@@ -37,7 +37,7 @@ export const FUENTES: FuenteDato[] = [
   // ── Estructura AWP: el esqueleto. Sin catálogo CWP no hay llave que repartir.
   { key: 'cwp',            label: 'Catálogo CWP',      tabla: 'mining_cwp',           capa: 'awp',           campoCwp: null,             modulos: ['mineria', 'planificacion'], esencial: true },
   { key: 'programa',       label: 'Programa P6',       tabla: 'mining_programa',      capa: 'awp',           campoCwp: 'cwp_id',         modulos: ['planificacion', 'recursos'], esencial: true },
-  { key: 'itemizado',      label: 'Itemizado ECO-2',   tabla: 'mining_itemizado',     capa: 'awp',           campoCwp: 'cwp_id',         modulos: ['estado-pago', 'conciliacion'], esencial: true },
+  { key: 'itemizado',      label: 'Itemizado',   tabla: 'mining_itemizado',     capa: 'awp',           campoCwp: 'cwp_id',         modulos: ['estado-pago', 'conciliacion'], esencial: true },
   { key: 'ponderaciones',  label: 'Bases M&P',         tabla: 'mining_ponderaciones', capa: 'awp',           campoCwp: null,             modulos: ['estado-pago'] },
   // ── Modelo BIM
   { key: 'elementos',      label: 'Elementos 3D',      tabla: 'mining_elementos',     capa: 'bim',           campoCwp: 'cwp_id',         modulos: ['mineria'] },

@@ -60,7 +60,7 @@ export const FUENTES_EXPLORABLES: FuenteExplorable[] = [
       { key: 'cantidad', label: 'Cantidad', formato: 'decimal' }],
   },
   {
-    key: 'itemizado', label: 'Itemizado ECO-2', tabla: 'mining_itemizado',
+    key: 'itemizado', label: 'Itemizado', tabla: 'mining_itemizado',
     dimensiones: [
       { key: 'cwp_id', label: 'CWP' },
       { key: 'cwa_id', label: 'CWA (área)' },
