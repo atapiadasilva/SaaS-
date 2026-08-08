@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { esAprobado, esRechazado, esEnRevision } from '@/lib/documentos';
 import { fetchAllPaged } from '@/lib/supabase/paginado';
+import { esCwpPlaceholder } from '@/lib/awp-codigo';
 import { dedupeConsideraciones, estaAbierta, esAccionable, esBloqueante } from '@/lib/consideraciones';
 
 // Panel KPI general del proyecto: consolida contrato, programa, conciliación,
@@ -95,8 +96,25 @@ export async function GET(req: NextRequest) {
     prog_cwp: { ok: prog.filter((a: any) => a.cwp_id).length, total: prog.length },
     aconex_cwp: { ok: 0, total: 0 }, // se completa abajo con query dedicada
   };
-  const { data: aconexCov } = await sb.from('mining_doc_aconex').select('cwp_id_exacto').eq('project_id', pid);
-  conciliacion.aconex_cwp = { ok: (aconexCov ?? []).filter((d: any) => d.cwp_id_exacto).length, total: (aconexCov ?? []).length };
+  // Misma regla que /api/mining-conciliacion: el vínculo documento → CWP lo deja el cargador
+  // de Aconex en `mining_planos.cwp_id`, no en `cwp_id_exacto` (14 de 902 en el Puerto).
+  // Mirar sólo esa columna daba 1,6% y el Panel mostraba la relación en rojo crítico.
+  const [{ data: aconexCov }, { data: planosCov }] = await Promise.all([
+    sb.from('mining_doc_aconex').select('n_cmdic, cwp_id_exacto').eq('project_id', pid),
+    fetchAllPaged((from, to) => sb.from('mining_planos')
+      .select('codigo_documento, cwp_id').eq('project_id', pid).order('codigo_documento').range(from, to)),
+  ]);
+  const docsConCwp = new Set(
+    (planosCov ?? [])
+      .filter((p: any) => p.codigo_documento && p.cwp_id && !esCwpPlaceholder(p.cwp_id))
+      .map((p: any) => p.codigo_documento),
+  );
+  conciliacion.aconex_cwp = {
+    ok: (aconexCov ?? []).filter((d: any) =>
+      (d.cwp_id_exacto && !esCwpPlaceholder(d.cwp_id_exacto)) || (d.n_cmdic && docsConCwp.has(d.n_cmdic)),
+    ).length,
+    total: (aconexCov ?? []).length,
+  };
 
   // ── Consideraciones por depto ──
   const deptos: Record<string, { abiertas: number; bloqueantes: number }> = {};

@@ -158,7 +158,11 @@ export default function PanelPage() {
 
       {/* ── FILA 1: héroe económico/plazo/avance ── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
-        <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>VALOR CONTRATO</div><div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A' }}>{clpMM(d.contrato.valor_clp)}</div><div style={{ fontSize: 9.5, color: '#9E9E9E' }}>{num(it.eco2_hh)} HH · {num(d.proyecto?.n_items)} items ECO-2</div></Card>
+        <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>VALOR CONTRATO</div>
+          {/* Sin precios en el ECO-2 el total da 0, y un "$0 MM" afirma que el contrato no vale
+              nada. Se muestra el vacío y se dice qué falta para llenarlo. */}
+          <div style={{ fontSize: 21, fontWeight: 900, color: d.contrato.valor_clp ? '#1A1A1A' : '#BDBDBD' }}>{d.contrato.valor_clp ? clpMM(d.contrato.valor_clp) : '—'}</div>
+          <div style={{ fontSize: 9.5, color: '#9E9E9E' }}>{d.contrato.valor_clp ? `${num(it.eco2_hh)} HH · ${num(d.proyecto?.n_items)} items ECO-2` : `${num(d.proyecto?.n_items)} items ECO-2 sin precio unitario`}</div></Card>
         <Card><div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>PLAZO</div>
           {plazo ? (<>
             <div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A' }}>Día {plazo.dia} <span style={{ fontSize: 12, color: '#757575' }}>/ {plazo.total}</span></div>

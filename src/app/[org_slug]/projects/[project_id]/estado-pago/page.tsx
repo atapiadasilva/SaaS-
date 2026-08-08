@@ -134,7 +134,11 @@ export default function EstadoPagoPage() {
       {/* KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 18 }}>
         {[
-          { label: 'TOTAL CONTRATO', valor: clp(kpi.total), sub: `${fnum(items.length)} items ECO-2` },
+          // Un "$0" se lee como "este contrato vale cero", que es falso: lo que pasa es que
+          // el ECO-2 cargado no trae precios unitarios. La pantalla lo dice en vez de inventar.
+          { label: 'TOTAL CONTRATO',
+            valor: kpi.total > 0 ? clp(kpi.total) : '—',
+            sub: kpi.total > 0 ? `${fnum(items.length)} items ECO-2` : `${fnum(items.length)} items ECO-2 · sin precios cargados` },
           { label: 'AVANCE FÍSICO', valor: kpi.fisicoPct.toFixed(1) + '%', sub: 'ponderado por monto' },
           { label: 'MONTO GANADO (EP)', valor: clp(kpi.ganado), sub: 'según hitos financieros' },
           { label: 'AVANCE FINANCIERO', valor: kpi.cobrable.toFixed(1) + '%', sub: 'del total contrato' },

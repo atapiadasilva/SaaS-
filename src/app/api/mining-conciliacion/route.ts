@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { fetchAllPaged } from '@/lib/supabase/paginado';
+import { esCwpPlaceholder } from '@/lib/awp-codigo';
 
 // Módulo de conciliación: salud de la red relacional AWP + banco de match manual.
 // GET  ?project_id=                 → resumen de relaciones (cobertura, huérfanos, salud) + stats para diagrama
@@ -14,7 +15,7 @@ const REL_META: Record<RelId, { label: string; desc: string; origen: string; des
   eco2_cwp:   { label: 'ECO-2 → Diccionario AWP',  desc: 'Cada ítem de cobro del Itemizado debe estar asignado a su paquete constructivo exacto en el Diccionario AWP (69 CWP, 7 CWA).', origen: 'mining_itemizado.cwp_id', destino: 'mining_cwp.cwp_id' },
   item_bmp:   { label: 'ECO-2 → Bases de M&P',      desc: 'Cada ítem del Itemizado debe calzar con una partida de las Bases de Medición y Pago (ponderaciones de avance físico y financiero).', origen: 'mining_itemizado.partida_mp', destino: 'mining_ponderaciones.partida' },
   prog_cwp:   { label: 'Programa → CWP',            desc: 'Cada actividad P333 vigente debe pertenecer a un CWP para poder abrirla en IWP y valorizarla.', origen: 'mining_programa.cwp_id', destino: 'mining_cwp.cwp_id' },
-  aconex_cwp: { label: 'Aconex → CWP',              desc: 'Cada documento descargado de Aconex debe quedar asignado a su CWP exacto (hay sugerencia por área/disciplina).', origen: 'mining_doc_aconex.cwp_id_exacto', destino: 'mining_cwp.cwp_id' },
+  aconex_cwp: { label: 'Aconex → CWP',              desc: 'Cada documento descargado de Aconex debe quedar asignado a su CWP exacto (hay sugerencia por área/disciplina).', origen: 'mining_planos.cwp_id / doc_aconex.cwp_id_exacto', destino: 'mining_cwp.cwp_id' },
 };
 
 function salud(cobertura: number): 'OK' | 'REVISAR' | 'CRITICO' {
@@ -60,13 +61,13 @@ export async function GET(req: NextRequest) {
     const [eco2Res, progRes, aconexRes, pondRes, cwaRes, cvRes, cwpRes, hitosRes, planosRes] = await Promise.all([
       fetchAllPaged((from, to) => sb.from('mining_itemizado').select('item, cwp_id, partida_mp').eq('project_id', pid).range(from, to)),
       fetchAllPaged((from, to) => sb.from('mining_programa').select('id, cwp_id, tipo').eq('project_id', pid).eq('fuente', 'P333').range(from, to)),
-      fetchAllPaged((from, to) => sb.from('mining_doc_aconex').select('id, cwp_id_exacto').eq('project_id', pid).range(from, to)),
+      fetchAllPaged((from, to) => sb.from('mining_doc_aconex').select('id, n_cmdic, cwp_id_exacto').eq('project_id', pid).range(from, to)),
       sb.from('mining_ponderaciones').select('item_code, subitem_code').eq('project_id', pid),
       sb.from('mining_cwa').select('cwa_id').eq('project_id', pid),
       sb.from('mining_cv').select('cv_id').eq('project_id', pid),
       sb.from('mining_cwp').select('cwp_id, es_oficial').eq('project_id', pid),
       sb.from('mining_hitos').select('numero').eq('project_id', pid),
-      sb.from('mining_planos').select('cwp_id').eq('project_id', pid),
+      fetchAllPaged((from, to) => sb.from('mining_planos').select('codigo_documento, cwp_id').eq('project_id', pid).order('codigo_documento').range(from, to)),
     ]);
     const err = [eco2Res, progRes, aconexRes, pondRes, cwaRes, cvRes, cwpRes, hitosRes, planosRes].find(r => r.error);
     if (err?.error) return NextResponse.json({ error: err.error.message }, { status: 500 });
@@ -79,9 +80,23 @@ export async function GET(req: NextRequest) {
     const eco2Ok = eco2.filter((e: any) => e.cwp_id).length;
     const bmpOk = eco2.filter((e: any) => e.partida_mp && bmpCodes.has(e.partida_mp)).length;
     const progOk = prog.filter((p: any) => p.cwp_id).length;
-    const aconexOk = aconex.filter((d: any) => d.cwp_id_exacto).length;
     const planos = planosRes.data ?? [];
-    const planosOk = planos.filter((p: any) => p.cwp_id).length;
+    const planosOk = planos.filter((p: any) => p.cwp_id && !esCwpPlaceholder(p.cwp_id)).length;
+
+    // El vínculo documento → CWP lo deja el cargador de Aconex en `mining_planos.cwp_id`;
+    // `mining_doc_aconex.cwp_id_exacto` casi nunca se llena (14 de 902 en el Puerto). Contar
+    // sólo esa columna daba 1,6% de cobertura y pintaba la relación en rojo crítico cuando
+    // 607 documentos SÍ están vinculados. Se cuenta por cualquiera de las dos vías.
+    const cwpPorDocumento = new Map<string, string>();
+    for (const p of planos as any[]) {
+      if (p.codigo_documento && p.cwp_id && !esCwpPlaceholder(p.cwp_id)) {
+        cwpPorDocumento.set(p.codigo_documento, p.cwp_id);
+      }
+    }
+    const aconexOk = aconex.filter((d: any) =>
+      (d.cwp_id_exacto && !esCwpPlaceholder(d.cwp_id_exacto)) ||
+      (d.n_cmdic && cwpPorDocumento.has(d.n_cmdic))
+    ).length;
 
     const mk = (id: RelId, total: number, ok: number) => ({
       id, ...REL_META[id], total, ok, huerfanos: total - ok,
