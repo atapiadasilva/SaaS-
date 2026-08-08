@@ -170,8 +170,8 @@ function ACCBrowser({
   if (error === 'not_authenticated') {
     return (
       <div className="flex flex-col items-center justify-center py-10 gap-5 text-center">
-        <div className="w-14 h-14 rounded-2xl bg-[#0C1E4F]/8 flex items-center justify-center">
-          <LogIn size={26} className="text-[#0C1E4F]" />
+        <div className="w-14 h-14 rounded-2xl bg-[#FF0000]/8 flex items-center justify-center">
+          <LogIn size={26} className="text-[#FF0000]" />
         </div>
         <div>
           <p className="text-sm font-black text-slate-800">Conectar con Autodesk</p>
@@ -181,7 +181,7 @@ function ACCBrowser({
         </div>
         <a
           href={`/api/autodesk/auth?returnTo=${encodeURIComponent(returnPath)}`}
-          className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#0C1E4F] text-white font-black text-xs rounded-xl hover:bg-blue-700 transition-all uppercase tracking-widest"
+          className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#FF0000] text-white font-black text-xs rounded-xl hover:bg-[#A00000] transition-all uppercase tracking-widest"
         >
           <LogIn size={14} /> Iniciar sesión con Autodesk
         </a>
@@ -194,27 +194,27 @@ function ACCBrowser({
   const Breadcrumb = () => (
     <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mb-3 flex-wrap">
       {step !== 'hubs' && (
-        <button onClick={goBack} className="hover:text-[#0C1E4F] flex items-center gap-1 transition-colors">
+        <button onClick={goBack} className="hover:text-[#FF0000] flex items-center gap-1 transition-colors">
           <ArrowLeft size={11} /> Atrás
         </button>
       )}
-      <span className={step === 'hubs' ? 'text-[#0C1E4F] font-black' : ''}>Hubs</span>
+      <span className={step === 'hubs' ? 'text-[#FF0000] font-black' : ''}>Hubs</span>
       {selectedHub && (
         <>
           <ChevronRight size={9} className="text-slate-300" />
-          <span className={step === 'projects' ? 'text-[#0C1E4F] font-black' : ''}>{selectedHub.attributes.name}</span>
+          <span className={step === 'projects' ? 'text-[#FF0000] font-black' : ''}>{selectedHub.attributes.name}</span>
         </>
       )}
       {selectedProject && (
         <>
           <ChevronRight size={9} className="text-slate-300" />
-          <span className={step === 'folders' && folderStack.length === 0 ? 'text-[#0C1E4F] font-black' : ''}>{selectedProject.attributes.name}</span>
+          <span className={step === 'folders' && folderStack.length === 0 ? 'text-[#FF0000] font-black' : ''}>{selectedProject.attributes.name}</span>
         </>
       )}
       {folderStack.map((f, i) => (
         <span key={f.id} className="flex items-center gap-1.5">
           <ChevronRight size={9} className="text-slate-300" />
-          <span className={i === folderStack.length - 1 ? 'text-[#0C1E4F] font-black' : ''}>{f.name}</span>
+          <span className={i === folderStack.length - 1 ? 'text-[#FF0000] font-black' : ''}>{f.name}</span>
         </span>
       ))}
     </div>
@@ -260,7 +260,7 @@ function ACCBrowser({
       {/* Loading */}
       {loading && (
         <div className="flex justify-center py-8">
-          <Loader2 className="animate-spin text-[#0C1E4F]" size={22} />
+          <Loader2 className="animate-spin text-[#FF0000]" size={22} />
         </div>
       )}
 
@@ -281,11 +281,11 @@ function ACCBrowser({
             <button
               key={hub.id}
               onClick={() => fetchProjects(hub)}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-slate-100 bg-white hover:bg-[#0C1E4F]/5 hover:border-[#0C1E4F]/20 transition-all text-left group"
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-slate-100 bg-white hover:bg-[#FF0000]/5 hover:border-[#FF0000]/20 transition-all text-left group"
             >
-              <Monitor size={16} className="text-[#0C1E4F] shrink-0" />
+              <Monitor size={16} className="text-[#FF0000] shrink-0" />
               <span className="text-sm font-bold text-slate-800 flex-1">{hub.attributes.name}</span>
-              <ChevronRight size={13} className="text-slate-300 group-hover:text-[#0C1E4F] transition-colors" />
+              <ChevronRight size={13} className="text-slate-300 group-hover:text-[#FF0000] transition-colors" />
             </button>
           ))}
         </div>
@@ -529,7 +529,7 @@ export default function BimConfigModal({
               <button
                 onClick={() => setMode('browse')}
                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all ${
-                  mode === 'browse' ? 'bg-white text-[#0C1E4F] shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                  mode === 'browse' ? 'bg-white text-[#FF0000] shadow-sm' : 'text-slate-400 hover:text-slate-600'
                 }`}
               >
                 <FolderOpen size={13} /> Explorar ACC
@@ -537,7 +537,7 @@ export default function BimConfigModal({
               <button
                 onClick={() => setMode('manual')}
                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all ${
-                  mode === 'manual' ? 'bg-white text-[#0C1E4F] shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                  mode === 'manual' ? 'bg-white text-[#FF0000] shadow-sm' : 'text-slate-400 hover:text-slate-600'
                 }`}
               >
                 <Info size={13} /> URN Manual
@@ -552,7 +552,7 @@ export default function BimConfigModal({
           {!wantsToChange && (
             <button
               onClick={() => setWantsToChange(true)}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl border-2 border-dashed border-slate-200 text-[11px] font-black text-slate-500 hover:border-[#0C1E4F]/30 hover:text-[#0C1E4F] transition-all uppercase tracking-wide"
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl border-2 border-dashed border-slate-200 text-[11px] font-black text-slate-500 hover:border-[#FF0000]/30 hover:text-[#FF0000] transition-all uppercase tracking-wide"
             >
               <RefreshCw size={13} /> Cambiar modelo vinculado
             </button>
@@ -680,7 +680,7 @@ export default function BimConfigModal({
               disabled={!canSave || saving || success}
               className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wide transition-all ${
                 success ? 'bg-emerald-500 text-white' :
-                canSave ? 'bg-[#0C1E4F] text-white hover:bg-blue-700' :
+                canSave ? 'bg-[#FF0000] text-white hover:bg-[#A00000]' :
                 'bg-slate-100 text-slate-300 cursor-not-allowed'
               }`}
             >

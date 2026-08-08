@@ -6,6 +6,7 @@ import Link from 'next/link';
 import {
   ArrowLeft, Save, Printer, Type, Heading, AlignLeft, Image as ImageIcon, Table, PenLine,
   ChevronUp, ChevronDown, Trash2, Plus, RotateCcw, Loader2, FileText, StickyNote, Minus, SeparatorHorizontal, Building2,
+  AlertTriangle,
 } from 'lucide-react';
 import FichaDocument from '@/components/awp/ficha/FichaDocument';
 import {
@@ -119,8 +120,26 @@ export default function FichaCwpEditorPage() {
     finally { setSaving(false); }
   };
 
-  if (error) return <div className="p-10 text-red-700">Error: {error}</div>;
-  if (!data) return <div className="p-10 text-slate-500 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Cargando editor…</div>;
+  // Un error de base (timeout, permisos) no se le muestra crudo a quien está armando una
+  // ficha para el mandante: se dice qué pasó, en su idioma, y se ofrece reintentar.
+  if (error) return (
+    <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-6">
+      <AlertTriangle className="w-9 h-9 text-[#FF0000] opacity-70" />
+      <p className="text-sm font-bold text-[#1A1A1A]">No se pudo armar la ficha de este CWP.</p>
+      <p className="text-[11px] text-[#9E9E9E] max-w-[420px]">{error}</p>
+      <button
+        onClick={() => window.location.reload()}
+        className="mt-1 px-4 py-2 rounded-full bg-[#FF0000] hover:bg-[#A00000] text-white text-[10px] font-black uppercase tracking-wide transition"
+      >
+        Reintentar
+      </button>
+    </div>
+  );
+  if (!data) return (
+    <div className="flex items-center justify-center h-full gap-3 text-slate-400">
+      <Loader2 className="w-5 h-5 animate-spin" /> Cargando la ficha del paquete…
+    </div>
+  );
 
   const docWidth = orientacion === 'horizontal' ? 1100 : 780;
 
@@ -171,7 +190,7 @@ export default function FichaCwpEditorPage() {
         </div>
       </div>
 
-      {toast && <div className="fixed bottom-5 right-5 bg-[#08203F] text-white text-[12px] font-semibold px-4 py-2.5 rounded-lg shadow-xl z-50">{toast}</div>}
+      {toast && <div className="fixed bottom-5 right-5 bg-[#1A1A1A] text-white text-[12px] font-semibold px-4 py-2.5 rounded-lg shadow-xl z-50">{toast}</div>}
     </div>
   );
 }

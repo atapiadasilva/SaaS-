@@ -48,7 +48,7 @@ export default function RowItem({ r, checked, onToggle, onApply, onIsolate, visi
       <td className="px-2 py-1.5">
         <div className="flex items-center gap-1">
           <input list="cwp-catalog-options" value={target} onChange={e => setTarget(e.target.value)} placeholder="CWP…" className="w-24 px-1.5 py-0.5 text-[10px] border border-slate-200 rounded" />
-          <button disabled={applying || !target.trim()} onClick={() => { onApply(target); setTarget(''); }} className="p-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-30" title="Reasignar"><ArrowRightCircle className="w-3.5 h-3.5 text-[#0D47A1]" /></button>
+          <button disabled={applying || !target.trim()} onClick={() => { onApply(target); setTarget(''); }} className="p-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-30" title="Reasignar"><ArrowRightCircle className="w-3.5 h-3.5 text-[#FF0000]" /></button>
           <button onClick={onIsolate} className="p-1 rounded bg-slate-100 hover:bg-slate-200" title="Ver en 3D"><Crosshair className="w-3.5 h-3.5 text-slate-500" /></button>
         </div>
       </td>

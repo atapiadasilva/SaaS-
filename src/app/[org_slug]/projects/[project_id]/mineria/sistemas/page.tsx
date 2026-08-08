@@ -183,26 +183,30 @@ export default function SistemasPage() {
   }
 
   return (
-    <div className="h-full flex flex-col -m-6 bg-[#EEF2F7]">
-      <div className="bg-gradient-to-br from-[#08203F] to-[#1565C0] text-white px-6 py-3 flex items-center gap-4 shrink-0">
-        <Link href={`/${org_slug}/projects/${project_id}/mineria`} className="text-white/70 hover:text-white">
+    <div className="h-full flex flex-col -m-6 bg-white">
+      <div className="bg-white border-b border-[#EEEEEE] text-[#1A1A1A] px-6 py-3 flex items-center gap-4 shrink-0">
+        <Link
+          href={`/${org_slug}/projects/${project_id}/mineria`}
+          title="Volver a Explorador CWP"
+          className="p-1.5 rounded-full text-[#757575] hover:text-[#A00000] hover:bg-red-50 transition"
+        >
           <ArrowLeft className="w-4 h-4" />
         </Link>
-        <h1 className="text-[15px] font-extrabold">Sistemas y Subsistemas</h1>
-        <div className="flex gap-5 ml-auto text-right">
+        <h1 className="font-display text-[17px] font-bold">Sistemas y <span className="text-[#FF0000]">Subsistemas</span></h1>
+        <div className="flex gap-6 ml-auto text-right">
           <Kpi value={fn(kpis.nSistemas)} label="sistemas" />
           <Kpi value={fn(kpis.nSubsistemas)} label="subsistemas" />
           <Kpi value={fn(kpis.nElementos)} label="elementos clasificados" />
         </div>
         <Link
           href={`/${org_slug}/projects/${project_id}/mineria/elementos`}
-          className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
+          className="px-3 py-1.5 rounded-full border border-[#EEEEEE] bg-white hover:border-[#FF0000]/50 hover:text-[#A00000] text-[#757575] text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
         >
           Editor de Elementos
         </Link>
         <button
           onClick={() => setShowPicker(true)}
-          className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
+          className="px-3 py-1.5 rounded-full border border-[#EEEEEE] bg-white hover:border-[#FF0000]/50 hover:text-[#A00000] text-[#757575] text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
         >
           <Settings className="w-3.5 h-3.5" /> Modelo 3D
         </button>
@@ -217,7 +221,7 @@ export default function SistemasPage() {
               <input
                 value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="Buscar sistema o subsistema…"
-                className="w-full border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-[12px] outline-none focus:border-blue-500"
+                className="w-full border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-[12px] outline-none focus:border-red-500"
               />
             </div>
           </div>
@@ -228,7 +232,7 @@ export default function SistemasPage() {
                 <div key={s.sistema}>
                   <button
                     onClick={() => toggleSistema(s.sistema)}
-                    className="w-full flex items-center gap-1.5 text-[10px] font-extrabold text-white bg-[#13386b] px-3 py-1.5 sticky top-0 uppercase tracking-wide"
+                    className="w-full flex items-center gap-1.5 text-[10px] font-extrabold text-[#1A1A1A] bg-[#F6F6F6] border-b border-[#EEEEEE] px-3 py-1.5 sticky top-0 uppercase tracking-wide"
                   >
                     {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                     Sistema {s.sistema} {s.nombre_sistema ? `· ${s.nombre_sistema}` : ''}
@@ -238,12 +242,12 @@ export default function SistemasPage() {
                     <div
                       key={sub.swp_id} onClick={() => { setSelectedSwp(sub.swp_id); setTab('resumen'); }}
                       className={cn(
-                        'px-3 py-2 border-b border-slate-100 cursor-pointer hover:bg-blue-50 flex items-center gap-2',
-                        selectedSwp === sub.swp_id && 'bg-blue-100 shadow-[inset_3px_0_0_#1565C0]'
+                        'px-3 py-2 border-b border-slate-100 cursor-pointer hover:bg-red-50 flex items-center gap-2',
+                        selectedSwp === sub.swp_id && 'bg-red-50 shadow-[inset_3px_0_0_#FF0000]'
                       )}
                     >
                       <div className="flex-1 overflow-hidden">
-                        <div className="font-mono font-extrabold text-[11px] text-[#08203F]">{sub.swp_id}</div>
+                        <div className="font-mono font-extrabold text-[11px] text-[#1A1A1A]">{sub.swp_id}</div>
                         <div className="text-[10px] text-slate-400 truncate">{sub.nombre_swp}</div>
                       </div>
                       <span title={sub.n_elementos_modelo > 0 ? `${sub.n_elementos_modelo} elementos en el modelo` : 'Sin elementos en el modelo todavía'}>
@@ -278,7 +282,7 @@ export default function SistemasPage() {
           <div className="flex shrink-0 relative" style={{ width: viewerWidth }}>
             <div
               onMouseDown={onResizeStart}
-              className="absolute left-0 top-0 h-full w-1.5 -ml-[3px] cursor-col-resize z-20 hover:bg-blue-500/40 active:bg-blue-500/60 transition-colors"
+              className="absolute left-0 top-0 h-full w-1.5 -ml-[3px] cursor-col-resize z-20 hover:bg-[#FF0000]/40 active:bg-[#FF0000]/60 transition-colors"
               title="Arrastra para redimensionar"
             />
             <div className="flex-1 border-l border-slate-200 bg-[#060d1f] flex flex-col min-w-0">
@@ -364,14 +368,14 @@ function FichaSubsistema({ sub, sistema, tab, setTab, detalle, loadingDetalle, o
     <div>
       <div className="bg-white px-6 py-4 border-b border-slate-200 sticky top-0 z-10">
         <div className="flex items-center gap-3 flex-wrap">
-          <span className="font-mono text-[20px] font-extrabold text-[#08203F]">{sub.swp_id}</span>
+          <span className="font-mono text-[20px] font-extrabold text-[#1A1A1A]">{sub.swp_id}</span>
           <span className="text-[14px] text-slate-600">{sub.nombre_swp}</span>
           <button
             onClick={onVer3D} disabled={sub.n_elementos_modelo === 0}
             title={sub.n_elementos_modelo === 0 ? 'Este subsistema todavía no tiene elementos clasificados en el modelo 3D' : undefined}
             className={cn(
               'ml-auto inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[11.5px] font-bold shadow-sm transition',
-              sub.n_elementos_modelo === 0 ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-[#0D47A1] hover:bg-[#1565C0] text-white'
+              sub.n_elementos_modelo === 0 ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : 'bg-[#FF0000] hover:bg-[#A00000] text-white'
             )}
           >
             <Box className="w-3.5 h-3.5" /> Ver en 3D {sub.n_elementos_modelo > 0 && `(${sub.n_elementos_modelo})`}
@@ -392,7 +396,7 @@ function FichaSubsistema({ sub, sistema, tab, setTab, detalle, loadingDetalle, o
             key={t.id} onClick={() => setTab(t.id)}
             className={cn(
               'px-4 py-2.5 text-[12px] font-bold border-b-[3px] -mb-[2px] transition flex items-center gap-1.5',
-              tab === t.id ? 'text-[#08203F] border-[#1565C0]' : 'text-slate-400 border-transparent hover:text-blue-600'
+              tab === t.id ? 'text-[#1A1A1A] border-[#FF0000]' : 'text-slate-400 border-transparent hover:text-[#A00000]'
             )}
           >
             {t.label}
@@ -430,7 +434,7 @@ function ResumenTab({ sub, detalle }: { sub: Subsistema; detalle: Detalle | null
   return (
     <div className="flex gap-6 flex-wrap">
       <div className="flex-[2] min-w-[330px] space-y-4">
-        <div className="bg-[#F4F8FD] border-l-4 border-[#1565C0] rounded-r-lg px-4 py-3 text-[12.5px] text-[#3A4D63] leading-relaxed">
+        <div className="bg-[#FFF5F5] border-l-4 border-[#FF0000] rounded-r-lg px-4 py-3 text-[12.5px] text-[#4A4A4A] leading-relaxed">
           <b>P&IDs asociados:</b> {sub.pids.join(', ') || '—'}
         </div>
         {discCount.length > 0 && (
@@ -438,7 +442,7 @@ function ResumenTab({ sub, detalle }: { sub: Subsistema; detalle: Detalle | null
             <div className="text-[12px] font-bold text-[#13386b] mb-2">Equipos por disciplina</div>
             <div className="flex flex-wrap gap-1.5">
               {discCount.map(([k, v]) => (
-                <span key={k} className="font-mono text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200 rounded-md px-2 py-0.5">{k} · {v}</span>
+                <span key={k} className="font-mono text-[11px] font-bold bg-[#F6F6F6] text-[#4A4A4A] border border-[#EEEEEE] rounded-md px-2 py-0.5">{k} · {v}</span>
               ))}
             </div>
           </div>
@@ -452,12 +456,12 @@ function LineasTab({ lineas }: { lineas: LineaRow[] }) {
   if (!lineas.length) return <Empty text="Sin líneas de piping asociadas a este subsistema." />;
   return (
     <table className="w-full border-collapse bg-white rounded-lg overflow-hidden shadow-sm text-[11.5px]">
-      <thead><tr className="bg-[#08203F] text-white text-[10.5px]">
+      <thead><tr className="bg-[#1A1A1A] text-white text-[10.5px]">
         <Th>Línea</Th><Th>Servicio</Th><Th>P&ID</Th><Th>NPS</Th><Th right>Isométricos</Th><Th right>Spools</Th><Th right>Elementos</Th>
       </tr></thead>
       <tbody>
         {lineas.map((l, i) => (
-          <tr key={l.codigo} className={cn('border-b border-slate-100', i % 2 === 0 && 'bg-[#F4F8FD]')}>
+          <tr key={l.codigo} className={cn('border-b border-slate-100', i % 2 === 0 && 'bg-[#FFF5F5]')}>
             <Td className="font-mono font-bold">{l.codigo}</Td><Td>{l.servicio ?? '—'}</Td>
             <Td className="font-mono text-[10px]">{l.pid_codigo ?? '—'}</Td><Td>{l.nps ?? '—'}</Td>
             <Td right className="font-mono">{fn(l.n_isometricos)}</Td><Td right className="font-mono">{fn(l.n_spools)}</Td>
@@ -473,12 +477,12 @@ function EquiposTab({ equipos }: { equipos: EquipoRow[] }) {
   if (!equipos.length) return <Empty text="Sin equipos/instrumentos asociados a este subsistema." />;
   return (
     <table className="w-full border-collapse bg-white rounded-lg overflow-hidden shadow-sm text-[11.5px]">
-      <thead><tr className="bg-[#08203F] text-white text-[10.5px]">
+      <thead><tr className="bg-[#1A1A1A] text-white text-[10.5px]">
         <Th>Tag</Th><Th>Disc.</Th><Th>Descripción</Th><Th>P&ID</Th><Th right>Monikers</Th>
       </tr></thead>
       <tbody>
         {equipos.map((e, i) => (
-          <tr key={e.tag} className={cn('border-b border-slate-100', i % 2 === 0 && 'bg-[#F4F8FD]')}>
+          <tr key={e.tag} className={cn('border-b border-slate-100', i % 2 === 0 && 'bg-[#FFF5F5]')}>
             <Td className="font-mono font-bold">{e.tag}</Td><Td>{e.disciplina_codigo ?? '—'}</Td>
             <Td className="max-w-[280px] truncate" title={e.descripcion ?? ''}>{e.descripcion ?? '—'}</Td>
             <Td className="font-mono text-[10px]">{e.pid_codigo ?? '—'}</Td>
@@ -491,12 +495,12 @@ function EquiposTab({ equipos }: { equipos: EquipoRow[] }) {
 }
 
 function Badge({ n, active }: { n: number; active: boolean }) {
-  return <span className={cn('rounded-full px-1.5 text-[9.5px] ml-1', active ? 'bg-[#1565C0] text-white' : 'bg-slate-200 text-slate-500')}>{n}</span>;
+  return <span className={cn('rounded-full px-1.5 text-[9.5px] ml-1', active ? 'bg-[#FF0000] text-white' : 'bg-slate-200 text-slate-500')}>{n}</span>;
 }
 function DK({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <div>
-      <b className={cn('text-[18px] font-extrabold text-[#08203F] block', color)}>{value}</b>
+      <b className={cn('text-[18px] font-extrabold text-[#1A1A1A] block', color)}>{value}</b>
       <span className="text-[10px] text-slate-400">{label}</span>
     </div>
   );

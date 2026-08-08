@@ -124,7 +124,7 @@ export default function SetupPage() {
         </div>
       </div>
 
-      {toast && <div className="fixed bottom-5 right-5 bg-[#08203F] text-white text-[12px] font-semibold px-4 py-2.5 rounded-lg shadow-xl z-50">{toast}</div>}
+      {toast && <div className="fixed bottom-5 right-5 bg-[#1A1A1A] text-white text-[12px] font-semibold px-4 py-2.5 rounded-lg shadow-xl z-50">{toast}</div>}
     </div>
   );
 }

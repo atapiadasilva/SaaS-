@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { listLocalDocNums } from '@/lib/aconex-local';
+import { dedupeConsideraciones } from '@/lib/consideraciones';
 
 // Dashboard por departamento (Calidad, Medio Ambiente, SSO, Equipos, RRHH).
 // GET ?project_id=&depto= → { kpis, docs, consideraciones }
@@ -52,7 +53,8 @@ export async function GET(req: NextRequest) {
   const docs = (docsRes.data ?? [])
     .filter((d: any) => perteneceDepto(depto, d))
     .map((d: any) => ({ ...d, tieneArchivo: !!d.n_cmdic && localDocs.has(d.n_cmdic) }));
-  const cons = consRes.data ?? [];
+  // El feed diario repite el mismo hallazgo en cada carga: se cuenta y se muestra una vez.
+  const cons = dedupeConsideraciones(consRes.data ?? []);
 
   const esAprobado = (e: string | null) => !!e && /aprobado/i.test(e) && !/para aprob/i.test(e);
   const esRechazado = (e: string | null) => !!e && /rechaz/i.test(e);

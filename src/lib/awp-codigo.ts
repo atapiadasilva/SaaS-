@@ -64,3 +64,14 @@ export function cwaDesdeCv(cvId: string): string {
 export function esCwpValido(cwpId: string | null | undefined): boolean {
   return parseCwp(cwpId) !== null;
 }
+
+/**
+ * Códigos que la UI crea como cajón de "por asignar" (`SIN-CWP.POR_ASIGNAR`,
+ * `3121.SIN-CV.SIN-CWP`, `SIN-CWA`). Existen como fila en `mining_cwp` para poder colgar
+ * elementos sin clasificar, pero **no son paquetes de trabajo**: contarlos infla los KPI.
+ * El Puerto tiene 74 filas y 69 CWP reales — el explorador decía 74 y la Sala de Apertura
+ * 69, sobre el mismo proyecto.
+ */
+export function esCwpPlaceholder(cwpId: string | null | undefined): boolean {
+  return /SIN-(CWP|CV|CWA)/i.test(String(cwpId ?? ''));
+}

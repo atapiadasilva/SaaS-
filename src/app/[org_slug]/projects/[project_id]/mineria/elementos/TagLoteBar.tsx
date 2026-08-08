@@ -79,7 +79,7 @@ export default function TagLoteBar({ projectId, monikers, partidas, cwpsDeLaSele
   };
 
   return (
-    <div className="bg-[#0D47A1] text-white px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 border-t border-white/10">
+    <div className="bg-[#FF0000] text-white px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 border-t border-white/10">
       <Tag className="w-3.5 h-3.5 shrink-0" />
       <span className="text-[11px] font-bold shrink-0">Taguear {monikers.length.toLocaleString('es-CL')}</span>
 
@@ -87,13 +87,13 @@ export default function TagLoteBar({ projectId, monikers, partidas, cwpsDeLaSele
         value={patron} onChange={e => setPatron(e.target.value)}
         placeholder="Patrón… ej. DUR-00"
         title="Los ceros del final definen los dígitos del correlativo: DUR-00 da DUR-01, DUR-02…"
-        className="px-2 py-1 rounded text-[11px] text-[#08203F] w-36 font-mono"
+        className="px-2 py-1 rounded text-[11px] text-[#1A1A1A] w-36 font-mono"
       />
       {previo && <span className="text-[10px] font-mono text-white/70 shrink-0">{previo}</span>}
 
       <select
         value={item} onChange={e => setItem(e.target.value)}
-        className="min-w-0 flex-1 max-w-[420px] px-2 py-1 rounded text-[11px] text-[#08203F]"
+        className="min-w-0 flex-1 max-w-[420px] px-2 py-1 rounded text-[11px] text-[#1A1A1A]"
       >
         <option value="">— Partida del itemizado (obligatoria) —</option>
         {ordenadas.dentro.length > 0 && (
@@ -113,7 +113,7 @@ export default function TagLoteBar({ projectId, monikers, partidas, cwpsDeLaSele
       <button
         onClick={guardar} disabled={!puede}
         title={!patron.trim() ? 'Falta el patrón del tag' : !item.trim() ? 'Falta la partida: sin ella la pieza no se puede cobrar' : undefined}
-        className="shrink-0 inline-flex items-center gap-1.5 bg-white text-[#0D47A1] hover:bg-white/90 disabled:opacity-40 disabled:cursor-not-allowed rounded px-3 py-1 text-[11px] font-black"
+        className="shrink-0 inline-flex items-center gap-1.5 bg-white text-[#FF0000] hover:bg-white/90 disabled:opacity-40 disabled:cursor-not-allowed rounded px-3 py-1 text-[11px] font-black"
       >
         {guardando ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Tagueando…</> : <><Tag className="w-3.5 h-3.5" /> Asignar tag y partida</>}
       </button>

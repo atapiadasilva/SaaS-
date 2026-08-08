@@ -13,6 +13,7 @@ import { HiloWave, HiloTrace } from '@/components/brand/Hilo';
 import { CwpGantt } from '@/components/awp/CwpGantt';
 import { Search, Loader2, Package, ListChecks, Layers, FileText, Box, X, ChevronRight, ChevronLeft, CheckSquare, Square, Eye, Ghost, ListTree, Calendar, Columns3, Crosshair, Settings, ChevronDown, PenLine, ClipboardCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { esCwpPlaceholder } from '@/lib/awp-codigo';
 
 const ForgeViewer = dynamic(() => import('@/components/awp/ForgeViewer'), { ssr: false });
 
@@ -310,7 +311,9 @@ export default function MineriaPage() {
           Explorador <span className="text-[#FF0000]">CWP</span>
         </h1>
         <div className="flex gap-6 ml-auto flex-wrap relative">
-          <Kpi value={fn(data.cwp.length)} label="CWP" />
+          {/* Los cajones "por asignar" no son paquetes: contarlos daba 74 aquí contra 69
+              en la Sala de Apertura y en Conciliación, sobre el mismo proyecto. */}
+          <Kpi value={fn(data.cwp.filter((c: any) => !esCwpPlaceholder(c.cwp)).length)} label="CWP" />
           <Kpi value={fn(data.kpi.part)} label="suministros" />
           <Kpi value={fn(data.kpi.plan)} label="planos" />
           <Kpi value={fn(data.kpi.costo / 1e6)} label="MM CLP" />

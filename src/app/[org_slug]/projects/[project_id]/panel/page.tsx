@@ -103,16 +103,9 @@ export default function PanelPage() {
     const abiertas: any[] = d.consideraciones_abiertas ?? [];
     const nivelDe = (sev: string): 'ok' | 'warn' | 'crit' =>
       sev === 'BLOQUEANTE' ? 'crit' : sev === 'ADVERTENCIA' ? 'warn' : 'ok';
-    // mining_consideraciones trae la misma observación repetida (varias cargas del mismo
-    // hallazgo). Para el panel interesa el hecho, no cuántas veces se registró.
-    const vistas = new Set<string>();
+    // La deduplicación del feed diario vive en el servidor (lib/consideraciones), para que
+    // el Panel y los dashboards de departamento cuenten el mismo hecho una sola vez.
     return abiertas
-      .filter(c => {
-        const clave = `${c.titulo ?? ''}|${c.depto ?? ''}|${c.tipo ?? ''}`;
-        if (vistas.has(clave)) return false;
-        vistas.add(clave);
-        return true;
-      })
       .sort((a, b) => (a.severidad === 'BLOQUEANTE' ? -1 : 1) - (b.severidad === 'BLOQUEANTE' ? -1 : 1))
       .map(c => ({
         nombre: c.titulo ?? '(sin título)',

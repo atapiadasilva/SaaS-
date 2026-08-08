@@ -1060,8 +1060,8 @@ export default function ElementosEditorPage() {
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="h-full flex flex-col -m-6 bg-[#EEF2F7]">
-      <div className="bg-gradient-to-br from-[#08203F] to-[#1565C0] text-white px-6 py-3 flex items-center gap-4 shrink-0">
+    <div className="h-full flex flex-col -m-6 bg-white">
+      <div className="bg-white border-b border-[#EEEEEE] text-[#1A1A1A] px-6 py-3 flex items-center gap-4 shrink-0">
         <Link href={`/${org_slug}/projects/${project_id}/mineria`} className="text-white/70 hover:text-white">
           <ArrowLeft className="w-4 h-4" />
         </Link>
@@ -1114,7 +1114,7 @@ export default function ElementosEditorPage() {
                 onClick={() => toggleChip('categoriaEnlace', c.valor)}
                 title={activo ? 'Quitar este filtro' : `Filtrar la tabla por ${c.valor} — después puedes aislarlos todos en 3D`}
                 className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold border transition',
-                  activo ? 'bg-[#0D47A1] text-white border-[#0D47A1]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100')}
+                  activo ? 'bg-[#FF0000] text-white border-[#FF0000]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100')}
               >
                 {c.valor}
                 <span className={cn('font-mono', activo ? 'text-white/80' : 'text-slate-400')}>{c.n.toLocaleString('es-CL')}</span>
@@ -1164,8 +1164,8 @@ export default function ElementosEditorPage() {
             </div>
             <div className="flex-[3] min-h-0 flex flex-col overflow-hidden border-b border-slate-200">
               <div className="px-2 py-1.5 bg-slate-50 border-b border-slate-200 shrink-0 flex items-center gap-1.5">
-                <ListTree className="w-3.5 h-3.5 text-[#0D47A1]" />
-                <span className="text-[10.5px] font-black uppercase tracking-wide text-[#0D47A1]">Revisión</span>
+                <ListTree className="w-3.5 h-3.5 text-[#FF0000]" />
+                <span className="text-[10.5px] font-black uppercase tracking-wide text-[#FF0000]">Revisión</span>
               </div>
               <RevisionPanel
                 projectId={project_id} viewerReady={viewerReady}
@@ -1179,8 +1179,8 @@ export default function ElementosEditorPage() {
             </div>
             <div className="flex-[2] min-h-0 flex flex-col overflow-hidden">
               <div className="px-2 py-1.5 bg-slate-50 border-b border-slate-200 shrink-0 flex items-center gap-1.5">
-                <GitBranch className="w-3.5 h-3.5 text-[#0D47A1]" />
-                <span className="text-[10.5px] font-black uppercase tracking-wide text-[#0D47A1]">Árbol del modelo</span>
+                <GitBranch className="w-3.5 h-3.5 text-[#FF0000]" />
+                <span className="text-[10.5px] font-black uppercase tracking-wide text-[#FF0000]">Árbol del modelo</span>
               </div>
               <ModelTreePanel
                 viewerRef={viewerRef} viewerReady={viewerReady} onPreviewBranch={previewTreeBranch} revealDbId={treeRevealDbId}
@@ -1313,7 +1313,7 @@ export default function ElementosEditorPage() {
               <button
                 onClick={seleccionarTodosLosQueCoinciden} disabled={seleccionandoTodos}
                 title="Pasa los resultados del filtro a la selección para poder taguearlos de una vez"
-                className="inline-flex items-center gap-1.5 bg-[#0D47A1] hover:bg-[#1565C0] disabled:opacity-40 text-white rounded px-3 py-1 text-[11px] font-bold"
+                className="inline-flex items-center gap-1.5 bg-[#FF0000] hover:bg-[#A00000] disabled:opacity-40 text-white rounded px-3 py-1 text-[11px] font-bold"
               >
                 {seleccionandoTodos
                   ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Seleccionando…</>
@@ -1324,11 +1324,11 @@ export default function ElementosEditorPage() {
 
           {/* Selection toolbar */}
           {selected.size > 0 && (
-            <div className="bg-[#08203F] text-white px-4 py-2 flex items-center gap-3 shrink-0">
+            <div className="bg-[#1A1A1A] text-white px-4 py-2 flex items-center gap-3 shrink-0">
               <span className="text-[11px] font-bold">{selected.size} seleccionados</span>
               <input
                 list="cwp-catalog-options" value={bulkTarget} onChange={e => setBulkTarget(e.target.value)}
-                placeholder="Nuevo CWP…" className="px-2 py-1 rounded text-[11px] text-[#08203F] w-44"
+                placeholder="Nuevo CWP…" className="px-2 py-1 rounded text-[11px] text-[#1A1A1A] w-44"
               />
               <button onClick={applyToSelection} disabled={applying || !bulkTarget.trim()} className="inline-flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded px-3 py-1 text-[11px] font-bold">
                 <ArrowRightCircle className="w-3.5 h-3.5" /> Reasignar
@@ -1503,13 +1503,13 @@ export default function ElementosEditorPage() {
                         <select
                           value={treeBranchNivel}
                           onChange={e => { setTreeBranchNivel(e.target.value as Nivel); setTreeBranchTarget(''); }}
-                          className="shrink-0 px-1.5 py-1 rounded text-[10.5px] border border-blue-300/40 bg-white text-[#08203F]"
+                          className="shrink-0 px-1.5 py-1 rounded text-[10.5px] border border-[#EEEEEE] bg-white text-[#1A1A1A]"
                         >
                           {NIVELES.map(n => <option key={n} value={n}>{NIVEL_LABEL[n]}</option>)}
                         </select>
                         <select
                           value={treeBranchTarget} onChange={e => setTreeBranchTarget(e.target.value)}
-                          className="min-w-0 flex-1 px-2 py-1 rounded text-[11px] text-[#08203F] border border-blue-300/40 bg-white"
+                          className="min-w-0 flex-1 px-2 py-1 rounded text-[11px] text-[#1A1A1A] border border-[#EEEEEE] bg-white"
                         >
                           <option value="">— Elegir {NIVEL_LABEL[treeBranchNivel]} existente —</option>
                           {(treeBranchNivel === 'cwa' ? cwaCatalog.map(c => ({ codigo: c.codigo, label: c.nombre ? `${c.codigo} · ${c.nombre}` : c.codigo }))
@@ -1548,7 +1548,7 @@ export default function ElementosEditorPage() {
                   </span>
                   <select
                     value={quickCodigo} onChange={e => setQuickCodigo(e.target.value)} autoFocus
-                    className="min-w-0 flex-1 px-2 py-1 rounded text-[11px] text-[#08203F] border border-indigo-300/40 bg-white"
+                    className="min-w-0 flex-1 px-2 py-1 rounded text-[11px] text-[#1A1A1A] border border-[#EEEEEE] bg-white"
                   >
                     <option value="">— Elegir CWP destino —</option>
                     {catalog.map(c => (
@@ -1633,7 +1633,7 @@ export default function ElementosEditorPage() {
       </datalist>
 
       {toast && (
-        <div className="fixed bottom-5 right-5 bg-[#08203F] text-white text-[11.5px] font-semibold px-4 py-2.5 rounded-lg shadow-xl z-50">{toast}</div>
+        <div className="fixed bottom-5 right-5 bg-[#1A1A1A] text-white text-[11.5px] font-semibold px-4 py-2.5 rounded-lg shadow-xl z-50">{toast}</div>
       )}
 
       {showPicker && (

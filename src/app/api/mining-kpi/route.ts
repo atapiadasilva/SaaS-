@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { fetchAllPaged } from '@/lib/supabase/paginado';
+import { dedupeConsideraciones } from '@/lib/consideraciones';
 
 // Panel KPI general del proyecto: consolida contrato, programa, conciliación,
 // avance físico/financiero, dotación, consideraciones, entregables clave y compromisos.
@@ -41,7 +42,9 @@ export async function GET(req: NextRequest) {
   const items = itemRes.data ?? [];
   const prog = progRes.data ?? [];
   const cwps = cwpRes.data ?? [];
-  const cons = consRes.data ?? [];
+  // Misma regla que los dashboards de departamento (ver lib/consideraciones): sin esto,
+  // el Panel y Calidad contaban distinto el mismo hallazgo.
+  const cons = dedupeConsideraciones(consRes.data ?? []);
   const docs = docsRes.data ?? [];
   const estudio = estRes.data ?? [];
 
@@ -96,7 +99,7 @@ export async function GET(req: NextRequest) {
 
   // ── Consideraciones por depto ──
   const deptos: Record<string, { abiertas: number; bloqueantes: number }> = {};
-  for (const c of cons) {
+  for (const c of cons as any[]) {
     const d = deptos[c.depto] ?? { abiertas: 0, bloqueantes: 0 };
     if (c.estado !== 'CERRADA') {
       d.abiertas++;

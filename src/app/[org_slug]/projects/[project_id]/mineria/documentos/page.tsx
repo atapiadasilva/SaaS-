@@ -99,26 +99,28 @@ export default function DocumentosPage() {
   }
 
   return (
-    <div className="h-full flex flex-col -m-6 bg-[#EEF2F7]">
-      <div className="bg-gradient-to-br from-[#08203F] to-[#1565C0] text-white px-6 py-3 flex items-center gap-5 shrink-0">
+    <div className="h-full flex flex-col -m-6 bg-white">
+      <div className="bg-white border-b border-[#EEEEEE] text-[#1A1A1A] px-6 py-3 flex items-center gap-5 shrink-0">
         <Link
           href={`/${org_slug}/projects/${project_id}/mineria`}
-          className="p-1.5 rounded bg-white/10 hover:bg-white/20 transition shrink-0"
+          className="p-1.5 rounded-full text-[#757575] hover:text-[#A00000] hover:bg-red-50 transition shrink-0"
           title="Volver a Explorador CWP"
         >
           <ArrowLeft className="w-4 h-4" />
         </Link>
-        <h1 className="text-[15px] font-extrabold flex items-center gap-2"><FileText className="w-4 h-4" /> Control de Documentos</h1>
-        <div className="flex gap-5 ml-auto flex-wrap">
+        <h1 className="font-display text-[17px] font-bold flex items-center gap-2">
+          <FileText className="w-4 h-4 text-[#FF0000]" /> Control de <span className="text-[#FF0000]">Documentos</span>
+        </h1>
+        <div className="flex gap-6 ml-auto flex-wrap">
           <Kpi value={fn(data.total)} label="documentos" />
           <Kpi value={fn(data.conArchivo)} label="con PDF local" />
           <Kpi value={fn(data.disciplinas.length)} label="disciplinas" />
         </div>
         <Link
           href={`/${org_slug}/projects/${project_id}/mineria/elementos`}
-          className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
+          className="px-3 py-1.5 rounded-full border border-[#EEEEEE] bg-white hover:border-[#FF0000]/50 hover:text-[#A00000] text-[#757575] text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
         >
-          <ListTree className="w-3.5 h-3.5" /> Editor de Elementos
+          <ListTree className="w-3.5 h-3.5 text-[#FF0000]" /> Editor de Elementos
         </Link>
       </div>
 
@@ -128,7 +130,7 @@ export default function DocumentosPage() {
           <input
             value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Buscar por N° de documento o descripción…"
-            className="w-[300px] border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-[12px] outline-none focus:border-blue-500"
+            className="w-[300px] border border-slate-300 rounded-lg pl-8 pr-3 py-1.5 text-[12px] outline-none focus:border-red-500"
           />
         </div>
         <select
@@ -147,7 +149,7 @@ export default function DocumentosPage() {
         <button
           onClick={() => onDiscClick(null)}
           className="rounded-full px-2.5 py-1 text-[10px] font-extrabold text-white transition"
-          style={{ background: '#0D47A1', opacity: activeDisc === null ? 1 : 0.4 }}
+          style={{ background: '#FF0000', opacity: activeDisc === null ? 1 : 0.4 }}
         >
           Todas ({fn(data.total)})
         </button>
@@ -212,7 +214,7 @@ export default function DocumentosPage() {
                     <a
                       href={`/api/mining-planos/file?codigo_documento=${encodeURIComponent(d.codigoDocumento)}`}
                       target="_blank" rel="noopener noreferrer"
-                      className="text-[#0D47A1] hover:underline inline-flex items-center gap-1"
+                      className="text-[#A00000] hover:underline inline-flex items-center gap-1"
                       title="Abrir PDF real desde la carpeta local de Aconex"
                     >
                       📄 {d.codigoDocumento}
@@ -249,9 +251,12 @@ function EstadoBadge({ confianza, esOficial }: { confianza: string | null; esOfi
 
 function Kpi({ value, label }: { value: string; label: string }) {
   return (
-    <div className="text-right">
-      <b className="text-[15px] block leading-none">{value}</b>
-      <span className="text-[9px] opacity-80 uppercase">{label}</span>
+    <div className="flex items-center gap-1.5">
+      <span className="hilo-dot" />
+      <div>
+        <b className="text-[15px] block leading-none text-[#1A1A1A]">{value}</b>
+        <span className="text-[8.5px] text-[#9E9E9E] uppercase tracking-wide">{label}</span>
+      </div>
     </div>
   );
 }
