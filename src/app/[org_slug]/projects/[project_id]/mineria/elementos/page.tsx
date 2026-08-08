@@ -11,7 +11,8 @@ import ExportDataModal from '@/components/awp/ExportDataModal';
 import {
   Search, Box, Settings, Loader2, X, ArrowLeft, ChevronLeft, ChevronRight,
   CheckSquare, Square, ArrowRightCircle, Crosshair, ListTree, SlidersHorizontal, Columns3, Eraser, Save, GitBranch,
-  Paintbrush, Ghost, Eye, MousePointerClick, StopCircle, Download, RotateCcw, Layers, SquareDashedMousePointer,
+  Paintbrush, Ghost, Eye, MousePointerClick, StopCircle, Download, RotateCcw, Layers, SquareDashedMousePointer, Tag,
+  ClipboardCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { llavesDelProyecto, valorDeLlave } from '@/lib/llaves-modelo';
@@ -19,6 +20,7 @@ import { llavesDelProyecto, valorDeLlave } from '@/lib/llaves-modelo';
 import RevisionPanel from './RevisionPanel';
 import ModelTreePanel from './ModelTreePanel';
 import RowItem from './RowItem';
+import TagLoteBar, { type PartidaItemizado } from './TagLoteBar';
 import { chunkMonikersForUrl, fetchWithRetry, parseJsonOrThrow, runWithConcurrency } from './elementos-red';
 import {
   COLS_STORAGE_KEY, COLUMN_DEFS, DEFAULT_COLS, EMPTY_FILTERS, EXPORT_LOCKED_DEFS, EXPORT_LOCKED_KEYS,
@@ -251,6 +253,26 @@ export default function ElementosEditorPage() {
       });
   }, [project_id]);
 
+  // Partidas del itemizado para el tageo masivo. Se paginan con `order` porque sin él PostgREST
+  // repite filas entre páginas y se salta otras (ver CLAUDE.md).
+  const [partidas, setPartidas] = useState<PartidaItemizado[]>([]);
+  useEffect(() => {
+    if (!project_id) return;
+    const supabase = createClient() as any;
+    (async () => {
+      const todas: PartidaItemizado[] = [];
+      for (let p = 0; ; p++) {
+        const { data, error } = await supabase.from('mining_itemizado')
+          .select('item, descripcion, cwp_id, unidad, cantidad')
+          .eq('project_id', project_id).order('item').range(p * 1000, p * 1000 + 999);
+        if (error) break;
+        todas.push(...(data ?? []));
+        if ((data?.length ?? 0) < 1000) break;
+      }
+      setPartidas(todas);
+    })();
+  }, [project_id]);
+
   const fetchRows = useCallback(() => {
     if (!project_id) return;
     setLoading(true);
@@ -293,19 +315,19 @@ export default function ElementosEditorPage() {
     () => [...(filtros['motivo_no_valido'] ?? [])].sort((a, b) => b.n - a.n).slice(0, 6),
     [filtros],
   );
-  // Los chips de motivo solo se ven cuando hay un estado elegido, así que al soltar el estado hay que
-  // soltar también el motivo: si no, queda un filtro activo que ya no se ve en ninguna parte y la
-  // tabla muestra menos de lo que el usuario cree haber pedido.
-  const toggleChipEnlace = useCallback((valor: string) => {
-    const quitando = activeFilters.categoriaEnlace === valor;
+  // Estado y motivo son EXCLUYENTES entre sí: elegir uno suelta el otro. Los conteos que muestran
+  // los chips salen de mining_elementos_filtros(), que cuenta sobre todo el proyecto y no sabe de
+  // filtros — así que al combinarlos se puede pedir un cruce que no existe (ej. un motivo del área
+  // 0044 junto a "fuera de catálogo") y la tabla queda vacía sin explicar por qué.
+  const toggleChip = useCallback((key: 'categoriaEnlace' | 'motivoNoValido', valor: string) => {
     setExactMonikers(null);
     setActiveFilters(prev => ({
       ...prev,
-      categoriaEnlace: quitando ? '' : valor,
-      motivoNoValido: quitando ? '' : prev.motivoNoValido,
+      categoriaEnlace: key === 'categoriaEnlace' && prev.categoriaEnlace !== valor ? valor : '',
+      motivoNoValido: key === 'motivoNoValido' && prev.motivoNoValido !== valor ? valor : '',
     }));
     setPage(0);
-  }, [activeFilters.categoriaEnlace]);
+  }, []);
 
   const onSearchChange = useCallback((v: string) => {
     setExactMonikers(null);
@@ -475,6 +497,35 @@ export default function ElementosEditorPage() {
       setIsolatingAll(false);
     }
   }, [currentMatch, project_id, isolateInViewer]);
+
+  // Pasa TODOS los resultados del filtro a la selección, para poder taguearlos de una vez. La
+  // barra de tageo trabaja sobre `selected`, así que este es el puente entre "filtré 400 durmientes"
+  // y "quiero ponerles DUR-001 a DUR-400".
+  const [seleccionandoTodos, setSeleccionandoTodos] = useState(false);
+  const seleccionarTodosLosQueCoinciden = useCallback(async () => {
+    const match = currentMatch();
+    if (!match) return;
+    setSeleccionandoTodos(true);
+    try {
+      const monikers: string[] = [];
+      const pageSize = 500;
+      for (let p = 0; ; p++) {
+        const params = new URLSearchParams({ project_id, page: String(p), pageSize: String(pageSize) });
+        for (const [k, v] of Object.entries(match)) params.set(k, v);
+        const res = await fetchWithRetry(`/api/mining-elementos?${params}`);
+        const d = await parseJsonOrThrow(res);
+        const pagina: { sp3d_moniker: string }[] = d.rows ?? [];
+        for (const r of pagina) monikers.push(r.sp3d_moniker);
+        if (pagina.length < pageSize) break;
+      }
+      setSelected(new Set(monikers));
+      setToast(`${monikers.length.toLocaleString('es-CL')} elemento(s) seleccionados — listos para taguear.`);
+    } catch (e: any) {
+      setToast(`Error al seleccionar: ${e.message}`);
+    } finally {
+      setSeleccionandoTodos(false);
+    }
+  }, [currentMatch, project_id]);
 
   // Trae TODAS las filas completas que coinciden con el filtro/búsqueda actual (no solo la página
   // visible) para el modal de exportar — mismo patrón de paginado por chunks que isolateAllMatching,
@@ -1039,6 +1090,13 @@ export default function ElementosEditorPage() {
         >
           <Layers className="w-3.5 h-3.5" /> Sistemas
         </Link>
+        <Link
+          href={`/${org_slug}/projects/${project_id}/mineria/atributos`}
+          className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0"
+          title="Qué atributos del Anexo 7 exige la etapa y cuántos elementos los traen"
+        >
+          <ClipboardCheck className="w-3.5 h-3.5" /> Anexo 7
+        </Link>
         <button onClick={() => setShowPicker(true)} className="px-2.5 py-1.5 rounded bg-white/10 hover:bg-white/20 text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0">
           <Settings className="w-3.5 h-3.5" /> Modelo 3D
         </button>
@@ -1053,7 +1111,7 @@ export default function ElementosEditorPage() {
             return (
               <button
                 key={c.valor}
-                onClick={() => toggleChipEnlace(c.valor)}
+                onClick={() => toggleChip('categoriaEnlace', c.valor)}
                 title={activo ? 'Quitar este filtro' : `Filtrar la tabla por ${c.valor} — después puedes aislarlos todos en 3D`}
                 className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold border transition',
                   activo ? 'bg-[#0D47A1] text-white border-[#0D47A1]' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100')}
@@ -1063,16 +1121,15 @@ export default function ElementosEditorPage() {
               </button>
             );
           })}
-          {/* El "por qué" solo aparece cuando ya se eligió un "qué" — si no, son demasiados motivos juntos */}
-          {activeFilters.categoriaEnlace && chipsMotivo.length > 0 && (
+          {chipsMotivo.length > 0 && (
             <>
-              <span className="text-[9.5px] font-black uppercase tracking-wide text-slate-400 mx-1">Motivo</span>
+              <span className="text-[9.5px] font-black uppercase tracking-wide text-slate-400 mx-1">o por motivo</span>
               {chipsMotivo.map(m => {
                 const activo = activeFilters.motivoNoValido === m.valor;
                 return (
                   <button
                     key={m.valor}
-                    onClick={() => onFilterChange('motivoNoValido', activo ? '' : m.valor)}
+                    onClick={() => toggleChip('motivoNoValido', m.valor)}
                     title={m.valor}
                     className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-medium border transition max-w-[280px]',
                       activo ? 'bg-amber-500 text-white border-amber-500' : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100')}
@@ -1253,6 +1310,15 @@ export default function ElementosEditorPage() {
                   ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Aislando…</>
                   : <><Crosshair className="w-3.5 h-3.5" /> Aislar TODOS ({total.toLocaleString('es-CL')}) en 3D</>}
               </button>
+              <button
+                onClick={seleccionarTodosLosQueCoinciden} disabled={seleccionandoTodos}
+                title="Pasa los resultados del filtro a la selección para poder taguearlos de una vez"
+                className="inline-flex items-center gap-1.5 bg-[#0D47A1] hover:bg-[#1565C0] disabled:opacity-40 text-white rounded px-3 py-1 text-[11px] font-bold"
+              >
+                {seleccionandoTodos
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Seleccionando…</>
+                  : <><Tag className="w-3.5 h-3.5" /> Seleccionar TODOS para taguear</>}
+              </button>
             </div>
           )}
 
@@ -1272,6 +1338,17 @@ export default function ElementosEditorPage() {
               </button>
               <button onClick={() => setSelected(new Set())} className="ml-auto text-[10.5px] text-white/60 hover:text-white">Limpiar selección</button>
             </div>
+          )}
+
+          {/* Tageo del grupo: nombre de terreno + línea de cobro, en una sola pasada */}
+          {selected.size > 0 && (
+            <TagLoteBar
+              projectId={project_id}
+              monikers={[...selected]}
+              partidas={partidas}
+              cwpsDeLaSeleccion={[...new Set(rows.filter(r => selected.has(r.sp3d_moniker)).map(r => r.cwp_id).filter(Boolean) as string[])]}
+              onListo={(msg) => { setToast(msg); setSelected(new Set()); fetchRows(); loadFiltros(); }}
+            />
           )}
 
           <div className="flex-1 overflow-auto">
@@ -1458,6 +1535,53 @@ export default function ElementosEditorPage() {
                   )}
                 </div>
               )}
+              {/* Asignación por clic: va en la franja del visor, no en un popup flotante — antes
+                  salía sobre el modelo y tapaba la barra de herramientas justo cuando hay que mirar
+                  la pieza que se está clasificando. */}
+              {quickAssign && (
+                <div className="px-3 py-2 bg-indigo-500/15 border-b border-indigo-400/20 flex items-center gap-2 flex-wrap">
+                  <MousePointerClick className="w-3.5 h-3.5 shrink-0 text-indigo-200" />
+                  <span className="text-[10.5px] font-bold text-indigo-200 truncate max-w-[220px]" title={quickAssign.items.map(i => i.name).join(', ')}>
+                    {quickAssign.items.length === 1
+                      ? (quickAssign.items[0].name || 'sin nombre')
+                      : `${quickAssign.items.length.toLocaleString('es-CL')} elementos`}
+                  </span>
+                  <select
+                    value={quickCodigo} onChange={e => setQuickCodigo(e.target.value)} autoFocus
+                    className="min-w-0 flex-1 px-2 py-1 rounded text-[11px] text-[#08203F] border border-indigo-300/40 bg-white"
+                  >
+                    <option value="">— Elegir CWP destino —</option>
+                    {catalog.map(c => (
+                      <option key={c.cwp_id} value={c.cwp_id}>{c.cwp_nombre ? `${c.cwp_id} · ${c.cwp_nombre}` : c.cwp_id}</option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-1.5 text-[10px] text-indigo-200 cursor-pointer shrink-0">
+                    <input type="checkbox" checked={quickSticky} onChange={e => setQuickSticky(e.target.checked)} className="accent-[#FF0000]" />
+                    Seguir con cada clic
+                  </label>
+                  <button
+                    disabled={quickSaving || !quickCodigo}
+                    onClick={async () => {
+                      setQuickSaving(true);
+                      try { await assignSinMoniker(quickAssign.items, quickCodigo); setQuickAssign(null); }
+                      finally { setQuickSaving(false); }
+                    }}
+                    className="shrink-0 inline-flex items-center gap-1.5 bg-[#FF0000] hover:bg-[#D00000] disabled:opacity-40 text-white rounded px-3 py-1 text-[11px] font-bold"
+                  >
+                    <Save className="w-3.5 h-3.5" /> {quickSaving ? 'Guardando…' : 'Asignar'}
+                  </button>
+                  <button onClick={() => setQuickAssign(null)} className="shrink-0 text-slate-400 hover:text-white"><X className="w-3.5 h-3.5" /></button>
+                </div>
+              )}
+              {quickSticky && quickCodigo && !quickAssign && (
+                <div className="px-3 py-1.5 bg-indigo-500/15 border-b border-indigo-400/20 flex items-center gap-2 text-indigo-200">
+                  <MousePointerClick className="w-3.5 h-3.5 shrink-0" />
+                  <span className="text-[10.5px] font-bold truncate">Asignando a <span className="font-mono">{quickCodigo}</span> · haz clic en el modelo</span>
+                  <button onClick={() => setQuickSticky(false)} className="ml-auto inline-flex items-center gap-1 text-[10px] font-bold bg-indigo-500/20 hover:bg-indigo-500/30 rounded px-2 py-1 shrink-0">
+                    <StopCircle className="w-3 h-3" /> Detener
+                  </button>
+                </div>
+              )}
               <div className="flex-1 relative">
                 {!bimUrn ? (
                   <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-500 px-6 text-center">
@@ -1510,48 +1634,6 @@ export default function ElementosEditorPage() {
 
       {toast && (
         <div className="fixed bottom-5 right-5 bg-[#08203F] text-white text-[11.5px] font-semibold px-4 py-2.5 rounded-lg shadow-xl z-50">{toast}</div>
-      )}
-
-      {/* Asignación rápida: clic en el modelo → elegir paquete destino */}
-      {quickAssign && (
-        <div className="fixed bottom-16 right-5 z-50 w-[350px] rounded-2xl border-2 border-slate-200 bg-white shadow-2xl p-4">
-          <div className="text-[11.5px] font-black text-[#1A1A1A]">Asignar a un CWP</div>
-          <div className="text-[10px] text-slate-500 mb-2.5 truncate" title={quickAssign.items.map(i => i.name).join(', ')}>
-            {quickAssign.items.length === 1 ? (quickAssign.items[0].name || 'sin nombre') : `${quickAssign.items.length.toLocaleString('es-CL')} elementos seleccionados`}
-          </div>
-          <input
-            list="quick-cwp-list" value={quickCodigo} onChange={e => setQuickCodigo(e.target.value)}
-            placeholder={catalog.length ? `CWP destino… (ej: ${catalog[0].cwp_id})` : 'CWP destino…'} autoFocus
-            className="w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-[11px] font-mono mb-2 outline-none focus:border-red-400"
-          />
-          <datalist id="quick-cwp-list">
-            {catalog.map(c => <option key={c.cwp_id} value={c.cwp_id}>{c.cwp_nombre}</option>)}
-          </datalist>
-          <label className="flex items-center gap-1.5 text-[10px] text-slate-500 mb-3 cursor-pointer">
-            <input type="checkbox" checked={quickSticky} onChange={e => setQuickSticky(e.target.checked)} className="accent-[#FF0000]" />
-            Seguir asignando a este CWP con cada clic en el modelo
-          </label>
-          <div className="flex gap-2 justify-end">
-            <button onClick={() => setQuickAssign(null)} className="px-3 py-1.5 text-[10.5px] font-bold rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">Cancelar</button>
-            <button
-              disabled={quickSaving || !catalog.some(c => c.cwp_id === quickCodigo)}
-              onClick={async () => {
-                setQuickSaving(true);
-                try { await assignSinMoniker(quickAssign.items, quickCodigo); setQuickAssign(null); }
-                finally { setQuickSaving(false); }
-              }}
-              className="px-3.5 py-1.5 text-[10.5px] font-black rounded-lg bg-[#FF0000] text-white disabled:opacity-40 hover:bg-[#D00000]"
-            >
-              {quickSaving ? 'Guardando…' : 'Asignar al CWP'}
-            </button>
-          </div>
-        </div>
-      )}
-      {quickSticky && quickCodigo && !quickAssign && (
-        <div className="fixed bottom-16 right-5 z-50 flex items-center gap-2 rounded-full bg-[#0a1628] text-white pl-4 pr-2 py-2 shadow-2xl text-[10.5px]">
-          <span>Asignando a <b className="font-mono">{quickCodigo}</b> · haz clic en el modelo</span>
-          <button onClick={() => setQuickSticky(false)} className="rounded-full bg-white/15 hover:bg-white/25 px-2.5 py-1 font-bold">Detener</button>
-        </div>
       )}
 
       {showPicker && (

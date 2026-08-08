@@ -1,0 +1,33 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+-- CREADA Y DESCARTADA el 2026-08-03 (migraciones `elemento_actividad_vinculo_4d` y
+-- `descartar_elemento_actividad_sin_granularidad`). Se conserva el registro para que
+-- nadie la vuelva a intentar con esta fuente.
+--
+-- La idea era el eslabón que le falta al hilo: qué actividad del programa construye cada
+-- elemento del modelo. La tabla de datos 4D del Puerto parecía traerlo — 84.994 filas,
+-- 16.043 elementos, un promedio de 5 actividades por elemento y hasta 33.
+--
+-- No lo trae. Al medirlo:
+--
+--   CWP           elementos  actividades  conjuntos distintos de actividades
+--   312101.D001       1.201           33           1
+--   312101.S001       2.518            5           1
+--   710104.S001       4.347            3           1
+--   …y así los 19 CWP
+--
+-- Un solo conjunto por CWP significa que TODOS los elementos del paquete cuelgan de TODAS
+-- sus actividades. Ni siquiera la clase constructiva los separa: las columnas y el
+-- emplantillado de 312101.D001 aparecen los dos en las mismas 33 actividades. El "vínculo
+-- elemento → actividad" es en realidad el vínculo CWP → actividad, que ya vive en
+-- mining_programa.cwp_id con 206 filas en vez de 83.526.
+--
+-- Y HH_Proporcional es el total del grupo (CWP, clase, actividad) repetido en cada fila:
+-- sumarlo por CWP da 1.178.499.168 HH para 312101.M001, que tiene 56.119 de presupuesto.
+-- Es la misma trampa que mining_mc.hh_item, ya documentada en CLAUDE.md.
+--
+-- Para tener el dato de verdad hay que pedirlo en el modelo: que el 4D asigne actividad a
+-- nivel de elemento (o al menos de clase constructiva) en SmartPlant 3D, no repartiendo el
+-- CWP completo en cada barra del Gantt.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+DROP TABLE IF EXISTS public.mining_elemento_actividad;

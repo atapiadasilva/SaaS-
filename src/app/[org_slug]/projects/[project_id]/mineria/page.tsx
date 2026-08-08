@@ -11,7 +11,7 @@ import IwpManager, { type IwpViewerBridge } from '@/components/awp/IwpManager';
 import IwpSkyline from '@/components/awp/IwpSkyline';
 import { HiloWave, HiloTrace } from '@/components/brand/Hilo';
 import { CwpGantt } from '@/components/awp/CwpGantt';
-import { Search, Loader2, Package, ListChecks, Layers, FileText, Table2, Box, X, ChevronRight, ChevronLeft, CheckSquare, Square, Eye, Ghost, ListTree, Calendar, Columns3, Crosshair, Settings, ChevronDown, PenLine } from 'lucide-react';
+import { Search, Loader2, Package, ListChecks, Layers, FileText, Table2, Box, X, ChevronRight, ChevronLeft, CheckSquare, Square, Eye, Ghost, ListTree, Calendar, Columns3, Crosshair, Settings, ChevronDown, PenLine, ClipboardCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const ForgeViewer = dynamic(() => import('@/components/awp/ForgeViewer'), { ssr: false });
@@ -136,7 +136,11 @@ export default function MineriaPage() {
       .then((d: MData) => {
         setData(d);
         setActiveDiscs(new Set(d.disc.map(x => x.code)));
-        if (d.cwp.length) setSelectedCwp(d.cwp[0].cwp);
+        // `?cwp=` permite llegar acá desde la Sala de Apertura o desde un enlace compartido
+        // y caer en el paquete correcto, en vez de en el primero de la lista.
+        const pedido = new URLSearchParams(window.location.search).get('cwp');
+        const destino = pedido && d.cwp.some(x => x.cwp === pedido) ? pedido : d.cwp[0]?.cwp;
+        if (destino) setSelectedCwp(destino);
       })
       .finally(() => setLoading(false));
   }, [project_id]);
@@ -317,6 +321,10 @@ export default function MineriaPage() {
         </Link>
         <Link href={`/${org_slug}/projects/${project_id}/mineria/sistemas`} className={topLink}>
           <Layers className="w-3.5 h-3.5 text-[#FF0000]" /> Sistemas
+        </Link>
+        <Link href={`/${org_slug}/projects/${project_id}/mineria/atributos`} className={topLink}
+          title="Conformidad del modelo contra la tabla de atributos del Anexo 7 (Guía BIM–AWP Codelco / CChC)">
+          <ClipboardCheck className="w-3.5 h-3.5 text-[#FF0000]" /> Anexo 7
         </Link>
         <button onClick={() => setShowSkyline(true)}
           className="px-3 py-1.5 rounded-full bg-[#FF0000] hover:bg-[#A00000] text-white text-[10px] font-black uppercase tracking-wide transition flex items-center gap-1.5 shrink-0 shadow-[0_2px_10px_rgba(255,0,0,0.25)]">

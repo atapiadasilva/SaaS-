@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { motion, AnimatePresence } from "framer-motion";
@@ -19,6 +19,16 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [resetSent, setResetSent] = useState(false);
+
+  // La tarjeta se anima al entrar, y esa animación arranca en opacity 0. Si el
+  // JavaScript falla (Safari antiguo, chunk que no carga), la tarjeta se queda
+  // invisible para siempre y el usuario ve una pantalla en blanco sin explicación.
+  // Hasta que el componente monte usamos `initial={false}`, que la dibuja ya
+  // visible; las animaciones entre pestañas siguen funcionando después.
+  const [montado, setMontado] = useState(false);
+  useEffect(() => setMontado(true), []);
+  const animacionEntrada = (desde: { opacity: number; y?: number; scale?: number }) =>
+    montado ? desde : false;
 
   const handleResetPassword = async () => {
     if (!email) { setError("Ingresa tu correo para restablecer la contraseña."); return; }
@@ -108,7 +118,7 @@ export default function LoginPage() {
           {resetSent ? (
             <motion.div
               key="reset-sent"
-              initial={{ opacity: 0, scale: 0.95 }}
+              initial={animacionEntrada({ opacity: 0, scale: 0.95 })}
               animate={{ opacity: 1, scale: 1 }}
               className="bg-white rounded-2xl shadow-xl border border-border p-8 text-center"
             >
@@ -129,7 +139,7 @@ export default function LoginPage() {
           ) : success ? (
             <motion.div
               key="success"
-              initial={{ opacity: 0, scale: 0.95 }}
+              initial={animacionEntrada({ opacity: 0, scale: 0.95 })}
               animate={{ opacity: 1, scale: 1 }}
               className="bg-white rounded-2xl shadow-xl border border-border p-8 text-center"
             >
@@ -148,7 +158,7 @@ export default function LoginPage() {
           ) : (
             <motion.div
               key={mode}
-              initial={{ opacity: 0, y: 16 }}
+              initial={animacionEntrada({ opacity: 0, y: 16 })}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -16 }}
               className="bg-white rounded-2xl shadow-xl border border-border overflow-hidden"

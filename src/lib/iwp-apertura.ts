@@ -21,9 +21,18 @@
 
 // ─── Entradas ────────────────────────────────────────────────────────────────
 
-/** Una partida del CWP con lo que ya se llevaron los IWP abiertos. Es lo que se descuenta. */
+/**
+ * Una línea del CWP con lo que ya se llevaron los IWP abiertos. Es lo que se descuenta.
+ *
+ * No es "un item": es un item en una partida del programa, que en el itemizado equivale a
+ * un frente físico concreto ("Hormigón — Fundación Anillo B"). Por eso la identidad es
+ * `clave` y no `item`: el mismo item vive en varios frentes del mismo CWP.
+ */
 export interface PartidaBanco {
+  /** `item|partida_bmp`. Identidad de la línea y llave del descuento. */
+  clave: string;
   item: string;
+  partida_bmp: string | null;
   descripcion: string | null;
   unidad: string | null;
   /** Familia de la partida (commodity de la base de M&P). Agrupa en la estrategia homónima. */
@@ -36,7 +45,7 @@ export interface PartidaBanco {
   hh_total: number;
   hh_asignadas: number;
   hh_saldo: number;
-  origen: 'mc' | 'itemizado';
+  origen: 'itemizado';
 }
 
 export interface Turno {
@@ -82,20 +91,25 @@ export interface OpcionesApertura {
   migaMinima?: number;
   /** Solo para la estrategia 'zona'. Cada zona se vuelve al menos un IWP. */
   zonas?: Zona[];
-  /** Partidas excluidas de la apertura (se dejan en el saldo del CWP a propósito). */
-  itemsExcluidos?: string[];
+  /**
+   * Frentes que entran a esta apertura. Es opt-in a propósito: una sesión de Pull Planning
+   * abre una tajada del CWP, no su alcance completo. Vacío significa que no se eligió nada.
+   */
+  clavesIncluidas?: string[];
 }
 
 // ─── Salidas ─────────────────────────────────────────────────────────────────
 
 export interface PartidaAsignada {
+  clave: string;
   item: string;
+  partida_bmp: string | null;
   descripcion: string | null;
   unidad: string | null;
   cantidad: number;
   hh_unidad: number | null;
   hh: number;
-  origen: 'mc' | 'itemizado';
+  origen: 'itemizado';
 }
 
 export interface IwpPropuesto {
@@ -154,6 +168,26 @@ export function duracionDias(hh: number, cuadrilla: Cuadrilla, turno: Turno): nu
   return Math.max(1, Math.ceil(hh / hhDia));
 }
 
+/** El frente que más pesa en el paquete: es el que le da nombre. */
+function nombreBase(partidas: PartidaAsignada[]): string {
+  const principal = partidas.reduce((a, b) => (b.hh > a.hh ? b : a), partidas[0]);
+  const desc = principal?.descripcion?.trim();
+  if (desc) return partidas.length > 1 ? `${desc} y otros ${partidas.length - 1}` : desc;
+  return principal?.item ?? 'Paquete sin descripción';
+}
+
+/**
+ * Los límites de batería del paso 5: qué entra en este paquete y cuánto. Se escribe con
+ * cantidades porque es lo que terreno mide para decir que lo cerró.
+ */
+function describirAlcance(partidas: PartidaAsignada[]): string {
+  const linea = (p: PartidaAsignada) =>
+    `${p.descripcion?.trim() || p.item}: ${round(p.cantidad, 1).toLocaleString('es-CL')} ${p.unidad ?? ''}`.trim();
+  const visibles = partidas.slice(0, 3).map(linea);
+  const resto = partidas.length - visibles.length;
+  return visibles.join(' · ') + (resto > 0 ? ` · y ${resto} frente(s) más` : '');
+}
+
 /** El ritmo: días de turno por IWP. Es el TAKT del paso 7. */
 export function taktPromedio(iwps: IwpPropuesto[]): number {
   if (!iwps.length) return 0;
@@ -209,73 +243,80 @@ interface Resto {
   hh: number;
 }
 
-/** Corta una lista de partidas en paquetes de ~hhObjetivo, sin dejar migas. */
+const EPS = 1e-6;
+
+/**
+ * Corta una lista de partidas en paquetes ejecutables.
+ *
+ * No trocea de a `objetivo` hasta que se acabe el saldo, porque eso deja siempre una cola:
+ * 6.862 HH con objetivo 1.232 daría cinco paquetes llenos y uno de 702. En vez de eso
+ * calcula cuántos paquetes hacen falta —`ceil(total / objetivo)`— y reparte el total en
+ * partes iguales. Salen seis paquetes de 1.144 HH: mismo alcance, sin colas, y con un TAKT
+ * constante, que es de lo que se trata el paso 7 de la rutina.
+ *
+ * `techo` es lo máximo que un paquete puede pesar cuando una partida entra entera para no
+ * fragmentarla en un sobrante ridículo. Va acotado por la capacidad del ciclo: prefiero un
+ * corte más feo antes que un IWP que la cuadrilla no alcanza a cerrar antes de bajar del turno.
+ */
 function trocearPorHH(
   restos: Resto[],
-  hhObjetivo: number,
-  tolerancia: number,
+  objetivo: number,
+  techo: number,
   migaMinima: number,
 ): PartidaAsignada[][] {
+  const total = restos.reduce((s, r) => s + r.hh, 0);
+  if (total <= EPS) return [];
+
+  const nPaquetes = Math.max(1, Math.ceil(total / objetivo - EPS));
+  const meta = total / nPaquetes;
+
   const paquetes: PartidaAsignada[][] = [];
   let actual: PartidaAsignada[] = [];
   let hhActual = 0;
-  const techo = hhObjetivo * (1 + tolerancia);
 
   const cerrar = () => {
     if (actual.length) paquetes.push(actual);
     actual = [];
     hhActual = 0;
   };
+  const agregar = (r: Resto, cantidad: number, hh: number) => {
+    actual.push({
+      clave: r.p.clave, item: r.p.item, partida_bmp: r.p.partida_bmp,
+      descripcion: r.p.descripcion, unidad: r.p.unidad,
+      cantidad: round(cantidad, 3), hh_unidad: r.p.hh_unidad,
+      hh: Math.round(hh), origen: r.p.origen,
+    });
+    hhActual += hh;
+  };
 
   for (const r of restos) {
-    while (r.hh > 0.0001) {
-      const espacio = hhObjetivo - hhActual;
+    while (r.hh > EPS) {
+      const cupo = meta - hhActual;
+      if (cupo <= EPS) { cerrar(); continue; }
 
-      // El paquete ya está lleno: cerrarlo antes de tocar esta partida.
-      if (espacio <= 0) { cerrar(); continue; }
-
-      if (r.hh <= techo - hhActual) {
-        // Cabe entera (aunque se pase un poco del objetivo, dentro de la tolerancia).
-        actual.push({
-          item: r.p.item, descripcion: r.p.descripcion, unidad: r.p.unidad,
-          cantidad: round(r.cantidad, 3), hh_unidad: r.p.hh_unidad,
-          hh: Math.round(r.hh), origen: r.p.origen,
-        });
-        hhActual += r.hh;
+      // Cabe entera en lo que falta del paquete.
+      if (r.hh <= cupo + EPS) {
+        agregar(r, r.cantidad, r.hh);
         r.hh = 0; r.cantidad = 0;
-        if (hhActual >= hhObjetivo) cerrar();
         continue;
       }
 
-      // Hay que partirla. Se reparte por cantidad, que es lo que se mide en terreno.
-      const fraccion = espacio / r.hh;
-      const colaFraccion = 1 - fraccion;
-
-      // Si la cola que quedaría es una miga, no vale la pena: entra entera y nos pasamos.
-      if (colaFraccion < migaMinima) {
-        actual.push({
-          item: r.p.item, descripcion: r.p.descripcion, unidad: r.p.unidad,
-          cantidad: round(r.cantidad, 3), hh_unidad: r.p.hh_unidad,
-          hh: Math.round(r.hh), origen: r.p.origen,
-        });
+      // Partirla dejaría un sobrante insignificante: entra entera, siempre que no rompa el techo.
+      if (r.hh - cupo < r.hh * migaMinima && hhActual + r.hh <= techo + EPS) {
+        agregar(r, r.cantidad, r.hh);
         r.hh = 0; r.cantidad = 0;
         cerrar();
         continue;
       }
 
-      // Si lo que cabe es una miga, mejor abrir paquete nuevo y meterla completa allá.
-      if (fraccion < migaMinima) { cerrar(); continue; }
-
-      const cant = r.cantidad * fraccion;
-      actual.push({
-        item: r.p.item, descripcion: r.p.descripcion, unidad: r.p.unidad,
-        cantidad: round(cant, 3), hh_unidad: r.p.hh_unidad,
-        hh: Math.round(espacio), origen: r.p.origen,
-      });
+      // Se reparte por cantidad, que es lo que terreno mide.
+      const cant = r.cantidad * (cupo / r.hh);
+      agregar(r, cant, cupo);
       r.cantidad -= cant;
-      r.hh -= espacio;
+      r.hh -= cupo;
       cerrar();
     }
+    if (hhActual >= meta - EPS) cerrar();
   }
 
   cerrar();
@@ -296,7 +337,7 @@ export function proponerIwps(
 ): Propuesta {
   const tolerancia = opts.tolerancia ?? 0.2;
   const migaMinima = opts.migaMinima ?? 0.1;
-  const excluidos = new Set(opts.itemsExcluidos ?? []);
+  const incluidos = new Set(opts.clavesIncluidas ?? []);
   const alertas: Alerta[] = [];
 
   const hhObjetivo = opts.hhObjetivo > 0 ? opts.hhObjetivo : capacidadCiclo(cuadrilla, turno);
@@ -308,6 +349,11 @@ export function proponerIwps(
   }
 
   const capacidad = capacidadCiclo(cuadrilla, turno);
+
+  // El margen para no fragmentar una partida nunca puede empujar el paquete más allá de lo
+  // que la cuadrilla cierra en su ciclo — esa es la regla, no una preferencia estética.
+  const techo = Math.max(hhObjetivo, Math.min(hhObjetivo * (1 + tolerancia), capacidad || Infinity));
+
   if (hhObjetivo > capacidad * 1.05) {
     alertas.push({
       severidad: 'aviso',
@@ -316,7 +362,14 @@ export function proponerIwps(
   }
 
   // Partidas planificables: con saldo y con rendimiento. Sin rendimiento no hay HH que repartir.
-  const disponibles = banco.filter(p => !excluidos.has(p.item) && p.cantidad_saldo > 0);
+  if (!incluidos.size) {
+    return {
+      iwps: [], hh_total: 0, hh_sin_aperturar: 0,
+      alertas: [{ severidad: 'bloqueo', mensaje: 'No hay frentes elegidos. Marca en el banco los que entran a esta sesión de apertura.' }],
+    };
+  }
+
+  const disponibles = banco.filter(p => incluidos.has(p.clave) && p.cantidad_saldo > 0);
   const sinRendimiento = disponibles.filter(p => !p.hh_unidad || p.hh_saldo <= 0);
   const planificables = disponibles.filter(p => p.hh_unidad && p.hh_saldo > 0);
 
@@ -366,30 +419,38 @@ export function proponerIwps(
   }
 
   // ── Troceo por HH dentro de cada grupo ──
-  const iwps: IwpPropuesto[] = [];
-  let seq = 0;
+  const crudos: { grupo: string | null; partidas: PartidaAsignada[]; hh: number }[] = [];
   for (const g of grupos) {
-    const paquetes = trocearPorHH(g.restos, hhObjetivo, tolerancia, migaMinima);
-    paquetes.forEach((partidas, i) => {
+    for (const partidas of trocearPorHH(g.restos, hhObjetivo, techo, migaMinima)) {
       const hh = partidas.reduce((s, p) => s + p.hh, 0);
-      if (hh <= 0) return;
-      seq += 1;
-      const sufijo = paquetes.length > 1 ? ` (${i + 1}/${paquetes.length})` : '';
-      const nombre = g.nombre ? `${g.nombre}${sufijo}` : `Paquete ${seq}`;
-      const principal = [...partidas].sort((a, b) => b.hh - a.hh)[0];
-      iwps.push({
-        secuencia: seq,
-        nombre,
-        grupo: g.nombre,
-        partidas,
-        hh,
-        dias: duracionDias(hh, cuadrilla, turno),
-        limites_bateria: g.nombre
-          ? `Alcance limitado a ${g.nombre}.`
-          : `Desde ${principal?.descripcion ?? principal?.item ?? 'inicio del alcance'} — ${round(principal?.cantidad ?? 0, 1)} ${principal?.unidad ?? ''}`.trim(),
-      });
-    });
+      if (hh > 0) crudos.push({ grupo: g.nombre, partidas, hh });
+    }
   }
+
+  // El nombre sale del frente que más pesa dentro del paquete, no del grupo: "Enfierradura
+  // Fundación Anillo C" le dice algo a un capataz; "Armaduras (7/22)" no le dice nada.
+  const vecesPorNombre = new Map<string, number>();
+  for (const c of crudos) {
+    const base = nombreBase(c.partidas);
+    vecesPorNombre.set(base, (vecesPorNombre.get(base) ?? 0) + 1);
+  }
+  const vistos = new Map<string, number>();
+
+  const iwps: IwpPropuesto[] = crudos.map((c, i) => {
+    const base = nombreBase(c.partidas);
+    const total = vecesPorNombre.get(base) ?? 1;
+    const idx = (vistos.get(base) ?? 0) + 1;
+    vistos.set(base, idx);
+    return {
+      secuencia: i + 1,
+      nombre: total > 1 ? `${base} — tramo ${idx} de ${total}` : base,
+      grupo: c.grupo,
+      partidas: c.partidas,
+      hh: c.hh,
+      dias: duracionDias(c.hh, cuadrilla, turno),
+      limites_bateria: describirAlcance(c.partidas),
+    };
+  });
 
   const hhTotal = iwps.reduce((s, i) => s + i.hh, 0);
 
@@ -417,5 +478,83 @@ export function proponerIwps(
     alertas,
     hh_total: Math.round(hhTotal),
     hh_sin_aperturar: Math.round(sinRendimiento.reduce((s, p) => s + p.hh_saldo, 0)),
+  };
+}
+
+// ─── Refinar a mano: dividir y fusionar ──────────────────────────────────────
+//
+// El motor propone; el planificador dispone. Estas dos son las operaciones que más se usan
+// al revisar el quiebre paquete por paquete, y por eso viven acá: repartir cantidades sin
+// perder ni inventar es aritmética delicada y hay que poder probarla.
+
+/** Un paquete al que se le pueden repartir las cantidades. */
+export interface PaqueteEditable {
+  nombre: string;
+  grupo: string | null;
+  partidas: PartidaAsignada[];
+  limites_bateria?: string;
+}
+
+/**
+ * Divide un paquete en `partes` iguales por carga de trabajo.
+ *
+ * Cada partida se reparte proporcionalmente, así que las `partes` quedan con el mismo mix
+ * de frentes. Es lo correcto cuando lo que sobra es tamaño, no alcance: dividir "3.000 kg
+ * de enfierradura" en dos da dos veces 1.500 kg del mismo frente.
+ */
+export function dividirPaquete(paquete: PaqueteEditable, partes: number): PaqueteEditable[] {
+  const n = Math.max(2, Math.floor(partes));
+  const salida: PaqueteEditable[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const partidas = paquete.partidas.map(p => {
+      // La última parte se lleva el remanente exacto: así la suma cuadra al milímetro
+      // aunque la división no sea entera.
+      const cantidad = i === n - 1
+        ? round(p.cantidad - round(p.cantidad / n, 3) * (n - 1), 3)
+        : round(p.cantidad / n, 3);
+      const hh = i === n - 1
+        ? p.hh - Math.round(p.hh / n) * (n - 1)
+        : Math.round(p.hh / n);
+      return { ...p, cantidad, hh };
+    }).filter(p => p.cantidad > 0 || p.hh > 0);
+
+    salida.push({
+      nombre: `${paquete.nombre} · parte ${i + 1} de ${n}`,
+      grupo: paquete.grupo,
+      partidas,
+      limites_bateria: describirAlcance(partidas),
+    });
+  }
+
+  return salida;
+}
+
+/**
+ * Fusiona varios paquetes en uno. Las líneas que comparten `clave` se suman, porque son el
+ * mismo frente partido por el troceo: dejarlas separadas mostraría el mismo item dos veces
+ * en la ficha que se lleva el capataz.
+ */
+export function fusionarPaquetes(paquetes: PaqueteEditable[]): PaqueteEditable {
+  const porClave = new Map<string, PartidaAsignada>();
+  for (const p of paquetes) {
+    for (const partida of p.partidas) {
+      const cur = porClave.get(partida.clave);
+      if (cur) {
+        cur.cantidad = round(cur.cantidad + partida.cantidad, 3);
+        cur.hh += partida.hh;
+      } else {
+        porClave.set(partida.clave, { ...partida });
+      }
+    }
+  }
+  const partidas = [...porClave.values()].sort((a, b) => b.hh - a.hh);
+  const grupos = [...new Set(paquetes.map(p => p.grupo).filter(Boolean))];
+
+  return {
+    nombre: nombreBase(partidas),
+    grupo: grupos.length === 1 ? grupos[0] : null,
+    partidas,
+    limites_bateria: describirAlcance(partidas),
   };
 }

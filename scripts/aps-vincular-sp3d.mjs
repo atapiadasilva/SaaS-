@@ -15,12 +15,22 @@
  * el motivo escrito: un elemento en el paquete equivocado es peor que uno sin asignar, y
  * dejarlo fuera de la base lo haría invisible en vez de pendiente.
  *
- * LLAVE: se guarda el `Item::GUID` del objeto, no el externalId de APS. El externalId es una
- * ruta de índices ("1/4/0/0/…"): al republicar el modelo con un elemento menos, los índices de
- * todo lo que viene después se corren y cada fila queda apuntando a otra pieza. El GUID viene
- * del objeto de origen y sobrevive a la republicación, que es lo que permite que la
- * clasificación hecha a mano en el editor no se pierda con cada versión del modelo. El visor
- * lo resuelve con su índice de la propiedad GUID (module_config.bim.itemPropName = 'GUID').
+ * LLAVE (--llave=moniker|guid|externalid, por defecto moniker):
+ *
+ *   moniker — `SmartPlant 3D::SP3d Moniker`, la llave propia de SmartPlant
+ *     (`@a=0027!!80020##317902042404625545`). Es la ÚNICA que sirve de ida y vuelta: con ella el
+ *     modelador puede tomar lo que se clasificó en Hilo y devolverlo al modelo como propiedad.
+ *     Las otras dos identifican la pieza dentro del visor pero no significan nada en SP3D.
+ *     El visor la resuelve porque 'SP3d Moniker' ya está en las llaves candidatas del origen
+ *     SmartPlant (ver lib/llaves-modelo).
+ *
+ *   guid — el `Item::GUID` de Navisworks. Único y estable entre republicaciones, pero no existe
+ *     como campo en SmartPlant: no permite devolver los datos al modelo.
+ *
+ *   externalid — el identificador nativo de APS ("1/4/0/0/…"). NO es un identificador del objeto
+ *     sino una ruta de índices posicional: al republicar con elementos borrados, los índices de
+ *     lo que viene después se corren y esas filas quedan apuntando a otra pieza (medido entre dos
+ *     revisiones de SCPY: 15 de 11.445). Último recurso, solo si el modelo no publica nada mejor.
  *
  * Uso:
  *   node --env-file=.env.local scripts/aps-vincular-sp3d.mjs <props-*.json> <project_id> [--aplicar]
@@ -41,6 +51,8 @@ if (!PROPS || !PROJECT_ID) {
   process.exit(1);
 }
 const URN = opt('urn', null), NOMBRE_MODELO = opt('nombre', 'Modelo del proyecto');
+const LLAVE = opt('llave', 'moniker').toLowerCase();
+if (!['moniker', 'externalid', 'guid'].includes(LLAVE)) { console.error(`--llave debe ser moniker, guid o externalid (llegó "${LLAVE}")`); process.exit(1); }
 
 /** Carpeta de disciplina del System Path → código de disciplina de Hilo. */
 const DISCIPLINA = {
@@ -119,18 +131,23 @@ function coordenadas(s) {
   return { este: pie('E'), norte: pie('S'), elevacion: pie('EL') };
 }
 
-/** GUID del objeto si lo trae; si no, el externalId posicional como último recurso. */
+/** Identificador con el que se guarda el elemento, según --llave, con respaldo en ese orden. */
 function llaveDe(f) {
-  const guid = String(f['Item::GUID'] ?? f['SmartPlant 3D::GUID'] ?? '').trim();
-  if (guid) return { id: guid, tipo: 'guid' };
-  const ext = String(f.externalId ?? '').trim();
-  return ext ? { id: ext, tipo: 'externalId' } : null;
+  const disponibles = {
+    moniker: String(f['SmartPlant 3D::SP3d Moniker'] ?? f['SmartPlant 3D::SP3D_MONIKER'] ?? '').trim(),
+    guid: String(f['Item::GUID'] ?? f['SmartPlant 3D::GUID'] ?? '').trim(),
+    externalid: String(f.externalId ?? '').trim(),
+  };
+  const orden = [LLAVE, ...['moniker', 'guid', 'externalid'].filter(t => t !== LLAVE)];
+  for (const tipo of orden) if (disponibles[tipo]) return { id: disponibles[tipo], tipo };
+  return null;
 }
 
 // ── Resolución ──────────────────────────────────────────────────────────────
 const elementos = [], motivos = new Map(), vias = new Map(), porCwp = new Map();
 const vistos = new Set();
-let repetidos = 0, porGuid = 0, porExternalId = 0;
+let repetidos = 0;
+const porTipoLlave = new Map();
 
 for (const f of comps) {
   const llave = llaveDe(f);
@@ -138,7 +155,7 @@ for (const f of comps) {
   const id = llave.id;
   if (vistos.has(id)) { repetidos++; continue; }
   vistos.add(id);
-  if (llave.tipo === 'guid') porGuid++; else porExternalId++;
+  porTipoLlave.set(llave.tipo, (porTipoLlave.get(llave.tipo) ?? 0) + 1);
 
   const p = path(f);
   const area = areaDe(f), disc = discDe(f), nodo = nodoDe(f);
@@ -167,7 +184,7 @@ for (const f of comps) {
   const c = coordenadas(f['SmartPlant 3D::Location'] ?? f['SmartPlant 3D::Support Location']);
   elementos.push({
     project_id: PROJECT_ID,
-    sp3d_moniker: id,                    // GUID del objeto (ver nota de LLAVE arriba)
+    sp3d_moniker: id,                    // ver la nota de LLAVE arriba
     guid_modelo: f['Item::GUID'] ?? f['SmartPlant 3D::GUID'] ?? null,
     name: f['SmartPlant 3D::Name'] ?? f.name ?? null,
     descripcion: f['SmartPlant 3D::Description'] ?? null,
@@ -201,7 +218,7 @@ for (const f of comps) {
 const vinculados = elementos.filter(e => e.cwp_id);
 const pend = elementos.length - vinculados.length;
 console.log(`Componentes            : ${elementos.length.toLocaleString('es-CL')}${repetidos ? `   (${repetidos} llaves repetidas, omitidas)` : ''}`);
-console.log(`  llave estable (GUID) : ${porGuid.toLocaleString('es-CL')}${porExternalId ? `   ·   por externalId posicional: ${porExternalId.toLocaleString('es-CL')} (se romperán al republicar)` : ''}`);
+console.log(`Llave (--llave=${LLAVE})       : ${[...porTipoLlave].map(([k, v]) => `${v.toLocaleString('es-CL')} por ${k}`).join(' · ')}`);
 console.log(`Vinculados a un CWP    : ${vinculados.length.toLocaleString('es-CL')}  (${((vinculados.length / elementos.length) * 100).toFixed(1)}%)`);
 console.log(`Sin CWP                : ${pend.toLocaleString('es-CL')}`);
 const porCat = new Map();
@@ -240,10 +257,15 @@ if (URN) {
   const { error } = await sb.from('projects').update({
     module_config: {
       ...(proj?.module_config ?? {}),
-      // La llave guardada es la propiedad GUID del objeto: el visor arma un índice sobre ella y
-      // ubica cada elemento. Lo que se haya cargado con externalId (sin GUID) igual se resuelve,
-      // porque resolveMonikers cae a getExternalIdMapping con lo que no encuentra por propiedad.
-      bim: { urn: URN, modelName: NOMBRE_MODELO, configuredAt: new Date().toISOString(), itemPropName: 'GUID', cwpPropName: 'CWP' },
+      // itemPropName tiene que nombrar la propiedad con la que se guardó el moniker, o el visor
+      // no arma el índice y no ubica nada. Con externalid da igual: resolveMonikers cae a
+      // getExternalIdMapping con todo lo que no encuentra por propiedad.
+      bim: {
+        urn: URN, modelName: NOMBRE_MODELO, configuredAt: new Date().toISOString(),
+        itemPropName: LLAVE === 'moniker' ? 'SP3d Moniker,SP3D_MONIKER,DATA_EIMISA/SP3D_MONIKER'
+          : LLAVE === 'guid' ? 'GUID' : 'SP3D_MONIKER',
+        cwpPropName: 'CWP',
+      },
     },
   }).eq('id', PROJECT_ID);
   if (error) console.error('  no se pudo conectar el visor:', error.message);

@@ -3382,7 +3382,6 @@ export type Database = {
           module_config: Json | null
           name: string
           organization_id: string
-          role_permissions: Json | null
           stage: string | null
           updated_at: string
         }
@@ -3394,7 +3393,6 @@ export type Database = {
           module_config?: Json | null
           name: string
           organization_id: string
-          role_permissions?: Json | null
           stage?: string | null
           updated_at?: string
         }
@@ -3406,7 +3404,6 @@ export type Database = {
           module_config?: Json | null
           name?: string
           organization_id?: string
-          role_permissions?: Json | null
           stage?: string | null
           updated_at?: string
         }

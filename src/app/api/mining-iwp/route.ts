@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { cargarBanco } from '@/lib/cwp-banco';
+import { puedeTransicionar, semanaIso, normalizarEstado } from '@/lib/iwp-estado';
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient();
@@ -111,12 +112,12 @@ export async function POST(req: NextRequest) {
   const iwp_id = `${cwp_id}-IWP-${String(seq).padStart(2, '0')}`;
 
   const hh_est = Array.isArray(actividades) ? actividades.reduce((s: number, a: any) => s + (Number(a.hh_asignadas_iwp) || 0), 0) : 0;
-  const fecha_ini = new Date(fecha_inicio_plan);
-  const semana = Math.ceil((fecha_ini.getDate() + new Date(fecha_ini.getFullYear(), fecha_ini.getMonth(), 1).getDay()) / 7);
 
   const { data: newIwp, error: iwpErr } = await sb.from('mining_iwp').insert({
     project_id, cwp_id, iwp_id, descripcion, descripcion_scope: descripcion_scope || null, fecha_inicio_plan, fecha_fin_plan, crew_size: crew_size || null,
-    hh_estimadas: hh_est, semana_ejecucion: semana, status: 'Planificado', avance_fisico_pct: 0,
+    // La semana ISO es la que agrupa el Skyline. Antes acá se calculaba la semana *del mes*
+    // (1–5) mientras la apertura escribía `2026-W31`: los paquetes caían en columnas distintas.
+    hh_estimadas: hh_est, semana_ejecucion: semanaIso(fecha_inicio_plan), status: 'PLANIFICADO', avance_fisico_pct: 0,
     imagenes: Array.isArray(imagenes) ? imagenes : [], creado_por: user.email, fecha_creacion: new Date().toISOString(),
   }).select().single();
 
@@ -148,12 +149,37 @@ export async function PATCH(req: NextRequest) {
   if (!project_id || !iwp_id) return NextResponse.json({ error: 'Missing project_id or iwp_id' }, { status: 400 });
 
   const sb = supabase as any;
+
+  // ── El gate de liberación ──
+  //
+  // Este PATCH aceptaba cualquier `status` que le mandaran. La regla dura del WorkFace
+  // Planning —un IWP no se libera a terreno con restricciones abiertas— tiene que vivir en el
+  // servidor: es lo único que separa un backlog ejecutable de una lista de buenas intenciones.
+  if ('status' in updates) {
+    const [actualRes, pendRes, partRes] = await Promise.all([
+      sb.from('mining_iwp').select('status').eq('project_id', project_id).eq('iwp_id', iwp_id).maybeSingle(),
+      sb.from('mining_iwp_constraint').select('id', { count: 'exact', head: true })
+        .eq('project_id', project_id).eq('iwp_id', iwp_id).eq('cleared', false),
+      sb.from('mining_iwp_partida').select('id', { count: 'exact', head: true })
+        .eq('project_id', project_id).eq('iwp_id', iwp_id),
+    ]);
+    if (!actualRes.data) return NextResponse.json({ error: `El IWP ${iwp_id} no existe en este proyecto` }, { status: 404 });
+
+    const veredicto = puedeTransicionar(actualRes.data.status, updates.status, {
+      constraintsPendientes: pendRes.count ?? 0,
+      tienePartidas: (partRes.count ?? 0) > 0,
+    });
+    if (!veredicto.ok) return NextResponse.json({ error: veredicto.motivo }, { status: 409 });
+
+    updates.status = normalizarEstado(updates.status);
+  }
+
   const { error } = await sb.from('mining_iwp')
     .update({ ...updates, fecha_ultima_actualizacion: new Date().toISOString() })
     .eq('project_id', project_id).eq('iwp_id', iwp_id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, status: updates.status });
 }
 
 export async function DELETE(req: NextRequest) {

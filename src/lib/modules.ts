@@ -3,7 +3,7 @@
 // `projects.active_modules` guarda un arreglo con las `key` de los módulos habilitados por proyecto.
 
 export type ModuleKey =
-  | 'panel' | 'mineria' | 'planificacion' | 'trisemanal' | 'recursos'
+  | 'panel' | 'mineria' | 'apertura' | 'planificacion' | 'trisemanal' | 'recursos'
   | 'calidad' | 'medio-ambiente' | 'sso' | 'equipos' | 'rrhh'
   | 'conciliacion' | 'estado-pago' | 'setup';
 
@@ -23,6 +23,9 @@ export interface ModuleDef {
 export const MODULE_CATALOG: ModuleDef[] = [
   { key: 'panel',          label: 'Panel',          category: 'nucleo', descripcion: 'Tablero ejecutivo con KPIs, curva S y avance por disciplina.', alwaysOn: true },
   { key: 'mineria',        label: 'AWP Minería',    category: 'awp', descripcion: 'Explorador CWP con visor 3D BIM, itemizado, planos, programa e IWP.', requiereDatos: true },
+  // La apertura es la acción que da sentido al resto del producto, así que vive en la barra y
+  // no escondida dentro de una pestaña del explorador.
+  { key: 'apertura',       label: 'Apertura',       category: 'awp', descripcion: 'Sala de Apertura: qué CWP quebrar en IWP esta semana, en qué orden y qué falta en los bloqueados.', requiereDatos: true },
   { key: 'planificacion',  label: 'Planificación',  category: 'awp', descripcion: 'Programa maestro / Carta Gantt por CWP y disciplina.', requiereDatos: true },
   { key: 'trisemanal',     label: 'Trisemanal',     category: 'awp', descripcion: 'Planificación intermedia (3WLA): actividades, HH y restricciones por CWP.', requiereDatos: true },
   { key: 'recursos',       label: 'Recursos',       category: 'awp', descripcion: 'Estadísticas por disciplina y curva de dotación estimada.', requiereDatos: true },

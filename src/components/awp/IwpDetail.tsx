@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2, X, Plus, Calendar, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Loader2, X, Plus, Calendar, AlertCircle, CheckCircle2, Send } from 'lucide-react';
+import { metaDe, transicionesManuales, ESTADO_META, normalizarEstado } from '@/lib/iwp-estado';
+import { TIPOS_CONSTRAINT, CONSTRAINT_META, metaTipo, diasParaVencer } from '@/lib/constraints';
 
 interface IwpData {
   iwp: any;
@@ -40,10 +42,14 @@ export default function IwpDetail({ projectId, iwpId, onClose, onChanged }: Prop
   const [savingAvance, setSavingAvance] = useState(false);
 
   // Constraints
-  const [consTipo, setConsTipo] = useState('IFC');
+  const [consTipo, setConsTipo] = useState<string>('INGENIERIA');
   const [consDesc, setConsDesc] = useState('');
   const [consFecha, setConsFecha] = useState('');
+  const [consResp, setConsResp] = useState('');
   const [savingCons, setSavingCons] = useState(false);
+
+  // Estado del paquete
+  const [moviendo, setMoviendo] = useState(false);
 
   const reload = () => {
     fetch(`/api/mining-iwp?project_id=${projectId}&iwp_id=${iwpId}`)
@@ -82,13 +88,34 @@ export default function IwpDetail({ projectId, iwpId, onClose, onChanged }: Prop
       const res = await fetch('/api/mining-iwp-constraint', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: projectId, iwp_id: iwpId, tipo: consTipo, descripcion: consDesc || null, fecha_necesaria: consFecha || null }),
+        body: JSON.stringify({
+          project_id: projectId, iwp_id: iwpId, tipo: consTipo,
+          descripcion: consDesc || null, fecha_necesaria: consFecha || null,
+          responsable: consResp || null,
+        }),
       });
       if (!res.ok) throw new Error((await res.json()).error);
-      setConsDesc(''); setConsFecha('');
+      setConsDesc(''); setConsFecha(''); setConsResp('');
       reload(); onChanged?.();
     } catch (e) { setError(String(e)); }
     finally { setSavingCons(false); }
+  };
+
+  // El servidor es quien manda: acá se muestra el motivo tal cual viene, porque es el mensaje
+  // que le explica al superintendente por qué el paquete no puede salir a terreno.
+  const handleMoverEstado = async (destino: string) => {
+    setMoviendo(true); setError(null);
+    try {
+      const res = await fetch('/api/mining-iwp', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, iwp_id: iwpId, status: destino }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d?.error ?? 'No se pudo cambiar el estado');
+      reload(); onChanged?.();
+    } catch (e: any) { setError(String(e.message ?? e)); }
+    finally { setMoviendo(false); }
   };
 
   const handleReportarAvance = async () => {
@@ -160,17 +187,64 @@ export default function IwpDetail({ projectId, iwpId, onClose, onChanged }: Prop
   const partidas = data.partidas ?? [];
   const duracion = iwp.fecha_fin_plan && iwp.fecha_inicio_plan ? Math.ceil((new Date(iwp.fecha_fin_plan).getTime() - new Date(iwp.fecha_inicio_plan).getTime()) / 86400000) : 0;
   const hoyCons = constraints.filter((c: any) => !c.cleared);
+  const estado = metaDe(iwp.status);
+  // LISTO_PARA_TRABAJO no se ofrece como botón: lo calcula el servidor cuando cae la última
+  // restricción. Que una persona pueda declararlo a mano sería poder mentirle al backlog.
+  const destinos = transicionesManuales(iwp.status);
   // La regla del WFP: el paquete se cierra dentro del ciclo de turno o no es un IWP.
   const excedeTurno = turno && iwp.duracion_dias != null && Number(iwp.duracion_dias) > Number(turno.dias_trabajo);
 
   return (
     <div style={{ borderRadius: 14, border: '2px solid #EEEEEE', backgroundColor: 'white', overflow: 'hidden' }}>
-      <div style={{ backgroundColor: '#FAFAFA', borderBottom: '1px solid #EEEEEE', padding: '14px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 900, color: '#1A1A1A' }}>{iwp.iwp_id}</div>
-          <div style={{ fontSize: 10.5, color: '#757575' }}>{iwp.descripcion}</div>
+      <div style={{ backgroundColor: '#FAFAFA', borderBottom: '1px solid #EEEEEE', padding: '14px 16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 900, color: '#1A1A1A' }}>{iwp.iwp_id}</span>
+              <span title={estado.ayuda} style={{ fontSize: 8.5, fontWeight: 900, padding: '2px 8px', borderRadius: 999, backgroundColor: estado.fondo, color: estado.texto, textTransform: 'uppercase' }}>
+                {estado.label}
+              </span>
+            </div>
+            <div style={{ fontSize: 10.5, color: '#757575' }}>{iwp.descripcion}</div>
+          </div>
+          {onClose && <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 8 }}><X style={{ width: 18, height: 18, color: '#9E9E9E' }} /></button>}
         </div>
-        {onClose && <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 8 }}><X style={{ width: 18, height: 18, color: '#9E9E9E' }} /></button>}
+
+        {/* El gate de liberación. La regla dura del WorkFace Planning vive en el servidor; acá
+            sólo se anticipa para no ofrecer un botón que va a fallar. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+          {destinos.length === 0 && (
+            <span style={{ fontSize: 10, color: '#9E9E9E' }}>Este paquete ya está cerrado: no hay más movimientos.</span>
+          )}
+          {destinos.map(d => {
+            const meta = ESTADO_META[d];
+            const bloquea = d === 'LIBERADO' && hoyCons.length > 0;
+            return (
+              <button
+                key={d} onClick={() => handleMoverEstado(d)} disabled={moviendo || bloquea}
+                title={bloquea
+                  ? `No se puede liberar: quedan ${hoyCons.length} restricción(es) abierta(s).`
+                  : meta.ayuda}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px',
+                  fontSize: 10, fontWeight: 800, borderRadius: 8, cursor: bloquea ? 'not-allowed' : 'pointer',
+                  border: `1px solid ${d === 'LIBERADO' ? meta.color : '#E5E7EB'}`,
+                  backgroundColor: d === 'LIBERADO' && !bloquea ? meta.color : 'white',
+                  color: d === 'LIBERADO' && !bloquea ? 'white' : bloquea ? '#BDBDBD' : '#374151',
+                  opacity: moviendo ? 0.6 : 1,
+                }}
+              >
+                {d === 'LIBERADO' && <Send style={{ width: 11, height: 11 }} />}
+                {d === 'LIBERADO' ? 'Liberar a terreno' : `Marcar ${meta.label.toLowerCase()}`}
+              </button>
+            );
+          })}
+          {hoyCons.length > 0 && (
+            <span style={{ fontSize: 9.5, color: '#B45309', fontWeight: 700, marginLeft: 4 }}>
+              {hoyCons.length} restricción(es) abierta(s) frenan la liberación
+            </span>
+          )}
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #FF0000', backgroundColor: '#FAFAFA' }}>
@@ -279,27 +353,51 @@ export default function IwpDetail({ projectId, iwpId, onClose, onChanged }: Prop
               <span style={{ fontSize: 12, fontWeight: 700, color: '#1A1A1A' }}>Restricciones ({constraints.length})</span>
               {hoyCons.length > 0 && <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: '#A00000', fontWeight: 700 }}><AlertCircle style={{ width: 12, height: 12 }} /> {hoyCons.length} abiertas</span>}
             </div>
-            {constraints.map((c: any, i: number) => (
-              <div key={i} style={{ borderRadius: 8, border: c.cleared ? '1px solid #E0E0E0' : '1px solid #FDE68A', backgroundColor: c.cleared ? '#FAFAFA' : 'white', padding: '10px 12px', opacity: c.cleared ? 0.65 : 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                  <button onClick={() => handleToggleConstraint(c)} title={c.cleared ? 'Reabrir' : 'Marcar despejado'} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'inline-flex' }}>
-                    {c.cleared ? <CheckCircle2 style={{ width: 14, height: 14, color: '#166534' }} /> : <AlertCircle style={{ width: 14, height: 14, color: '#B45309' }} />}
-                  </button>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#1A1A1A' }}>{c.tipo}</span>
-                  <span style={{ fontSize: 9, color: '#757575', marginLeft: 'auto' }}>{c.cleared ? `✓ Despejado ${c.despejado_por ? 'por ' + c.despejado_por : ''}` : `vence ${fecha(c.fecha_necesaria)}`}</span>
+            {constraints.map((c: any, i: number) => {
+              const tm = metaTipo(c.tipo);
+              const dias = c.cleared ? null : diasParaVencer(c.fecha_necesaria);
+              const vencida = dias != null && dias < 0;
+              return (
+                <div key={i} style={{ borderRadius: 8, border: c.cleared ? '1px solid #E0E0E0' : `1px solid ${vencida ? '#FCA5A5' : '#FDE68A'}`, backgroundColor: c.cleared ? '#FAFAFA' : vencida ? '#FFF5F5' : 'white', padding: '10px 12px', opacity: c.cleared ? 0.65 : 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+                    <button onClick={() => handleToggleConstraint(c)} title={c.cleared ? 'Reabrir' : 'Marcar despejado'} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'inline-flex' }}>
+                      {c.cleared ? <CheckCircle2 style={{ width: 14, height: 14, color: '#166534' }} /> : <AlertCircle style={{ width: 14, height: 14, color: vencida ? '#DC2626' : '#B45309' }} />}
+                    </button>
+                    <span title={tm.ayuda} style={{ fontSize: 9, fontWeight: 900, padding: '2px 7px', borderRadius: 999, color: 'white', backgroundColor: tm.color }}>
+                      {tm.label}
+                    </span>
+                    {tm.critica && !c.cleared && (
+                      <span title="Restricción crítica del estándar COAA: documentos, materiales y andamios son las que más veces matan un IWP." style={{ fontSize: 8, fontWeight: 900, padding: '2px 6px', borderRadius: 999, backgroundColor: '#FEE2E2', color: '#A00000' }}>
+                        CRÍTICA
+                      </span>
+                    )}
+                    <span style={{ fontSize: 9, color: '#757575' }}>{c.depto ?? tm.depto}{c.responsable ? ` · ${c.responsable}` : ''}</span>
+                    <span style={{ fontSize: 9, marginLeft: 'auto', color: vencida ? '#DC2626' : '#757575', fontWeight: vencida ? 700 : 400 }}>
+                      {c.cleared
+                        ? `✓ Despejado ${c.despejado_por ? 'por ' + c.despejado_por : ''}`
+                        : dias == null ? 'sin fecha comprometida'
+                        : vencida ? `vencida hace ${Math.abs(dias)} d` : `vence en ${dias} d · ${fecha(c.fecha_necesaria)}`}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 10, color: '#33475B' }}>{c.descripcion}</div>
                 </div>
-                <div style={{ fontSize: 10, color: '#33475B' }}>{c.descripcion}</div>
-              </div>
-            ))}
+              );
+            })}
             <div style={{ borderRadius: 8, border: '1px dashed #E0E0E0', padding: '10px 12px', marginTop: 4 }}>
               <div style={{ fontSize: 9.5, fontWeight: 900, color: '#757575', textTransform: 'uppercase', marginBottom: 8 }}>Agregar restricción</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr 130px auto', gap: 8 }}>
-                <select value={consTipo} onChange={e => setConsTipo(e.target.value)} style={{ padding: '7px 8px', fontSize: 10.5, border: '1px solid #EEEEEE', borderRadius: 8 }}>
-                  {['IFC', 'MATERIAL', 'PERMISO', 'EQUIPO', 'PREDECESORA', 'OTRO'].map(t => <option key={t} value={t}>{t}</option>)}
+              <div style={{ display: 'grid', gridTemplateColumns: '150px 1fr 130px 140px auto', gap: 8 }}>
+                <select value={consTipo} onChange={e => setConsTipo(e.target.value)} title={CONSTRAINT_META[consTipo as keyof typeof CONSTRAINT_META]?.ayuda} style={{ padding: '7px 8px', fontSize: 10.5, border: '1px solid #EEEEEE', borderRadius: 8 }}>
+                  {TIPOS_CONSTRAINT.map(t => (
+                    <option key={t} value={t}>{CONSTRAINT_META[t].critica ? '● ' : ''}{CONSTRAINT_META[t].label}</option>
+                  ))}
                 </select>
-                <input type="text" value={consDesc} onChange={e => setConsDesc(e.target.value)} placeholder="Descripción" style={{ padding: '7px 10px', fontSize: 10.5, border: '1px solid #EEEEEE', borderRadius: 8 }} />
-                <input type="date" value={consFecha} onChange={e => setConsFecha(e.target.value)} style={{ padding: '7px 8px', fontSize: 10.5, border: '1px solid #EEEEEE', borderRadius: 8 }} />
+                <input type="text" value={consDesc} onChange={e => setConsDesc(e.target.value)} placeholder="Qué falta exactamente" style={{ padding: '7px 10px', fontSize: 10.5, border: '1px solid #EEEEEE', borderRadius: 8 }} />
+                <input type="date" value={consFecha} onChange={e => setConsFecha(e.target.value)} title="Fecha comprometida de cierre" style={{ padding: '7px 8px', fontSize: 10.5, border: '1px solid #EEEEEE', borderRadius: 8 }} />
+                <input type="text" value={consResp} onChange={e => setConsResp(e.target.value)} placeholder="Responsable" title="A quién se le reclama. Sin dueño la restricción no se cierra sola." style={{ padding: '7px 10px', fontSize: 10.5, border: '1px solid #EEEEEE', borderRadius: 8 }} />
                 <button onClick={handleAddConstraint} disabled={savingCons} style={{ padding: '7px 12px', fontSize: 10.5, fontWeight: 700, backgroundColor: '#FF0000', color: 'white', border: 'none', borderRadius: 8, cursor: 'pointer' }}><Plus style={{ width: 12, height: 12 }} /></button>
+              </div>
+              <div style={{ fontSize: 9, color: '#9E9E9E', marginTop: 6 }}>
+                Se asigna a <b>{CONSTRAINT_META[consTipo as keyof typeof CONSTRAINT_META]?.depto}</b> según el catálogo COAA. Las marcadas con ● son las críticas del estándar.
               </div>
             </div>
           </div>

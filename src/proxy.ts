@@ -43,11 +43,15 @@ export async function proxy(request: NextRequest) {
   const isAuthRoute = pathname.startsWith('/auth')
   const isResetPassword = pathname === '/auth/reset-password'
 
-  // Redirigir a login si no hay sesión activa
+  // Redirigir a login si no hay sesión activa. Con HILO_ACCESO_DIRECTO_EMAIL puesta
+  // (modo tablet de terreno) se salta la pantalla de login y se abre la sesión sola;
+  // ver src/app/auth/acceso-directo/route.ts para la advertencia de seguridad.
   if (!user && !isAuthRoute) {
-    const loginUrl = request.nextUrl.clone()
-    loginUrl.pathname = '/auth/login'
-    return NextResponse.redirect(loginUrl)
+    const destino = request.nextUrl.clone()
+    destino.pathname = process.env.HILO_ACCESO_DIRECTO_EMAIL
+      ? '/auth/acceso-directo'
+      : '/auth/login'
+    return NextResponse.redirect(destino)
   }
 
   // Redirigir a organizaciones si ya está autenticado y va a login
@@ -63,6 +67,9 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // El manifiesto lo pide iOS/Android sin cookies al instalar la app: si cae en el
+    // guard de sesión responde un redirect al login y el sistema no la reconoce como
+    // instalable.
+    '/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|webmanifest)$).*)',
   ],
 }

@@ -236,3 +236,105 @@ La base queda con 50 tablas `mining_*` + 4 de plataforma + `bot_tools_dinamicas`
   `mining_pwp`, `mining_swp`, `mining_obras_crosswalk`…). A diferencia del caso de arriba,
   **varias tienen datos reales**: pueden ser cargas esperando su interfaz, no basura.
   Requieren revisión caso a caso.
+
+---
+
+## 2026-08-08 · Cuarta limpieza — auditoría completa código ↔ base
+
+**Resultado:** 10 rutas de API + `admin-sync` + `lib/aps-oss` + 6 scripts + 7 dumps SQL de la
+raíz fuera del repo · la base pasa de 69 a **47 tablas** en `public` (13 archivadas, 3 borradas)
+· 5 enums y 3 funciones `SECURITY DEFINER` expuestas por REST eliminadas · el log de cambios
+baja de 178.469 filas a 63 (las cargas masivas quedaron archivadas) · **se aplicó por fin
+`08-anexo7-atributos.sql`** (la pantalla de Atributos deja de tardar ~7 s).
+`typecheck` 0 antes y después. Migraciones: `limpieza_auditoria_2026_08_08` y `anexo7_atributos`;
+SQL en [scripts/sql/09-limpieza-auditoria.sql](../scripts/sql/09-limpieza-auditoria.sql).
+
+### Método
+
+El de la tercera limpieza, completo y en ambas direcciones: (1) `fetch('/api/…')` y `/api/…` en
+hrefs del front → APIs vivas; (2) `.from('tabla')` y `.rpc('fn')` en `src` y `scripts` → objetos
+de base vivos; (3) conteo real de filas y última actividad; (4) FKs entrantes antes de cualquier
+DROP; (5) definición de vistas/funciones antes de sentenciar sus tablas — `mining_swp_resumen`
+devuelve `pids[]` y parecía leer `mining_awp_pid`, pero su definición mostró que los arma desde
+`mining_awp_linea.pid_codigo`: la tabla estaba de verdad muerta.
+
+### Rutas de API eliminadas (10) — sin un solo consumidor
+
+| Ruta | Evidencia extra |
+|---|---|
+| `project-health` | además **rota**: llamaba al RPC `project_data_health`, que no existe → 500 siempre. Salió del smoke y entró `mining-apertura` |
+| `4d-schedule` | config 4D que nadie escribe ni lee |
+| `mining-cwp-banco` | era del wizard viejo; la Mesa importa `cargarBanco` directo |
+| `mining-iwp-ficha`, `mining-iwp-elemento` | era la ficha IWP del wizard; `mining_iwp_elemento` tenía 0 filas |
+| `mining-reporte/html` | reemplazado por `cwp-ficha/[cwp_id]/print` |
+| `project-column-mapping` | el onboarding usa `project-ingest` |
+| `mining-elementos/vincular-al-cwp`, `/agregar-sin-moniker`, `/tags` | del editor BIM anterior a `mineria/elementos`; el log confirma que sus orígenes (`vincular_4d_*`, `alta_sin_moniker_*`) no se escriben desde el refactor |
+| `autodesk/oss/models` (+`/status`) y `lib/aps-oss.ts` | usaban el signed-upload **deprecado por Autodesk (responde 400)** — lo documenta `scripts/aps-subir-modelo.mjs`, que es el camino vivo |
+
+También: `admin-sync/` + `lib/project-constants.ts` (siembra hardcodeada que contradice el
+multi-tenant y apuntaba a `/api/projects/seed`, borrada hace dos limpiezas), `public/costanera/`
+(JSON de un demo sin una sola referencia), `docs/ReactFlow_Migration.md` (reactflow salió en la
+segunda limpieza).
+
+### Scripts eliminados (6)
+
+`bulk-import-xer.mjs` (escribía en `program_activities`, borrada en la tercera limpieza — roto),
+`import-epv1.ts` y `exportProjectData.ts` (migradores del sistema pre-`mining_*`),
+`import-planos-aconex.mjs` (reemplazado por `aconex-cargar-metadatos.mjs`), `analyze-xer.ts`
+(exploración puntual), `grafo-datos.mjs` (visualización one-off con conteos hardcodeados de julio).
+Y los 7 dumps `*.sql` de la raíz: documentaban el esquema de hace tres generaciones, con tablas
+TIDP que ya no existen; el registro real son las migraciones de `scripts/sql/`.
+
+### Base de datos
+
+**Nada con datos se borró.** Se creó el esquema `archivo` (PostgREST no lo expone; se revierte
+con `ALTER TABLE archivo.x SET SCHEMA public`) y allá se movieron:
+
+- Los 4 respaldos `_respaldo_*` de agosto.
+- 9 tablas con datos y cero código: `mining_awp_pid`, `mining_bmp_partidas`, `mining_condiciones`,
+  `mining_doc_referencia`, `mining_epr` (836 filas), `mining_mapeo_area_cwa`,
+  `mining_obras_crosswalk`, `mining_partidas` (477), `mining_pwp`.
+- El bot completo (`bot_tools_dinamicas`, `mining_bot_*`): sin código en el repo y último
+  mensaje el 2026-06-26.
+- `mining_cambios_log` < 2026-08-01 → `archivo.mining_cambios_log_carga_junjul` (178.469 filas
+  de pintado masivo y scripts de jun–jul; el log vivo queda con la actividad real de usuarios).
+
+Se **borraron** (vacías y sin código): `mining_awp_linea_equipo`, `mining_awp_piping_elemento`,
+`mining_iwp_elemento`. Y los objetos muertos: vista `v_mining_brechas`, funciones
+`set_bim_linker_key`, `extract_cwp_combinations`, `create_organization`,
+`mining_bot_schema_map` (las tres primeras eran `SECURITY DEFINER` invocables por cualquier
+usuario autenticado vía REST — warning del linter de Supabase que esto cierra), y 5 de los 6
+enums ISO sin columna (`cde_status`, `constraint_status`, `constraint_type`, `deliverable_type`,
+`tidp_status`). `tidp_discipline` se conserva: es el plan para `project_members.departamento`.
+
+**Siguen vivas aunque no lo parezcan:** `mining_dotacion` y `mining_personal` son **vistas**
+(el `.from('mining_dotacion')` de `mining-kpi` que parecía un bug, no lo es);
+`mining_awp_linea`/`mining_awp_equipo` las lee `mining-sistemas/detalle` y `mining_swp_resumen`;
+`mining_avance_pasos`, `mining_ewp_ifc`, `mining_cwp_ficha` e `mining_iwp_*` están vacías pero
+son el flujo WFP/Estado de Pago esperando datos; todo el juego `servicio_*`/esquema `pub` es la
+arquitectura de servicios por departamento (decisión estratégica, se queda).
+
+### Bugs corregidos de paso
+
+- `projects/[project_id]/page.tsx` redirigía siempre a `mineria`, módulo que un proyecto en
+  licitación no tiene activo → ahora a `panel` (siempre activo).
+- Aplicado `08-anexo7-atributos.sql` y pasados los 17 atributos de `propuesta` a `columna` en
+  `src/lib/atributos-bim.ts`.
+
+### Segunda ronda (mismo día, autorizada por el dueño)
+
+- **`/proyectos` se fusionó con `/dashboard`**: mostraban la misma grilla en dos URLs.
+  `CarteraMadurez` vive ahora en el dashboard, `/proyectos` quedó como redirect y la barra
+  lateral perdió el ítem duplicado.
+- **Borrados los 4 IWP de prueba del Puerto** (`312101.D001-IWP-001/002/03`,
+  `312101.S001-IWP-001`) con sus 5 actividades y 7 restricciones: ensuciaban Skyline y KPI
+  mientras la apertura oficial va en 0%. `mining_iwp` queda en cero, listo para la primera
+  apertura real.
+- **`projects.role_permissions` eliminada** (migración `drop_role_permissions`): hablaba de
+  módulos que no existen en `ModuleKey` y nadie la leía; el refactor ya había sacado la única
+  escritura. La autorización efectiva es la RLS por organización.
+- **El login no aparece más**: `HILO_ACCESO_DIRECTO_EMAIL` activa en `.env.local` hace que el
+  proxy abra la sesión solo (`/auth/acceso-directo`). La página `/auth/login` se conserva como
+  respaldo de emergencia (si falla la llave de servicio) y para cuando entren más usuarios.
+- Protección de contraseñas filtradas (HaveIBeenPwned): **el dueño decidió no activarla** por
+  ahora.

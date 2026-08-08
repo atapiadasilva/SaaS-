@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Pickaxe, Settings2, CalendarRange, CalendarClock, Link2, Receipt, ShieldCheck, Leaf, HardHat, Truck, Users, LayoutDashboard, BarChart3 } from 'lucide-react';
+import { Pickaxe, Settings2, CalendarRange, CalendarClock, Link2, Receipt, ShieldCheck, Leaf, HardHat, Truck, Users, LayoutDashboard, BarChart3, Split } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const MODULE_NAV = {
   panel:            { label: 'Panel',          icon: LayoutDashboard, path: 'panel' },
   mineria:          { label: 'AWP Minería',    icon: Pickaxe,       path: 'mineria' },
+  apertura:         { label: 'Apertura',       icon: Split,         path: 'mineria/apertura' },
   planificacion:    { label: 'Planificación',  icon: CalendarRange, path: 'planificacion' },
   trisemanal:       { label: 'Trisemanal',     icon: CalendarClock, path: 'trisemanal' },
   recursos:         { label: 'Recursos',       icon: BarChart3,     path: 'recursos' },
@@ -31,6 +32,16 @@ export function ProjectNavBar({ orgSlug, projectId, activeModuleKeys }: Props) {
   const pathname = usePathname();
   const base = `/${orgSlug}/projects/${projectId}`;
 
+  // Hay módulos que cuelgan de otro (`mineria/apertura` vive bajo `mineria`), así que marcar
+  // como activo todo lo que sea prefijo encendería los dos a la vez. Gana el más específico:
+  // el href más largo que calce con la ruta actual.
+  const activo = activeModuleKeys
+    .map(key => MODULE_NAV[key as keyof typeof MODULE_NAV])
+    .filter(Boolean)
+    .map(mod => `${base}/${mod.path}`)
+    .filter(href => pathname === href || pathname.startsWith(href + '/'))
+    .sort((a, b) => b.length - a.length)[0];
+
   return (
     <nav className="flex items-center gap-1">
       {activeModuleKeys.map(key => {
@@ -38,7 +49,7 @@ export function ProjectNavBar({ orgSlug, projectId, activeModuleKeys }: Props) {
         if (!mod) return null;
         const Icon = mod.icon;
         const href = `${base}/${mod.path}`;
-        const isActive = pathname === href || pathname.startsWith(href + '/');
+        const isActive = href === activo;
         return (
           <Link
             key={key}

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import ProjectsGrid from "@/components/organizations/ProjectsGrid";
+import CarteraMadurez from "@/components/organizations/CarteraMadurez";
 
 type Stage = "licitacion" | "operacion" | "cierre";
 
@@ -232,7 +233,12 @@ export default async function DashboardPage({
             </Link>
           </div>
         ) : (
-          <ProjectsGrid projects={allProjects} orgSlug={org_slug} isOwner={isOwner} />
+          <>
+            <ProjectsGrid projects={allProjects} orgSlug={org_slug} isOwner={isOwner} />
+            <div className="mt-10">
+              <CarteraMadurez orgId={org.id} orgSlug={org_slug} />
+            </div>
+          </>
         )}
       </div>
     </div>

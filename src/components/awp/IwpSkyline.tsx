@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { X, Loader2, Lock, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ESTADOS_IWP, ESTADO_META, metaDe, normalizarEstado, enBacklogEjecutable } from '@/lib/iwp-estado';
 
 interface SkyIwp {
   iwp_id: string; cwp_id: string; descripcion: string | null; status: string;
@@ -13,16 +14,18 @@ interface SkyIwp {
 
 const fn = (v: number) => Math.round(v).toLocaleString('es-CL');
 
-// Color del bloque según el estándar Skyline (WorkPacks/O3):
-// verde=completado · ámbar=en ejecución · azul=constraint-free (listo) ·
-// gris=planificado sin restricciones pendientes · rojo=con constraints pendientes · morado=hold
-function blockStyle(i: SkyIwp) {
+// Color del bloque según el estándar Skyline (WorkPacks/O3). Sale del vocabulario compartido
+// en `lib/iwp-estado`: antes esto era un mapa a mano que comparaba strings exactos, y los IWP
+// creados por el asistente —que escribía 'Planificado' con minúsculas— caían todos al gris.
+function blockStyle(i: SkyIwp): React.CSSProperties {
   const pendientes = i.constraints.total - i.constraints.despejados;
-  if (i.status === 'COMPLETADO') return 'bg-green-500 text-white';
-  if (i.status === 'EN_EJECUCION') return 'bg-amber-400 text-amber-950';
-  if (i.status === 'HOLD') return 'bg-purple-500 text-white';
-  if (i.status === 'LISTO_PARA_TRABAJO') return 'bg-[#FF0000] text-white';
-  return pendientes > 0 ? 'bg-red-100 text-red-800 border border-red-300' : 'bg-slate-200 text-slate-700';
+  const m = metaDe(i.status);
+  // Un paquete todavía planificado y con restricciones abiertas se marca aparte: es lo que el
+  // superintendente tiene que ir a despejar para que entre al backlog.
+  if (normalizarEstado(i.status) === 'PLANIFICADO' && pendientes > 0) {
+    return { backgroundColor: '#FEE2E2', color: '#991B1B', border: '1px solid #FCA5A5' };
+  }
+  return { backgroundColor: m.fondo, color: m.texto, border: `1px solid ${m.color}33` };
 }
 
 export default function IwpSkyline({ projectId, onClose, onOpenIwp }: {
@@ -53,7 +56,7 @@ export default function IwpSkyline({ projectId, onClose, onOpenIwp }: {
     const all = rows ?? [];
     const libres = all.filter(i => i.constraints.total - i.constraints.despejados === 0 && i.status !== 'COMPLETADO');
     const bloqueados = all.filter(i => i.constraints.total - i.constraints.despejados > 0);
-    const backlogHH = all.filter(i => i.status === 'LISTO_PARA_TRABAJO').reduce((s, i) => s + (i.hh_estimadas ?? 0), 0);
+    const backlogHH = all.filter(i => enBacklogEjecutable(i.status)).reduce((s, i) => s + (i.hh_estimadas ?? 0), 0);
     return { total: all.length, libres: libres.length, bloqueados: bloqueados.length, backlogHH };
   }, [rows]);
 
@@ -74,13 +77,15 @@ export default function IwpSkyline({ projectId, onClose, onOpenIwp }: {
         <button onClick={onClose} className="p-2 rounded-lg hover:bg-red-50 text-[#757575] hover:text-[#A00000] relative"><X className="w-5 h-5" /></button>
       </div>
 
-      <div className="flex items-center gap-4 px-6 py-2 text-[10px] text-[#757575] border-b border-[#EEEEEE] shrink-0">
-        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-slate-200 inline-block" /> Planificado</span>
-        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-red-100 border border-red-300 inline-block" /> Con constraints pendientes</span>
-        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-[#FF0000] inline-block" /> Listo para trabajo</span>
-        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-400 inline-block" /> En ejecución</span>
-        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-green-500 inline-block" /> Completado</span>
-        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-purple-500 inline-block" /> Hold</span>
+      <div className="flex items-center gap-4 px-6 py-2 text-[10px] text-[#757575] border-b border-[#EEEEEE] shrink-0 flex-wrap">
+        <span className="flex items-center gap-1.5" title="Planificado y con restricciones abiertas: no entra al backlog.">
+          <span className="w-3 h-3 rounded inline-block" style={{ backgroundColor: '#FEE2E2', border: '1px solid #FCA5A5' }} /> Con restricciones
+        </span>
+        {ESTADOS_IWP.map(e => (
+          <span key={e} className="flex items-center gap-1.5" title={ESTADO_META[e].ayuda}>
+            <span className="w-3 h-3 rounded inline-block" style={{ backgroundColor: ESTADO_META[e].color }} /> {ESTADO_META[e].label}
+          </span>
+        ))}
       </div>
 
       <div className="flex-1 overflow-auto p-6 bg-white">
@@ -99,8 +104,9 @@ export default function IwpSkyline({ projectId, onClose, onOpenIwp }: {
                     <button
                       key={i.iwp_id}
                       onClick={() => onOpenIwp?.(i.cwp_id, i.iwp_id)}
-                      title={`${i.iwp_id}\n${i.descripcion ?? ''}\n${fn(i.hh_estimadas)} HH · ${i.avance_fisico_pct?.toFixed(0) ?? 0}% avance${pend ? `\n⚠ ${pend} constraint(s) pendiente(s)` : ''}`}
-                      className={cn('rounded-md px-2 py-1.5 text-left transition hover:scale-[1.03] hover:z-10', blockStyle(i))}
+                      title={`${i.iwp_id}\n${i.descripcion ?? ''}\n${metaDe(i.status).label} · ${fn(i.hh_estimadas)} HH · ${i.avance_fisico_pct?.toFixed(0) ?? 0}% avance${pend ? `\n⚠ ${pend} restricción(es) pendiente(s)` : ''}`}
+                      className={cn('rounded-md px-2 py-1.5 text-left transition hover:scale-[1.03] hover:z-10')}
+                      style={blockStyle(i)}
                     >
                       <div className="text-[9.5px] font-black truncate flex items-center gap-1">
                         {pend > 0 && <Lock className="w-2.5 h-2.5 shrink-0" />}

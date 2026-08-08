@@ -12,6 +12,13 @@
       "runtimeArgs": ["run", "dev"],
       "port": 3000,
       "autoPort": false
+    },
+    {
+      "name": "hilo-prod",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start", "--", "--port", "3200"],
+      "port": 3200,
+      "autoPort": false
     }
   ]
 }

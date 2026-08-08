@@ -31,6 +31,8 @@ export interface Elemento {
   este: number | null; norte: number | null; elevacion: number | null; valid_espacial: string | null;
   tiene_itemizado: string | null; tiene_bmp: string | null;
   requiere_alta_sp3d: boolean; guid_modelo: string | null;
+  /** Línea del itemizado a la que pertenece la pieza: es lo que la hace cobrable. */
+  item_itemizado: string | null;
 }
 
 export interface Bucket { cwpId: string | null; n: number; enCatalogo: boolean; }
@@ -105,7 +107,8 @@ export const COLUMN_DEFS: { key: string; label: string; get: (e: Elemento) => st
   { key: 'codigoBmp', label: 'Código BMP', get: e => e.codigo_bmp },
   { key: 'bmpNombre', label: 'BMP nombre', get: e => e.bmp_nombre },
   { key: 'material', label: 'Material', get: e => e.material },
-  { key: 'tagUnificado', label: 'Tag (BD_DataTools)', get: e => e.tag_unificado },
+  { key: 'tagUnificado', label: 'TAG', get: e => e.tag_unificado },
+  { key: 'itemItemizado', label: 'Partida itemizado', get: e => e.item_itemizado },
   { key: 'iwpId', label: 'IWP', get: e => e.iwp_id },
   { key: 'ewpId', label: 'EWP', get: e => e.ewp_id },
   { key: 'comwpId', label: 'COMWP', get: e => e.comwp_id },
@@ -132,8 +135,10 @@ export const COLUMN_DEFS: { key: string; label: string; get: (e: Elemento) => st
   { key: 'requiereAltaSp3d', label: 'Requiere alta SmartPlant', get: e => e.requiere_alta_sp3d ? 'SI' : 'NO' },
   { key: 'guidModelo', label: 'GUID modelo', get: e => e.guid_modelo },
 ];
-export const DEFAULT_COLS = ['nombre', 'disciplina', 'categoria', 'descripcion', 'sector', 'obra', 'avance'];
-export const COLS_STORAGE_KEY = 'mineria-elementos-columnas-v1';
+export const DEFAULT_COLS = ['tagUnificado', 'itemItemizado', 'nombre', 'disciplina', 'categoria', 'sector'];
+// v2: el TAG y la partida del itemizado pasaron a ser columnas de cabecera. Subir la versión es
+// lo único que hace que un navegador con preferencia guardada vea las nuevas.
+export const COLS_STORAGE_KEY = 'mineria-elementos-columnas-v2';
 
 // Moniker/CWA/CV/CWP no están en COLUMN_DEFS porque se renderizan hardcodeados en la tabla (siempre
 // visibles) — para el export se agregan como columnas "locked" (siempre incluidas, no se pueden destildar).

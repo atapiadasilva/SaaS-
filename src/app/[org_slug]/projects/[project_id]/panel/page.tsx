@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { Loader2, AlertTriangle, CheckCircle2, TrendingUp, FileText, Users, Truck, CalendarClock, Link2, Scale } from 'lucide-react';
+import Link from 'next/link';
+import { Loader2, AlertTriangle, CheckCircle2, TrendingUp, FileText, Users, Truck, CalendarClock, Link2, Scale, Split, ArrowRight } from 'lucide-react';
 
 // PANEL KPI — vista ejecutiva del contrato CC-06: economía, plazo, avance,
 // integridad de datos (que todo calce), entregables clave, bloqueantes,
@@ -33,6 +34,27 @@ const Card = ({ children, style }: any) => (
   <div style={{ borderRadius: 14, border: '2px solid #EEEEEE', backgroundColor: 'white', padding: '14px 16px', ...style }}>{children}</div>
 );
 
+const WfpCard = ({ label, valor, nota, barra, nivel }: {
+  label: string; valor: string; nota: string; barra?: number; nivel: 'ok' | 'warn' | 'crit';
+}) => {
+  const color = nivel === 'ok' ? '#22C55E' : nivel === 'warn' ? '#FBBF24' : '#FF0000';
+  return (
+    <Card>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Semaforo nivel={nivel} />
+        <span style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A', marginTop: 2 }}>{valor}</div>
+      {barra != null && (
+        <div style={{ height: 5, borderRadius: 999, backgroundColor: '#F0F0F0', overflow: 'hidden', marginTop: 5 }}>
+          <div style={{ height: '100%', width: `${Math.min(100, barra)}%`, backgroundColor: color, borderRadius: 999 }} />
+        </div>
+      )}
+      <div style={{ fontSize: 9.5, color: '#9E9E9E', marginTop: 4 }}>{nota}</div>
+    </Card>
+  );
+};
+
 const SecTitle = ({ icon: Icon, children }: any) => (
   <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '22px 0 10px' }}>
     <Icon style={{ width: 14, height: 14, color: '#FF0000' }} />
@@ -43,7 +65,9 @@ const SecTitle = ({ icon: Icon, children }: any) => (
 export default function PanelPage() {
   const params = useParams();
   const projectId = params.project_id as string;
+  const orgSlug = params.org_slug as string;
   const [d, setD] = useState<any | null>(null);
+  const [wfp, setWfp] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,6 +75,12 @@ export default function PanelPage() {
       .then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j?.error); return j; })
       .then(setD)
       .catch(e => setError(e.message));
+    // El pulso del WorkFace Planning va aparte: el panel no puede quedarse esperándolo, y si
+    // el proyecto todavía no tiene banco de cantidades esta fila simplemente no aparece.
+    fetch(`/api/mining-apertura?project_id=${projectId}`)
+      .then(async r => (r.ok ? r.json() : null))
+      .then(j => setWfp(j?.resumen ?? null))
+      .catch(() => setWfp(null));
   }, [projectId]);
 
   const hoy = new Date();
@@ -153,6 +183,55 @@ export default function PanelPage() {
           <div style={{ fontSize: 21, fontWeight: 900, color: '#FF0000' }}>{(d.consideraciones_abiertas ?? []).filter((c: any) => c.severidad === 'BLOQUEANTE').length}</div>
           <div style={{ fontSize: 9.5, color: '#9E9E9E' }}>{(d.consideraciones_abiertas ?? []).length} advertencias+bloqueantes</div></Card>
       </div>
+
+      {/* ── FILA 1.5: WorkFace Planning — el pulso de la ejecución ──
+          El panel medía el contrato pero no medía si el alcance estaba llegando a terreno:
+          se podía tener 100% de los datos cargados y 0% del proyecto aperturado en IWP, que
+          es exactamente lo que pasaba. */}
+      {wfp && (
+        <>
+          <SecTitle icon={Split}>WorkFace Planning — del CWP al frente de trabajo</SecTitle>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 12 }}>
+            <WfpCard
+              label="ALCANCE APERTURADO EN IWP"
+              valor={`${wfp.pct_aperturado}%`}
+              nota={`${num(wfp.hh_aperturadas)} de ${num(wfp.hh_banco)} HH del banco · ${wfp.n_iwp} IWP`}
+              barra={wfp.pct_aperturado}
+              nivel={wfp.pct_aperturado >= 60 ? 'ok' : wfp.pct_aperturado > 0 ? 'warn' : 'crit'}
+            />
+            <WfpCard
+              label="BACKLOG CONSTRAINT-FREE"
+              valor={wfp.semanas_backlog == null ? '—' : `${wfp.semanas_backlog} sem`}
+              nota={wfp.semanas_backlog == null
+                ? 'Sin cuadrillas activas no hay con qué medirlo'
+                : `${num(wfp.hh_backlog)} HH listas · meta 4 semanas (COAA)`}
+              barra={wfp.semanas_backlog == null ? 0 : Math.min(100, (wfp.semanas_backlog / 4) * 100)}
+              nivel={wfp.semanas_backlog == null ? 'crit' : wfp.semanas_backlog >= 4 ? 'ok' : wfp.semanas_backlog > 0 ? 'warn' : 'crit'}
+            />
+            <WfpCard
+              label="IWP EN RIESGO"
+              valor={num(wfp.iwp_en_riesgo)}
+              nota="Parten en menos de 14 días con restricciones abiertas"
+              nivel={wfp.iwp_en_riesgo === 0 ? 'ok' : 'crit'}
+            />
+            <Card style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontSize: 9, fontWeight: 900, color: '#757575' }}>CWP POR APERTURAR</div>
+                <div style={{ fontSize: 21, fontWeight: 900, color: '#1A1A1A' }}>{num(wfp.n_aperturables)}</div>
+                <div style={{ fontSize: 9.5, color: '#9E9E9E' }}>
+                  {num(wfp.n_completos)} completos · {num(wfp.n_bloqueados)} bloqueados
+                </div>
+              </div>
+              <Link
+                href={`/${orgSlug}/projects/${projectId}/mineria/apertura`}
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 10, padding: '8px 12px', borderRadius: 10, backgroundColor: '#FF0000', color: 'white', fontSize: 10.5, fontWeight: 900, textDecoration: 'none' }}
+              >
+                Ir a la Sala de Apertura <ArrowRight style={{ width: 12, height: 12 }} />
+              </Link>
+            </Card>
+          </div>
+        </>
+      )}
 
       {/* ── FILA 2: integridad — que todo calce ── */}
       <SecTitle icon={Scale}>Integridad de datos — que todo calce</SecTitle>

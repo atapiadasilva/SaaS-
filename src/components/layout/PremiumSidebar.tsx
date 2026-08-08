@@ -6,7 +6,6 @@ import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   Building2,
-  FolderTree,
   LogOut,
   Briefcase,
   Users,
@@ -17,9 +16,10 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
 // org-scoped items (prefixed with orgSlug)
+// Proyectos vivía como página aparte con la misma grilla que el dashboard;
+// se fusionaron en la cuarta limpieza (2026-08-08).
 const ORG_NAV_ITEMS = [
   { icon: Building2, label: "Organización", href: "/dashboard"  },
-  { icon: FolderTree, label: "Proyectos",   href: "/proyectos"  },
   { icon: Users,      label: "Equipo",      href: "/miembros"   },
 ];
 

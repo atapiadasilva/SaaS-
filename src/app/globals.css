@@ -57,6 +57,35 @@ body {
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
+/* ── App instalada en iOS ────────────────────────────────────────
+   Con `viewport-fit=cover` el contenido pasa bajo el notch y bajo la
+   barra de gestos. Estas variables dan el margen real de cada equipo;
+   en escritorio valen 0, así que no afectan la web. */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+@media (pointer: coarse) {
+  body {
+    /* Sin esto, arrastrar en el visor 3D rebota la página entera. */
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* iOS hace zoom automático al enfocar un campo con letra menor a 16px, y eso
+     descuadra la pantalla completa. Va con !important porque las utilidades de
+     Tailwind (text-sm, text-xs) ganan por especificidad a un selector de
+     elemento. Solo aplica en pantallas táctiles, así que no toca el escritorio. */
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
 /* Titulares de marca: condensada, mayúsculas, tracking amplio */
 .font-display {
   font-family: var(--font-display), var(--font-geist-sans), sans-serif;

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import { Loader2, BarChart3, Clock, Users, Layers, TrendingUp, Info } from 'lucide-react';
 
 interface Disc {
@@ -30,6 +31,7 @@ const col = (c: string) => COLOR[c] ?? '#9E9E9E';
 export default function RecursosPage() {
   const params = useParams();
   const projectId = params.project_id as string;
+  const orgSlug = params.org_slug as string;
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sel, setSel] = useState<Set<string>>(new Set()); // disciplinas resaltadas (vacío = todas)
@@ -49,11 +51,17 @@ export default function RecursosPage() {
 
   return (
     <div className="max-w-[1400px] mx-auto">
-      <div className="mb-4">
-        <h1 className="text-[22px] font-black text-[#1A1A1A] flex items-center gap-2">
-          <BarChart3 className="w-6 h-6 text-[#FF0000]" /> Recursos y <span className="text-[#FF0000]">Dotación</span>
-        </h1>
-        <p className="text-[11.5px] text-slate-500">HH del programa P333 por disciplina y curva de dotación estimada ({data.total.regla}).</p>
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-[22px] font-black text-[#1A1A1A] flex items-center gap-2">
+            <BarChart3 className="w-6 h-6 text-[#FF0000]" /> Recursos y <span className="text-[#FF0000]">Dotación</span>
+          </h1>
+          <p className="text-[11.5px] text-slate-500">HH del programa P333 por disciplina y curva de dotación estimada ({data.total.regla}).</p>
+        </div>
+        <Link href={`/${orgSlug}/projects/${projectId}/recursos/cuadrillas`}
+          className="shrink-0 inline-flex items-center gap-1.5 rounded-[10px] border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 hover:border-[#FF0000] hover:text-[#FF0000]">
+          <Users className="w-3.5 h-3.5" /> Turnos y cuadrillas
+        </Link>
       </div>
 
       {/* KPIs */}

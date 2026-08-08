@@ -19,7 +19,7 @@ const CHECKS = [
   { path: `/api/mining-estado-pago?project_id=${PID}`, ok: PROTECTED },
   { path: `/api/mining-conciliacion?project_id=${PID}`, ok: PROTECTED },
   { path: `/api/mining-elementos?project_id=${PID}`, ok: PROTECTED },
-  { path: `/api/project-health?project_id=${PID}`, ok: PROTECTED },
+  { path: `/api/mining-apertura?project_id=${PID}`, ok: PROTECTED },
 ];
 
 let failed = 0;

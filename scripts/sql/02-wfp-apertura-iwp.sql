@@ -1,4 +1,8 @@
 -- ─────────────────────────────────────────────────────────────────────────────
+-- APLICADA el 2026-08-02 en el proyecto lsoesbsrlfingfckozsq
+-- (migración `wfp_apertura_iwp`). Se conserva como registro.
+-- Ver también 03-iwp-partida-llave-bmp.sql, que la completa.
+--
 -- WFP · Apertura de CWP en IWP (rutina de Pull Planning)
 --
 -- El corazón del Workface Planning: tomar un CWP validado y quebrarlo en paquetes
