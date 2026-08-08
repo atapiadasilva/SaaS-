@@ -338,3 +338,37 @@ arquitectura de servicios por departamento (decisión estratégica, se queda).
   respaldo de emergencia (si falla la llave de servicio) y para cuando entren más usuarios.
 - Protección de contraseñas filtradas (HaveIBeenPwned): **el dueño decidió no activarla** por
   ahora.
+
+### Tercera ronda — revisión visual módulo por módulo
+
+Recorrido con pantallazos de las 18 pantallas (vía Claude in Chrome). Tres incongruencias
+de fondo que solo se ven mirando la aplicación funcionando:
+
+1. **El RLS se evaluaba por fila.** `user_organizations()`, `user_has_project_access()` y
+   `user_is_project_admin()` — las tres funciones que sostienen las políticas de las ~50
+   tablas `mining_*` — eran `VOLATILE` (el default de Postgres). Dentro de una política, una
+   función volátil no se puede cachear ni inline-ar: el planner la reevalúa **una vez por
+   fila**. La Ficha del CWP lanza ocho consultas en paralelo sobre 902 documentos y 2.524
+   líneas de itemizado, y todas morían con `canceling statement due to statement timeout`
+   — el usuario veía ese texto crudo de Postgres en pantalla. Marcadas `STABLE` (migración
+   `rls_helpers_stable`), la ficha carga completa. **No relaja la seguridad**: el filtro es
+   idéntico, solo se evalúa una vez por consulta. Es el arreglo de rendimiento más grande de
+   toda la auditoría y afecta a cada pantalla de la plataforma.
+2. **El feed diario se contaba dos y tres veces.** `mining_consideraciones` acumula una fila
+   por carga del reporte: 71 filas para 36 hechos reales. El Panel deduplicaba por su cuenta
+   en el cliente y los dashboards de departamento no deduplicaban nada, así que Calidad
+   mostraba tres veces el mismo ITP rechazado y el Panel una. La regla vive ahora en
+   `src/lib/consideraciones.ts` y la usan las dos APIs: Calidad pasa de 19 a 6 consideraciones
+   y los bloqueantes del Panel de 5 a 2.
+3. **Los cajones "por asignar" se contaban como paquetes.** El explorador decía 74 CWP contra
+   69 de la Sala de Apertura y de Conciliación, sobre el mismo proyecto: la diferencia eran
+   los cinco `SIN-CWP` placeholder. `esCwpPlaceholder()` en `src/lib/awp-codigo.ts`, junto al
+   resto de la codificación de paquetes. Ojo con el nombre del campo: `/api/mining-data`
+   devuelve `cwp`, no `cwp_id` — filtrar por la clave equivocada no da error, simplemente no
+   filtra nada.
+
+**Identidad visual.** Documentos, Sistemas, el Editor de Elementos y el modal de configuración
+BIM arrastraban los headers azul marino de la generación anterior (`#08203F`, `#0C1E4F`,
+`#1565C0`) sobre fondo gris `#EEF2F7`: pasan a blanco con acento rojo, como el resto. Las
+paletas de disciplina (los chips de colores del explorador y de Recursos) **se conservan**:
+ahí el color es dato, no decoración.
