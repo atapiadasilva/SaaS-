@@ -399,3 +399,38 @@ en la ficha que se le entrega al mandante. `CwpGantt` además pintaba de rojo el
 cuando el rojo es el "Liberado" en el resto de la plataforma. Las tres leen ahora
 `lib/iwp-estado`, que ya era la fuente única declarada: **la regla estaba escrita, pero no
 cableada.**
+
+### Quinta ronda — las constantes que cada pantalla reimplementaba
+
+Mismo patrón que la ronda anterior, ahora en color y formato. Dos módulos nuevos:
+`src/lib/disciplinas.ts` y `src/lib/formato.ts`.
+
+**Una disciplina, un color.** Había cuatro sistemas conviviendo: Estructura salía **roja** en
+el explorador de Minería y **morada** en Recursos; Obras Civiles, azul en una y verde en la
+otra. La causa de fondo es peor que la inconsistencia: el explorador y `/api/mining-data`
+repartían la paleta **por orden alfabético de aparición**, así que la misma disciplina cambiaba
+de color entre proyectos con distinto set, y agregar una disciplina nueva recoloreaba todas
+las anteriores. Ahora el color cuelga del **código** de disciplina (la letra del CWP), que es
+estable y compartido. La Sala de Apertura pintaba además todas las letras de un gris azulado
+fijo y Trisemanal todas de rojo — con lo que el color no distinguía nada.
+
+Planificación es el caso especial: el WBS de P6 sólo trae el texto (`"OBRAS CIVILES"`), no el
+código, así que `codigoDesdeNombre()` lo traduce antes de pintar.
+
+**Una fecha, un formato.** La misma fecha se escribía de cinco maneras:
+
+| Pantalla | Escribía |
+|---|---|
+| Planificación, Minería | `18-Ene-27` |
+| Trisemanal, IWP | `18-01` |
+| Dashboards de departamento | `18-01-27` |
+| Ficha del CWP (la que se entrega al mandante) | `2027-01-18` |
+
+El canónico es `18-Ene-27` y **el mes va en letras a propósito**: este repo ya se quemó con
+fechas ambiguas —las planillas de P6 vienen en formato de EE.UU. y el 10 de octubre entraba
+como mes 14, ver `fechaCelda()` en `scripts/programa-cons-cargar.mjs`—. Un `05-03-27` no dice
+si es marzo o mayo.
+
+`lib/formato` fija de paso **qué se muestra cuando no hay dato**: había veinte copias del mismo
+`toLocaleString('es-CL')`, unas devolviendo `—` y otras dejando la celda vacía para el mismo
+caso, así que "sin dato" se veía distinto en cada tabla.
