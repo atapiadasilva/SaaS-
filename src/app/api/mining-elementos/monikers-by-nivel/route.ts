@@ -41,9 +41,24 @@ export async function GET(req: NextRequest) {
 
   const params = req.nextUrl.searchParams;
   const projectId = params.get('project_id');
-  const nivel = params.get('nivel') as Nivel | null;
-  if (!projectId || !nivel || !COL[nivel]) {
+  const nivel = params.get('nivel') as Nivel | 'alcance' | null;
+  if (!projectId || !nivel || (nivel !== 'alcance' && !COL[nivel])) {
     return NextResponse.json({ error: 'Missing/invalid project_id or nivel' }, { status: 400 });
+  }
+
+  // nivel=alcance: devuelve los elementos FUERA de alcance (planta existente / referencia).
+  // Lo usa "Falta por asignar" para pintarlos gris oscuro en vez de contarlos como pendientes.
+  if (nivel === 'alcance') {
+    const sbA = supabase as any;
+    try {
+      const rows = await fetchAllPaged((from, to, withCount) =>
+        sbA.from('mining_elementos').select('sp3d_moniker', withCount ? { count: 'exact' } : undefined)
+          .eq('project_id', projectId).eq('alcance', 'FUERA').range(from, to)
+      );
+      return NextResponse.json({ groups: { FUERA: rows.map((r: any) => r.sp3d_moniker) } });
+    } catch (e: any) {
+      return NextResponse.json({ error: e.message }, { status: 500 });
+    }
   }
   const col = COL[nivel];
   const sentinel = SENTINEL[nivel];

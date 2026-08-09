@@ -12,7 +12,7 @@ import {
   CONTRASTE_COLOR, colorForIndex, hexToRgb, isSinAsignar, loadRevisionPrefs, paintColorFor,
   rgbToHex, saveRevisionPrefs,
 } from './elementos-colores';
-import { NIVELES, NIVEL_LABEL, type Nivel, type PaintTarget, type RevisionItem } from './elementos-tipos';
+import { NIVELES, NIVEL_LABEL, NO_ALCANCE_CODIGO, NO_ALCANCE_RGBA, type Nivel, type PaintTarget, type RevisionItem } from './elementos-tipos';
 
 // CWP_ID = {CV}.{DISC}{NNN} (ej. 312101.D001) → CV = "312101" → CWA = CV[:4] = "3121"
 // (misma convención que deriveCwaCv en /api/mining-elementos) — usado para armar el árbol CWA→CV→CWP.
@@ -418,6 +418,23 @@ export default function RevisionPanel({ projectId, viewerReady, onColorByLevel, 
             <AlertTriangle className="w-3.5 h-3.5" /> Falta por asignar
           </button>
         </div>
+
+        {/* Pincel de alcance: pinta elementos como "planta existente / referencia" (gris
+            oscuro, alcance=FUERA). No asigna paquete — los saca del pendiente de asignar. */}
+        <button
+          onClick={() => paintTarget?.codigo === NO_ALCANCE_CODIGO
+            ? onStopPaint()
+            : onArmPaint(nivel, NO_ALCANCE_CODIGO, NO_ALCANCE_RGBA.r, NO_ALCANCE_RGBA.g, NO_ALCANCE_RGBA.b, NO_ALCANCE_RGBA.a)}
+          disabled={!viewerReady}
+          className={cn('w-full inline-flex items-center justify-center gap-1.5 rounded px-2 py-1.5 text-[10.5px] font-bold border-2 transition disabled:opacity-40',
+            paintTarget?.codigo === NO_ALCANCE_CODIGO
+              ? 'bg-slate-800 border-slate-800 text-white'
+              : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100')}
+          title="Activa el pincel y haz click en el modelo sobre lo que NO es alcance de construcción (planta existente, referencia). Guardar lo marca gris oscuro y deja de contar como pendiente."
+        >
+          <Paintbrush className="w-3.5 h-3.5" />
+          {paintTarget?.codigo === NO_ALCANCE_CODIGO ? 'Marcando NO alcance — click para detener' : 'Marcar "No es alcance" (gris)'}
+        </button>
 
         {/* Solo aparece cuando tiene sentido: con 2+ paquetes marcados */}
         {checked.size >= 2 && (

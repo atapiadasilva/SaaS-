@@ -27,6 +27,7 @@ import {
   FILTER_FIELDS, NIVELES, NIVEL_LABEL, PAGE_SIZE,
   type Bucket, type CatalogRow, type Elemento, type Filtros, type FiltrosState, type Nivel,
   type PaintTarget, type TreeCoverageApi,
+  NO_ALCANCE_CODIGO,
 } from './elementos-tipos';
 
 const ForgeViewer = dynamic(() => import('@/components/awp/ForgeViewer'), { ssr: false });
@@ -678,41 +679,51 @@ export default function ElementosEditorPage() {
       const conGeometria = entradas.filter(([, dbId]) => hojas.has(dbId));
       const universo = conGeometria.length ? conGeometria : entradas;
 
-      const groups = await fetchMonikerGroups(nivel);
+      const [groups, alcanceGroups] = await Promise.all([
+        fetchMonikerGroups(nivel),
+        // Los FUERA de alcance (planta existente / referencia) no son "pendientes": se
+        // muestran gris oscuro para que el rojo sea solo lo que de verdad falta clasificar.
+        fetch(`/api/mining-elementos/monikers-by-nivel?project_id=${project_id}&nivel=alcance`)
+          .then(r => r.json()).then(d => (d?.groups ?? {}) as Record<string, string[]>).catch(() => ({} as Record<string, string[]>)),
+      ]);
       const asignados = new Set(Object.values(groups).flat().map(m => String(m).trim()));
+      const fueraAlcance = new Set((alcanceGroups['FUERA'] ?? []).map(m => String(m).trim()));
 
-      // Primer descarte, directo y sin costo: cuando el identificador guardado ES el GUID del
-      // modelo basta comparar strings. Evita construir un índice por cada llave sobre 114.000
-      // elementos — que además, si todavía se está construyendo, no resuelve nada y haría
-      // aparecer el modelo entero como sin asignar.
-      const pendientes = universo.filter(([extId]) => !asignados.has(extId));
+      const llaves = llavesDelProyecto(bimConfigRef.current).join(',');
+      // Resuelve un conjunto de identificadores a dbIds HOJA. La expansión a hojas es la
+      // clave del cálculo: un elemento asignado es un nodo con decenas de hojas de geometría
+      // colgando — sin expandir, sus hojas quedaban como "faltantes" y el modelo ENTERO se
+      // pintaba rojo aunque la mitad estuviera clasificada.
+      const resolverAHojas = async (monikers: Set<string>): Promise<Set<number>> => {
+        if (!monikers.size) return new Set();
+        const directos: number[] = [];
+        const porPropiedad: string[] = [];
+        for (const m of monikers) (m in mapping ? directos.push(mapping[m]) : porPropiedad.push(m));
+        if (porPropiedad.length) directos.push(...await viewerRef.current!.resolveMonikers(porPropiedad, llaves));
+        return new Set(viewerRef.current!.getLeafDbIds(directos));
+      };
 
-      // Lo que quede se resuelve por propiedad, pero solo con los identificadores que NO son
-      // GUID (proyectos donde la llave es un TAG o un moniker).
-      const porPropiedad = [...asignados].filter(m => !(m in mapping));
-      let faltan = pendientes.map(([, dbId]) => dbId);
-      if (porPropiedad.length) {
-        const dbIdsProp = await viewerRef.current.resolveMonikers(porPropiedad, llavesDelProyecto(bimConfigRef.current).join(','));
-        const yaEstan = new Set(dbIdsProp);
-        faltan = faltan.filter(id => !yaEstan.has(id));
-      }
+      const [hojasAsignadas, hojasFuera] = await Promise.all([resolverAHojas(asignados), resolverAHojas(fueraAlcance)]);
+      const faltan = universo.map(([, dbId]) => dbId).filter(id => !hojasAsignadas.has(id) && !hojasFuera.has(id));
+      const grises = [...hojasFuera];
       console.info(
         `[BIM][SIN-ASIGNAR] modelo: ${entradas.length} nodos → ${universo.length} con geometría | ` +
-        `asignados en BD: ${asignados.size} (${asignados.size - porPropiedad.length} por GUID, ${porPropiedad.length} por propiedad) | ` +
+        `asignados en BD: ${asignados.size} (${hojasAsignadas.size} hojas) | fuera de alcance: ${fueraAlcance.size} (${grises.length} hojas) | ` +
         `faltan: ${faltan.length}`
       );
-      if (!faltan.length) { setToast('Todo el modelo está asignado a un paquete.'); return; }
+      if (!faltan.length && !grises.length) { setToast('Todo el modelo está asignado a un paquete.'); return; }
 
       lastIsolatedDbIdsRef.current = faltan;
-      viewerRef.current.showOnly(faltan, ghostMode);
+      viewerRef.current.showOnly([...faltan, ...grises], ghostMode);
+      if (grises.length) viewerRef.current.colorDbIds(grises, 0.16, 0.16, 0.18, 1);
       viewerRef.current.colorDbIds(faltan, 1, 0.25, 0.25, 1);
-      if (autoZoom) viewerRef.current.fitToView(faltan);
-      const pct = ((faltan.length / universo.length) * 100).toFixed(0);
-      setToast(`${faltan.length.toLocaleString('es-CL')} elementos sin ${NIVEL_LABEL[nivel]} (${pct}% del modelo) — en rojo.`);
+      if (autoZoom) viewerRef.current.fitToView(faltan.length ? faltan : grises);
+      const pct = ((faltan.length / Math.max(1, universo.length)) * 100).toFixed(0);
+      setToast(`${faltan.length.toLocaleString('es-CL')} sin ${NIVEL_LABEL[nivel]} (${pct}% del modelo) en ROJO · ${grises.length.toLocaleString('es-CL')} fuera de alcance en gris oscuro.`);
     } finally {
       setViewerStatus(null);
     }
-  }, [viewerReady, ghostMode, autoZoom, fetchMonikerGroups]);
+  }, [viewerReady, ghostMode, autoZoom, fetchMonikerGroups, project_id]);
 
   // Aísla, COLOREA (cada grupo con su color de la lista) y enfoca varios códigos a la vez
   const viewSelectedInViewer = useCallback(async (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => {
@@ -784,7 +795,10 @@ export default function ElementosEditorPage() {
   const savePaint = useCallback(async () => {
     if (!viewerRef.current || !paintTarget || !paintedDbIdsRef.current.size) return;
     const dbIds = [...paintedDbIdsRef.current];
-    setViewerStatus(`Guardando ${dbIds.length} elemento(s) en ${NIVEL_LABEL[paintTarget.nivel]} ${paintTarget.codigo}…`);
+    const esNoAlcance = paintTarget.codigo === NO_ALCANCE_CODIGO;
+    setViewerStatus(esNoAlcance
+      ? `Marcando ${dbIds.length} elemento(s) como NO alcance…`
+      : `Guardando ${dbIds.length} elemento(s) en ${NIVEL_LABEL[paintTarget.nivel]} ${paintTarget.codigo}…`);
     try {
       // La llave que identifica un elemento depende de la herramienta que lo originó: moniker
       // en SmartPlant, posición de ensamblaje en Tekla, ElementId en Revit, TAG en AutoCAD.
@@ -824,10 +838,12 @@ export default function ElementosEditorPage() {
         const res = await fetchWithRetry('/api/mining-elementos', {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            project_id, nivel: paintTarget.nivel, newValue: paintTarget.codigo, monikers: chunk,
-            origen: `pintura_3d_${paintTarget.nivel}`, monikerNames,
-          }),
+          body: JSON.stringify(esNoAlcance
+            ? { project_id, nivel: 'alcance', newValue: 'FUERA', monikers: chunk, origen: 'pintura_3d_alcance', monikerNames }
+            : {
+              project_id, nivel: paintTarget.nivel, newValue: paintTarget.codigo, monikers: chunk,
+              origen: `pintura_3d_${paintTarget.nivel}`, monikerNames,
+            }),
         });
         const d = await parseJsonOrThrow(res);
         return { updated: d.updated ?? chunk.length, created: d.created ?? 0 };
@@ -835,14 +851,16 @@ export default function ElementosEditorPage() {
       const updated = results.reduce((a, r) => a + r.updated, 0);
       const creados = results.reduce((a, r) => a + r.created, 0);
 
-      ajustarConteoLocal(paintTarget.codigo, updated + creados);
+      if (!esNoAlcance) ajustarConteoLocal(paintTarget.codigo, updated + creados);
       // Un elemento pertenece a un solo CWP: se deja pintado con el color del destino para que
       // la vista coincida con lo guardado, sin esperar a recargar. El modo pintura sigue
       // activo, así se puede cambiar de paquete y seguir asignando sin rearmar nada.
       viewerRef.current.colorDbIds(dbIds, paintTarget.r, paintTarget.g, paintTarget.b, paintTarget.a);
-      setToast(`✓ ${(updated + creados).toLocaleString('es-CL')} en ${paintTarget.codigo}`
-        + (porGuid ? ` · ${porGuid.toLocaleString('es-CL')} por GUID` : '')
-        + ' — elige otro CWP en la lista para seguir.');
+      setToast(esNoAlcance
+        ? `✓ ${(updated + creados).toLocaleString('es-CL')} marcados como NO alcance (gris oscuro).`
+        : `✓ ${(updated + creados).toLocaleString('es-CL')} en ${paintTarget.codigo}`
+          + (porGuid ? ` · ${porGuid.toLocaleString('es-CL')} por GUID` : '')
+          + ' — elige otro CWP en la lista para seguir.');
       paintedDbIdsRef.current = new Set();
       setPaintCount(0);
       loadBuckets();
@@ -1480,7 +1498,9 @@ export default function ElementosEditorPage() {
                   <span className="text-[10.5px] font-bold truncate">
                     {paintTarget.a === 0
                       ? `Restaurando color original → sacando de ${NIVEL_LABEL[paintTarget.nivel]} · ${paintCount} seleccionado(s) sin guardar`
-                      : `Asignando a ${paintTarget.codigo} · ${paintCount} seleccionado(s) sin guardar — clic en otro CWP de la lista para cambiar de destino`}
+                      : paintTarget.codigo === NO_ALCANCE_CODIGO
+                        ? `Marcando como NO ALCANCE (gris oscuro) · ${paintCount} seleccionado(s) sin guardar`
+                        : `Asignando a ${paintTarget.codigo} · ${paintCount} seleccionado(s) sin guardar — clic en otro CWP de la lista para cambiar de destino`}
                   </span>
                   <button
                     onClick={resetPaintSelection} disabled={!paintCount}

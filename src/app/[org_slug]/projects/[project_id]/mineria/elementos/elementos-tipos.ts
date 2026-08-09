@@ -16,6 +16,11 @@ export const NIVELES: Nivel[] = ['cwp', 'cwa', 'cv', 'swp'];
 
 export interface PaintTarget { nivel: Nivel; codigo: string; r: number; g: number; b: number; a: number; }
 
+// Pseudo-código del pincel "No es alcance": al guardar no asigna un paquete — marca
+// mining_elementos.alcance='FUERA' (planta existente / referencia). Gris oscuro en el visor.
+export const NO_ALCANCE_CODIGO = 'NO-ALCANCE';
+export const NO_ALCANCE_RGBA = { r: 0.16, g: 0.16, b: 0.18, a: 1 };
+
 export interface Elemento {
   sp3d_moniker: string; name: string | null; tag_equipo: string | null; disciplina: string | null; descripcion: string | null;
   tipo_elemento: string | null; sector: string | null; area_unidad: string | null; cwp_id: string | null;

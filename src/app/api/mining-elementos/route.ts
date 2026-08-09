@@ -5,7 +5,7 @@ import { deriveCwaCv, cwaDesdeCv } from '@/lib/awp-codigo';
 const PAGE_SIZE_DEFAULT = 100;
 const PAGE_SIZE_MAX = 500;
 
-type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
+type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp' | 'alcance';
 
 // 'SIN-CWA'/'SIN-CV' son pseudo-códigos de UI para los elementos sin clasificar (cwa_id/cv_id en
 // NULL en la BD) — si se "reasignan" hacia allá, el valor real a guardar es NULL, no el string literal.
@@ -18,6 +18,9 @@ type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
 // SWP (System Work Package) es una clasificación INDEPENDIENTE y EN PARALELO a CWA/CV/CWP — un
 // elemento puede tener ambas a la vez, así que no deriva ni limpia los campos cwa/cv/cwp.
 function fieldsForNivel(nivel: Nivel, trimmed: string): Record<string, string | null> {
+  // 'alcance' marca el elemento como FUERA del alcance de construcción (planta existente,
+  // referencia) o lo restaura (DENTRO → NULL). Es independiente del CWP: no lo toca.
+  if (nivel === 'alcance') return { alcance: trimmed === 'DENTRO' ? null : 'FUERA' };
   if (nivel === 'swp') return { swp_id: trimmed === 'SIN-SWP' ? null : trimmed };
   if (trimmed === 'SIN-CWA' || trimmed === 'SIN-CV') return { cwa_id: null, cv_id: null, cwp_id: null };
   if (nivel === 'cwp') return { cwp_id: trimmed, ...deriveCwaCv(trimmed) };
@@ -132,7 +135,7 @@ export async function PATCH(req: NextRequest) {
 
   const body = await req.json();
   const { project_id, monikers, match, origen } = body ?? {};
-  const nivel: Nivel = ['cwa', 'cv', 'cwp', 'swp'].includes(body?.nivel) ? body.nivel : 'cwp';
+  const nivel: Nivel = ['cwa', 'cv', 'cwp', 'swp', 'alcance'].includes(body?.nivel) ? body.nivel : 'cwp';
   const newValueRaw = body?.newValue ?? body?.newCwpId;
   if (!project_id) return NextResponse.json({ error: 'Missing project_id' }, { status: 400 });
   if (typeof newValueRaw !== 'string' || !newValueRaw.trim()) return NextResponse.json({ error: 'Missing newValue/newCwpId' }, { status: 400 });
