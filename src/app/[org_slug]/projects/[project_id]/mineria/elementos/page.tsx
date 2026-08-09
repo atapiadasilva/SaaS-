@@ -744,7 +744,15 @@ export default function ElementosEditorPage() {
     setPaintTarget({ nivel, codigo, r, g, b, a });
   }, []);
 
-  const stopPaint = useCallback(() => { setPaintTarget(null); setPaintCount(0); paintedDbIdsRef.current = new Set(); }, []);
+  // Detener DEVUELVE el color original a lo pintado sin guardar. Antes solo olvidaba la
+  // sesión y el color local quedaba en el visor: parecía guardado (o parecía que había que
+  // reiniciar para soltarlo). Si no se guardó, no debe quedar rastro.
+  const stopPaint = useCallback(() => {
+    if (viewerRef.current && paintedDbIdsRef.current.size) {
+      viewerRef.current.clearThemingForDbIds([...paintedDbIdsRef.current]);
+    }
+    setPaintTarget(null); setPaintCount(0); paintedDbIdsRef.current = new Set();
+  }, []);
 
   // Quita el color de TODO lo seleccionado en esta sesión de pintura (todavía sin guardar) — para
   // corregirse antes de confirmar sin tener que "Detener" y rearmar la pintura desde cero.

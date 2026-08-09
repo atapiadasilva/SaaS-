@@ -69,7 +69,9 @@ export default function RevisionPanel({ projectId, viewerReady, onColorByLevel, 
   // Los defaults de useState deben ser IGUALES en server y cliente (el server nunca tiene
   // localStorage) — si no, React detecta un mismatch de hidratación. La preferencia guardada se
   // aplica recién en el useEffect de abajo, que solo corre en el cliente después del montaje.
-  const [nivel, setNivel] = useState<Nivel>('cwa');
+  // CWP por defecto: es el nivel donde se trabaja. CWA/CV/SWP son agrupaciones más gruesas
+  // que se visitan de vez en cuando, no el punto de partida.
+  const [nivel, setNivel] = useState<Nivel>('cwp');
   const nivelRef = useRef(nivel);
   nivelRef.current = nivel;
   const [items, setItems] = useState<RevisionItem[]>([]);
@@ -271,6 +273,19 @@ export default function RevisionPanel({ projectId, viewerReady, onColorByLevel, 
     onColorByLevel(nivel, itemsFiltrados.map(it => ({ codigo: it.codigo, ...colorOf(it.codigo) })));
   };
 
+  // El modelo entra YA coloreado por el nivel activo, y se recolorea al cambiar de pestaña.
+  // El flujo pedido es "ver todo por color e ir pintando la propiedad que quiero" — no
+  // apretar un botón para poder empezar. La ref evita recolorear en cada refresh de conteos.
+  const autoColorRef = useRef('');
+  useEffect(() => {
+    if (!viewerReady || loading || !itemsFiltrados.length) return;
+    const clave = `${projectId}:${nivel}`;
+    if (autoColorRef.current === clave) return;
+    autoColorRef.current = clave;
+    handleColorear();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewerReady, loading, nivel, projectId, itemsFiltrados.length]);
+
   // Vista de contraste — dos modos:
   // 1) Con CWP marcados en el árbol: cada uno marcado queda con un color de paleta DISTINTO por
   //    posición (ignora colorOf()/overrides por disciplina a propósito — esos hacen que todos los
@@ -359,6 +374,10 @@ export default function RevisionPanel({ projectId, viewerReady, onColorByLevel, 
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Panel descomprimido: el flujo normal es MIRAR el modelo ya coloreado y PINTAR.
+          Lo diario queda a la vista (una fila de acciones); lo ocasional se pliega:
+          crear categoría vive junto al filtro, el límite de batería aparece recién al
+          marcar 2, y la ayuda larga es un desplegable. */}
       <div className="px-3 py-2 border-b border-slate-100 space-y-2 shrink-0">
         <div className="flex gap-1">
           {NIVELES.map(n => (
@@ -371,7 +390,69 @@ export default function RevisionPanel({ projectId, viewerReady, onColorByLevel, 
             </button>
           ))}
         </div>
-        {showNewForm ? (
+
+        {/* Las dos acciones del día a día, en una sola fila */}
+        <div className="flex gap-1.5">
+          <button
+            onClick={handleColorear}
+            disabled={!viewerReady || loading}
+            className="flex-1 inline-flex items-center justify-center gap-1.5 bg-[#FF0000] hover:bg-[#A00000] disabled:opacity-40 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
+            title={!viewerReady ? 'Abre el modelo 3D primero' : 'Vuelve a colorear todo el modelo por este nivel'}
+          >
+            <Palette className="w-3.5 h-3.5" /> Recolorear
+          </button>
+          <button
+            onClick={() => onVerSinAsignar(nivel)}
+            disabled={!viewerReady || loading}
+            className="flex-1 inline-flex items-center justify-center gap-1.5 border-2 border-red-200 bg-red-50 hover:bg-red-100 disabled:opacity-40 text-[#A00000] rounded px-2 py-1.5 text-[10.5px] font-black"
+            title={`Aísla en rojo la geometría que todavía no pertenece a ningún ${NIVEL_LABEL[nivel]}`}
+          >
+            <AlertTriangle className="w-3.5 h-3.5" /> Falta por asignar
+          </button>
+        </div>
+
+        {/* Solo aparece cuando tiene sentido: con 2+ paquetes marcados */}
+        {checked.size >= 2 && (
+          <button
+            onClick={handleVistaContraste}
+            disabled={!viewerReady || loading}
+            className="w-full inline-flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-black disabled:opacity-40 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
+            title={`Los ${checked.size} marcados con colores bien distintos entre sí y el resto en negro`}
+          >
+            <Eye className="w-3.5 h-3.5" /> Límite de batería ({checked.size})
+          </button>
+        )}
+        {Object.keys(pendingOverrides).length > 0 && (
+          <button
+            onClick={saveColors} disabled={savingColors}
+            className="w-full inline-flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
+          >
+            <Save className="w-3.5 h-3.5" /> {savingColors ? 'Guardando…' : `Guardar ${Object.keys(pendingOverrides).length} color(es)`}
+          </button>
+        )}
+        {colorError && <p className="text-[9.5px] text-red-600 font-bold">{colorError}</p>}
+
+        {/* Filtro + crear categoría en la misma fila: crear es ocasional */}
+        <div className="flex items-center gap-1">
+          {(['todas', 'oficiales', 'creadas'] as const).map(f => (
+            <button
+              key={f} onClick={() => setMostrarFiltro(f)}
+              className={cn('flex-1 py-1 rounded text-[9.5px] font-bold uppercase',
+                mostrarFiltro === f ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200')}
+            >
+              {f === 'todas' ? 'Todas' : f === 'oficiales' ? 'Oficiales' : 'Creadas'}
+            </button>
+          ))}
+          <button
+            onClick={() => setShowNewForm(v => !v)}
+            title={`Nueva categoría ${NIVEL_LABEL[nivel]}`}
+            className={cn('shrink-0 px-2 py-1 rounded text-[9.5px] font-bold border border-dashed',
+              showNewForm ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-blue-300 text-blue-600 hover:bg-blue-50')}
+          >
+            <Plus className="w-3 h-3 inline" /> Nueva
+          </button>
+        </div>
+        {showNewForm && (
           <div className="border border-blue-200 bg-blue-50 rounded p-2 space-y-1.5">
             <input
               autoFocus value={newCodigo} onChange={e => setNewCodigo(e.target.value)}
@@ -399,74 +480,27 @@ export default function RevisionPanel({ projectId, viewerReady, onColorByLevel, 
               </button>
             </div>
           </div>
-        ) : (
-          <button
-            onClick={() => setShowNewForm(true)}
-            className="w-full inline-flex items-center justify-center gap-1.5 border border-dashed border-blue-300 text-blue-600 hover:bg-blue-50 rounded px-2 py-1.5 text-[10.5px] font-bold"
-          >
-            <Plus className="w-3.5 h-3.5" /> Nueva categoría {NIVEL_LABEL[nivel]}
-          </button>
         )}
-        {Object.keys(pendingOverrides).length > 0 && (
-          <button
-            onClick={saveColors} disabled={savingColors}
-            className="w-full inline-flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
-          >
-            <Save className="w-3.5 h-3.5" /> {savingColors ? 'Guardando…' : `Guardar ${Object.keys(pendingOverrides).length} color(es)`}
-          </button>
-        )}
-        {colorError && <p className="text-[9.5px] text-red-600 font-bold">{colorError}</p>}
-        <div className="flex items-center gap-1">
-          {(['todas', 'oficiales', 'creadas'] as const).map(f => (
-            <button
-              key={f} onClick={() => setMostrarFiltro(f)}
-              className={cn('flex-1 py-1 rounded text-[9.5px] font-bold uppercase',
-                mostrarFiltro === f ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200')}
-            >
-              {f === 'todas' ? 'Todas' : f === 'oficiales' ? 'Oficiales' : 'Creadas'}
-            </button>
-          ))}
-        </div>
-        <label className="flex items-center gap-1.5 text-[9.5px] text-slate-500 font-bold cursor-pointer">
-          <input type="checkbox" checked={colorearCreadas} onChange={e => setColorearCreadas(e.target.checked)} className="accent-blue-600" />
-          Colorear las &quot;Nuevas&quot; con su propio color (si no, quedan con el color normal del CAD)
-        </label>
-        <button
-          onClick={handleColorear}
-          disabled={!viewerReady || loading}
-          className="w-full inline-flex items-center justify-center gap-1.5 bg-[#FF0000] hover:bg-[#A00000] disabled:opacity-40 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
-          title={!viewerReady ? 'Abre el modelo 3D primero' : undefined}
-        >
-          <Palette className="w-3.5 h-3.5" /> Colorear modelo por {NIVEL_LABEL[nivel]}
-        </button>
-        {/* Las dos preguntas del día a día: dónde termina un paquete y qué queda sin asignar. */}
-        <button
-          onClick={handleVistaContraste}
-          disabled={!viewerReady || loading || checked.size < 2}
-          className="w-full inline-flex items-center justify-center gap-1.5 bg-slate-900 hover:bg-black disabled:opacity-40 text-white rounded px-2 py-1.5 text-[10.5px] font-bold"
-          title={checked.size < 2
-            ? 'Marca 2 paquetes contiguos para ver dónde está el límite entre ellos'
-            : `Los ${checked.size} marcados con colores bien distintos entre sí y el resto en negro`}
-        >
-          <Eye className="w-3.5 h-3.5" />
-          {checked.size < 2 ? 'Límite de batería — marca 2' : `Límite de batería (${checked.size})`}
-        </button>
-        <button
-          onClick={() => onVerSinAsignar(nivel)}
-          disabled={!viewerReady || loading}
-          className="w-full inline-flex items-center justify-center gap-1.5 border-2 border-red-200 bg-red-50 hover:bg-red-100 disabled:opacity-40 text-[#A00000] rounded px-2 py-1.5 text-[10.5px] font-black"
-          title={`Aísla en rojo la geometría del modelo que todavía no pertenece a ningún ${NIVEL_LABEL[nivel]}`}
-        >
-          <AlertTriangle className="w-3.5 h-3.5" /> Ver lo que falta por asignar
-        </button>
+
         {checked.size > 0 && (
           <p className="text-[9.5px] text-blue-600 font-bold text-center">{checked.size} marcado(s) — aislado(s) en el visor</p>
         )}
-        <p className="text-[9.5px] text-slate-400 leading-snug">
-          Cada {NIVEL_LABEL[nivel]} queda con un color. Click en uno para ubicarlo en el visor. Si ves elementos
-          del color equivocado, click en 🖌️ del {NIVEL_LABEL[nivel]} correcto y luego click en esos elementos en el modelo para moverlos ahí.
-          Si te equivocaste de color al pintar, usa el botón <Eraser className="w-2.5 h-2.5 inline" /> de &quot;Sin {NIVEL_LABEL[nivel]} asignado&quot; (círculo punteado) y click en el elemento: lo saca de la categoría y le restaura su color original del CAD.
-        </p>
+
+        {/* La ayuda larga, plegada: estorbaba más de lo que ayudaba siempre visible */}
+        <details className="text-[9.5px] text-slate-400 leading-snug">
+          <summary className="cursor-pointer font-bold text-slate-500 select-none">¿Cómo se usa?</summary>
+          <p className="mt-1">
+            El modelo entra coloreado por {NIVEL_LABEL[nivel]}. Click en uno de la lista para ubicarlo en el visor.
+            Si ves elementos del color equivocado, click en 🖌️ del {NIVEL_LABEL[nivel]} correcto y luego click en esos
+            elementos en el modelo para moverlos ahí — nada se guarda hasta que aprietas <b>Guardar</b>; <b>Detener</b> descarta
+            y restaura los colores. Para sacar un elemento de su categoría usa el botón <Eraser className="w-2.5 h-2.5 inline" /> de
+            &quot;Sin {NIVEL_LABEL[nivel]} asignado&quot; (círculo punteado) y click en el elemento.
+          </p>
+          <label className="mt-1.5 flex items-center gap-1.5 text-[9.5px] text-slate-500 font-bold cursor-pointer">
+            <input type="checkbox" checked={colorearCreadas} onChange={e => setColorearCreadas(e.target.checked)} className="accent-blue-600" />
+            Colorear las &quot;Nuevas&quot; con su propio color (si no, quedan con el color normal del CAD)
+          </label>
+        </details>
         <div className="flex items-center justify-between gap-2">
           <button
             onClick={() => toggleGroup(allCodes)}

@@ -10,7 +10,9 @@ export const PAGE_SIZE = 100;
 
 export type Nivel = 'cwa' | 'cv' | 'cwp' | 'swp';
 export const NIVEL_LABEL: Record<Nivel, string> = { cwa: 'CWA', cv: 'CV', cwp: 'CWP', swp: 'SWP' };
-export const NIVELES: Nivel[] = ['cwa', 'cv', 'cwp', 'swp'];
+// CWP primero: es el nivel de trabajo del editor (y su pestaña por defecto). Solo ordena
+// las pestañas del panel de Revisión — nadie más consume este arreglo.
+export const NIVELES: Nivel[] = ['cwp', 'cwa', 'cv', 'swp'];
 
 export interface PaintTarget { nivel: Nivel; codigo: string; r: number; g: number; b: number; a: number; }
 
