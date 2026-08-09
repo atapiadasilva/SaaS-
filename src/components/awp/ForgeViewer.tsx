@@ -526,7 +526,10 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
             propMultiIndexCache.current.set(propName, index);
             try { await set(idbKey, index); } catch (e) { console.warn('IDB save err', e); }
           } else {
-            console.warn(`[BIM] Índice "${propName}" vacío — no se cachea; se reintentará en el próximo uso`);
+            // Vacío: en MEMORIA sí (o cada resolveMonikers re-escanea el modelo completo por
+            // una propiedad que no existe), en IndexedDB no (el veneno era persistirlo).
+            propMultiIndexCache.current.set(propName, index);
+            console.warn(`[BIM] Índice "${propName}" vacío — cacheado solo en esta sesión`);
           }
           onIndexProgressRef.current?.(-1);
           return index;
@@ -603,7 +606,8 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
             propIndexCache.current.set(propName, index);
             try { await set(idbKey, index); } catch (e) { console.warn('IDB save err', e); }
           } else {
-            console.warn(`[BIM] Índice único "${propName}" vacío — no se cachea; se reintentará en el próximo uso`);
+            propIndexCache.current.set(propName, index);
+            console.warn(`[BIM] Índice único "${propName}" vacío — cacheado solo en esta sesión`);
           }
           onIndexProgressRef.current?.(-1);
           return index;
@@ -1185,6 +1189,10 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
           const props = propNameStr.split(',').map(p => p.trim()).filter(Boolean);
           const keySet = new Set(real.map(v => v.trim().toLowerCase()));
           for (const prop of props) {
+            // Si la llave anterior ya resolvió TODO, las siguientes sobran: construir su
+            // índice es un escaneo completo del modelo para nada (en SCPY: 2 escaneos de
+            // 305k nodos por cada grupo de coloreo, minutos de molienda sin pintar).
+            if (resueltosPorProp.size >= keySet.size) break;
             const idx = await buildPropIndexChunked(prop);
             
             const ciIdx: Record<string, number[]> = {};
