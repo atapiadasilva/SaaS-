@@ -480,7 +480,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         const allDbIds: number[] = [];
         tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
 
-        const idbKey = `propidxv5-${propName}-${urn}-${allDbIds.length}`;
+        const idbKey = `propidxv6-${propName}-${urn}-${allDbIds.length}`;
         try {
           const fromIdb = await get(idbKey);
           if (fromIdb) { propMultiIndexCache.current.set(propName, fromIdb); return fromIdb; }
@@ -516,8 +516,18 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
             onIndexProgressRef.current?.(Math.round((pass1Done / Math.max(1, allDbIds.length)) * 100));
           },
         ).then(async () => {
-          propMultiIndexCache.current.set(propName, index);
-          try { await set(idbKey, index); } catch (e) { console.warn('IDB save err', e); }
+          const nLlaves = Object.keys(index).length;
+          console.log(`[BIM] Índice "${propName}": ${nLlaves} llaves (${allDbIds.length} nodos)`);
+          // Un índice VACÍO en un modelo con elementos no se cachea: casi siempre significa que
+          // el property-db aún no estaba listo. Persistirlo lo envenenaba — quedaba en IndexedDB
+          // y todas las sesiones siguientes "resolvían" cero al instante (SCPY: 5.860 elementos
+          // clasificados, coloreo en 0 para siempre hasta borrar el caché a mano).
+          if (nLlaves > 0 || allDbIds.length === 0) {
+            propMultiIndexCache.current.set(propName, index);
+            try { await set(idbKey, index); } catch (e) { console.warn('IDB save err', e); }
+          } else {
+            console.warn(`[BIM] Índice "${propName}" vacío — no se cachea; se reintentará en el próximo uso`);
+          }
           onIndexProgressRef.current?.(-1);
           return index;
         }).catch(err => {
@@ -554,7 +564,7 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
         const allDbIds: number[] = [];
         tree.enumNodeChildren(tree.getRootId(), (id: number) => { allDbIds.push(id); }, true);
 
-        const idbKey = `propidxv5-single-${propName}-${urn}-${allDbIds.length}`;
+        const idbKey = `propidxv6-single-${propName}-${urn}-${allDbIds.length}`;
         try {
           const fromIdb = await get(idbKey);
           if (fromIdb) { propIndexCache.current.set(propName, fromIdb); return fromIdb; }
@@ -586,8 +596,15 @@ const ForgeViewer = forwardRef<ForgeViewerHandle, ForgeViewerProps>(
             onIndexProgressRef.current?.(Math.round((pass1Done / Math.max(1, allDbIds.length)) * 100));
           },
         ).then(async () => {
-          propIndexCache.current.set(propName, index);
-          try { await set(idbKey, index); } catch (e) { console.warn('IDB save err', e); }
+          const nLlaves = Object.keys(index).length;
+          console.log(`[BIM] Índice único "${propName}": ${nLlaves} llaves (${allDbIds.length} nodos)`);
+          // Misma regla que el índice multi: vacío con elementos = sospechoso, no se persiste.
+          if (nLlaves > 0 || allDbIds.length === 0) {
+            propIndexCache.current.set(propName, index);
+            try { await set(idbKey, index); } catch (e) { console.warn('IDB save err', e); }
+          } else {
+            console.warn(`[BIM] Índice único "${propName}" vacío — no se cachea; se reintentará en el próximo uso`);
+          }
           onIndexProgressRef.current?.(-1);
           return index;
         }).catch(err => {
