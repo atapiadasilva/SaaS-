@@ -604,7 +604,18 @@ export default function ElementosEditorPage() {
         allDbIds.push(...dbIds);
         matched += dbIds.length;
       }
-      if (!matched) { setToast(`No se encontraron elementos de ${NIVEL_LABEL[nivel]}${restrictSet ? ' dentro de la rama seleccionada' : ' en el modelo'}.`); return; }
+      // El "no se pudo colorear" tiene dos causas MUY distintas y el aviso debe decir cuál es:
+      // (a) la base no tiene elementos vinculados a este nivel → falta clasificar, se pinta;
+      // (b) la base SÍ los tiene pero ninguno existe en el modelo abierto → el NWD publicado
+      //     no calza con los datos cargados (el caso SCPY: el mandante publicó otra tajada de
+      //     la planta). Pintar no lo arregla — hay que pedir el modelo del alcance correcto.
+      // En ambos casos, los colores que quedan a la vista son los propios del CAD.
+      if (!matched) {
+        setToast(esperados > 0
+          ? `Los ${esperados.toLocaleString('es-CL')} elementos con ${NIVEL_LABEL[nivel]} de la base no están en este modelo 3D${restrictSet ? ' (en la rama seleccionada)' : ''}. El modelo publicado no calza con los datos cargados — los colores que ves son los del CAD, no la clasificación.`
+          : `Ningún ${NIVEL_LABEL[nivel]} tiene elementos vinculados todavía. Usa 🖌️ en un ${NIVEL_LABEL[nivel]} de la lista y pinta elementos en el modelo para empezar.`);
+        return;
+      }
       // Aísla con fantasma TODO lo clasificado vs. lo que no tiene este nivel asignado,
       // y recién después pinta cada grupo — así el color queda sobre fondo neutro, no sobre
       // los colores nativos del CAD (que hacían parecer "confeti" la vista anterior).
