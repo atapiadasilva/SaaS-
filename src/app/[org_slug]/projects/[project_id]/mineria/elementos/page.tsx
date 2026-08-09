@@ -579,8 +579,8 @@ export default function ElementosEditorPage() {
   // Si hay una rama del árbol del modelo activa (treeBranch, ej. "...ELECTRICIDAD.vue"), el
   // coloreo queda RESTRINGIDO a esa rama — así se puede ver, ej., "solo lo eléctrico" desglosado
   // por sus distintos CWP, en vez de colorear el modelo completo.
-  const colorByLevel = useCallback(async (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => {
-    if (!viewerRef.current || !viewerReady) return;
+  const colorByLevel = useCallback(async (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[], opts?: { silencioso?: boolean }): Promise<number> => {
+    if (!viewerRef.current || !viewerReady) return 0;
     const codigos = selections.map(s => s.codigo);
     const restrictSet = treeBranch ? new Set(treeBranch.leafDbIds) : null;
     setViewerStatus(`Coloreando${restrictSet ? ` "${treeBranch!.name}"` : ' modelo'} por ${NIVEL_LABEL[nivel]}…`);
@@ -611,10 +611,14 @@ export default function ElementosEditorPage() {
       //     la planta). Pintar no lo arregla — hay que pedir el modelo del alcance correcto.
       // En ambos casos, los colores que quedan a la vista son los propios del CAD.
       if (!matched) {
-        setToast(esperados > 0
-          ? `Los ${esperados.toLocaleString('es-CL')} elementos con ${NIVEL_LABEL[nivel]} de la base no están en este modelo 3D${restrictSet ? ' (en la rama seleccionada)' : ''}. El modelo publicado no calza con los datos cargados — los colores que ves son los del CAD, no la clasificación.`
-          : `Ningún ${NIVEL_LABEL[nivel]} tiene elementos vinculados todavía. Usa 🖌️ en un ${NIVEL_LABEL[nivel]} de la lista y pinta elementos en el modelo para empezar.`);
-        return;
+        // En modo silencioso (el coloreo automático de entrada) no se molesta al usuario: el
+        // índice de llaves del visor puede no estar listo todavía y el panel reintenta solo.
+        if (!opts?.silencioso) {
+          setToast(esperados > 0
+            ? `Los ${esperados.toLocaleString('es-CL')} elementos con ${NIVEL_LABEL[nivel]} de la base no están en este modelo 3D${restrictSet ? ' (en la rama seleccionada)' : ''}. El modelo publicado no calza con los datos cargados — los colores que ves son los del CAD, no la clasificación.`
+            : `Ningún ${NIVEL_LABEL[nivel]} tiene elementos vinculados todavía. Usa 🖌️ en un ${NIVEL_LABEL[nivel]} de la lista y pinta elementos en el modelo para empezar.`);
+        }
+        return 0;
       }
       // Aísla con fantasma TODO lo clasificado vs. lo que no tiene este nivel asignado,
       // y recién después pinta cada grupo — así el color queda sobre fondo neutro, no sobre
@@ -631,6 +635,7 @@ export default function ElementosEditorPage() {
       if (restrictSet) setToast(`Coloreados ${matched.toLocaleString('es-CL')} elemento(s) de "${treeBranch!.name}" por ${NIVEL_LABEL[nivel]}.`);
       else if (matched < esperados * 0.9) setToast(`⚠ Coloreados ${matched.toLocaleString('es-CL')} de ${esperados.toLocaleString('es-CL')} esperados — puede que falten elementos en el modelo.`);
       else setToast(`Coloreados ${matched.toLocaleString('es-CL')} elementos por ${NIVEL_LABEL[nivel]}. Lo que se ve con su color nativo del CAD (sin tinte) no tiene ${NIVEL_LABEL[nivel]} asignado.`);
+      return matched;
     } finally {
       setViewerStatus(null);
     }

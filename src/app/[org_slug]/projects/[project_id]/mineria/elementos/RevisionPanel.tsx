@@ -54,7 +54,7 @@ function GroupCheckbox({ state }: { state: 'all' | 'some' | 'none' }) {
 export default function RevisionPanel({ projectId, viewerReady, onColorByLevel, onFocus, onViewSelected, onVerSinAsignar, paintTarget, onArmPaint, onStopPaint, onCatalogChanged, onNivelChange, refreshSignal }: {
   onVerSinAsignar: (nivel: Nivel) => void;
   projectId: string; viewerReady: boolean;
-  onColorByLevel: (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => void;
+  onColorByLevel: (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[], opts?: { silencioso?: boolean }) => Promise<number> | void;
   onFocus: (nivel: Nivel, codigo: string) => void;
   onViewSelected: (nivel: Nivel, selections: { codigo: string; r: number; g: number; b: number; a: number }[]) => void;
   paintTarget: PaintTarget | null;
@@ -276,13 +276,21 @@ export default function RevisionPanel({ projectId, viewerReady, onColorByLevel, 
   // El modelo entra YA coloreado por el nivel activo, y se recolorea al cambiar de pestaña.
   // El flujo pedido es "ver todo por color e ir pintando la propiedad que quiero" — no
   // apretar un botón para poder empezar. La ref evita recolorear en cada refresh de conteos.
+  //
+  // El primer intento es SILENCIOSO y se reintenta a los 15s si no coloreó nada: `viewerReady`
+  // llega con la geometría, pero el índice de llaves (GUIDs) del visor termina después — en
+  // SCPY eso hacía que el coloreo de entrada dijera "no se encontraron elementos" teniendo
+  // 5.860 clasificados. Si el reintento tampoco pinta, el aviso informativo sí aparece.
   const autoColorRef = useRef('');
   useEffect(() => {
     if (!viewerReady || loading || !itemsFiltrados.length) return;
     const clave = `${projectId}:${nivel}`;
     if (autoColorRef.current === clave) return;
     autoColorRef.current = clave;
-    handleColorear();
+    const payload = itemsFiltrados.map(it => ({ codigo: it.codigo, ...colorOf(it.codigo) }));
+    Promise.resolve(onColorByLevel(nivel, payload, { silencioso: true })).then(n => {
+      if (n === 0) setTimeout(() => { onColorByLevel(nivel, payload); }, 15000);
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewerReady, loading, nivel, projectId, itemsFiltrados.length]);
 
